@@ -33,7 +33,15 @@ Passwordless `sudo` is required for install, the unit file, and `systemctl`.
 
 ## What the service is allowed to do
 
-The unit runs as root but with only `CAP_BPF`, `CAP_PERFMON` and `CAP_SYS_RESOURCE`, which is all that attaching tracepoints and kprobes and reading BPF maps needs on Linux 5.8 or newer. On an older kernel the deploy drops those two lines, because `CAP_BPF` does not exist there, and the rest of the hardening stays. The filesystem is read-only to the service except `/var/lib/shukra`, and it cannot gain privileges, load kernel modules, or open sockets other than IP, Unix and netlink. On a 6.8 kernel this was checked by running the real unit: all four programs attached and counted, a write to `/etc` from inside the service failed, and `systemd-analyze security` scored it 4.3 (OK).
+The unit runs as root but with only six capabilities, each there for a reason that was checked by removing it:
+
+| Capability | Why |
+|---|---|
+| `CAP_BPF`, `CAP_PERFMON`, `CAP_SYS_RESOURCE` | load programs, attach tracepoints and kprobes, read maps |
+| `CAP_NET_ADMIN` | load and attach the TCX tap program. Without it the tap program fails to load with `operation not permitted` |
+| `CAP_SYS_PTRACE`, `CAP_DAC_READ_SEARCH` | read a VM's tap names from the tun file descriptors of a QEMU that runs as another user. libvirt passes taps as fds, so the names are not on the command line. Without either, those VMs have no known tap |
+
+`CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH` are broad. They are needed only to read `/proc/<pid>/fd` and `fdinfo` of processes owned by another user, and the daemon never calls `ptrace`. If you run no libvirt VMs and want them off, remove those two from both capability lines in the unit and QEMU processes started with `ifname=` on their command line will still be found. On a kernel older than 5.8 the deploy drops the capability lines entirely, because `CAP_BPF` does not exist there, and the rest of the hardening stays. The filesystem is read-only to the service except `/var/lib/shukra`, and it cannot gain privileges, load kernel modules, or open sockets other than IP, Unix and netlink. On a 6.8 kernel this was checked by running the real unit: all programs attached and counted, a libvirt-style VM's tap was found and instrumented, a write to `/etc` from inside the service failed, and `systemd-analyze security` scored the earlier three-capability set 4.3 (OK).
 
 ## Encrypt the API
 

@@ -88,8 +88,8 @@ Homepage: https://github.com/zyvorai/shukra
 Description: eBPF runtime intelligence and security for KVM
  Shukra watches QEMU/KVM guests from the hypervisor, with no agent in the VM.
  The eBPF programs are compiled in, so the host needs only kernel BTF
- (/sys/kernel/btf/vmlinux), not a compiler. The service runs with CAP_BPF,
- CAP_PERFMON and CAP_SYS_RESOURCE only.
+ (/sys/kernel/btf/vmlinux), not a compiler. The service runs with a small,
+ documented set of capabilities and a read-only filesystem.
 CONTROL
 
 cat > "${P}/DEBIAN/postinst" <<'POSTINST'

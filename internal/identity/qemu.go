@@ -170,6 +170,7 @@ func Scan(root, hypervisor string) ([]VM, error) {
 		vm.PID = pid
 		vm.Hypervisor = hypervisor
 		vm.Threads, vm.ThreadInfo = threads(dir, pid)
+		vm.Taps = mergeNames(vm.Taps, tunTaps(dir))
 		out = append(out, vm)
 	}
 	return out, nil
@@ -231,4 +232,53 @@ func (vm VM) Owns(pid uint32) bool {
 		}
 	}
 	return false
+}
+
+// tunTaps finds the tap interfaces a QEMU process holds open. libvirt gives QEMU
+// its taps as file descriptors (-netdev tap,fd=37), so their names are not on the
+// command line. The kernel does name each one in the tun fd's fdinfo, as "iff:".
+//
+// Reading another user's fd and fdinfo directories needs the daemon to be root
+// with CAP_DAC_READ_SEARCH and CAP_SYS_PTRACE. When it cannot read them the
+// result is empty, and the VM keeps whatever taps its command line named: a VM
+// with no known tap is never invented one.
+func tunTaps(dir string) []string {
+	fds, err := os.ReadDir(filepath.Join(dir, "fd"))
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, fd := range fds {
+		target, err := os.Readlink(filepath.Join(dir, "fd", fd.Name()))
+		if err != nil || target != "/dev/net/tun" {
+			continue
+		}
+		info, err := os.ReadFile(filepath.Join(dir, "fdinfo", fd.Name()))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(info), "\n") {
+			if k, v, ok := strings.Cut(line, ":"); ok && k == "iff" {
+				if name := strings.TrimSpace(v); name != "" {
+					names = append(names, name)
+				}
+			}
+		}
+	}
+	return names
+}
+
+// mergeNames appends the names in extra that are not already in base, keeping order.
+func mergeNames(base, extra []string) []string {
+	seen := make(map[string]bool, len(base))
+	for _, n := range base {
+		seen[n] = true
+	}
+	for _, n := range extra {
+		if !seen[n] {
+			seen[n] = true
+			base = append(base, n)
+		}
+	}
+	return base
 }

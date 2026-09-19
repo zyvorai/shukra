@@ -5,7 +5,7 @@ Every other program in Shukra sees the QEMU process. This one sees the guest. It
 ## What it needs
 
 - Linux 6.6 or newer, for TCX. Older kernels report the tap program as detached with `TCX needs Linux 6.6 or newer`. There is no TC fallback yet.
-- A VM with a tap interface. The tap name comes from the QEMU command line (`ifname=tap0`, or libvirt's `vnet0`). A VM on user-mode networking has no tap, so nothing is seen and nothing can be isolated.
+- A VM with a tap interface. The daemon finds a VM's taps two ways and merges them: `ifname=tap0` on the QEMU command line, and the `iff:` line in `/proc/<pid>/fdinfo/<fd>` of each `/dev/net/tun` fd the process holds. The second is how libvirt VMs are found, since libvirt hands QEMU its `vnet0` as a file descriptor (`-netdev tap,fd=37`). Reading another user's fds needs the daemon to have `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`, which the shipped unit grants. If it cannot read them, that VM has no known tap and nothing is attached or isolated for it: a name is never guessed. A VM on user-mode networking has no tap either.
 
 The daemon attaches the program to each VM's tap as the VM appears and takes it off when the VM goes. `shukractl programs` shows `tap  attached  N taps` once at least one is on.
 

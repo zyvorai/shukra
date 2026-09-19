@@ -18,11 +18,16 @@ StateDirectoryMode=0700
 Restart=on-failure
 RestartSec=2
 
-# Least privilege. Attaching tracepoints and kprobes and reading BPF maps needs
-# only these three on Linux 5.8 or newer. deploy-remote.sh drops the two
-# capability lines on an older kernel, where CAP_BPF does not exist.
-CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE
-AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE
+# Least privilege, and why each capability is here. deploy-remote.sh drops the two
+# capability lines on a kernel older than 5.8, where CAP_BPF does not exist.
+#   CAP_BPF, CAP_PERFMON, CAP_SYS_RESOURCE  load programs, attach tracepoints and
+#                                           kprobes, read maps
+#   CAP_NET_ADMIN                           load and attach the TCX tap program
+#   CAP_SYS_PTRACE, CAP_DAC_READ_SEARCH     read a VM's tap names from the tun fds
+#                                           of a QEMU that runs as another user
+#                                           (libvirt passes taps as file descriptors)
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_NET_ADMIN CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_NET_ADMIN CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
