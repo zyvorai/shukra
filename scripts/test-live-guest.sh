@@ -43,7 +43,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-shukra_taps()  { api "$URL/api/v1/trace/tap" | J "len(d['rows'])"; }
+shukra_taps()  { api "$URL/api/v1/trace/tap" | J "len(d['rows'] or [])"; }
 shukra_progs() { sudo bpftool net 2>/dev/null | grep -c shukra_tap; }
 tap_row()      { api "$URL/api/v1/trace/tap" | J "[[r['fromGuestPackets'],r['toGuestPackets'],r['droppedPackets'],r['isolated']] for r in d['rows'] if r['tap']=='$TAP'][0]" 2>/dev/null; }
 kern()         { echo "$(cat /sys/class/net/$TAP/statistics/rx_packets) $(cat /sys/class/net/$TAP/statistics/tx_packets)"; }

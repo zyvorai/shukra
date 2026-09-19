@@ -485,3 +485,19 @@ func TestDoctorEndpointReportsTheWorstFindingAndIsReadableWithTheReadOnlyKey(t *
 		t.Fatal("doctor is open without a key")
 	}
 }
+
+func TestEmptyListsAreArraysNotNull(t *testing.T) {
+	srv := New(state.New("node-07"), "k")
+	for path, key := range map[string]string{
+		"/api/v1/vms": "vms", "/api/v1/trace/kvm": "rows", "/api/v1/trace/sched": "rows",
+		"/api/v1/trace/block": "rows", "/api/v1/trace/net": "rows", "/api/v1/trace/tap": "rows",
+	} {
+		var body map[string]json.RawMessage
+		if err := json.Unmarshal(get(srv, path, "k").Body.Bytes(), &body); err != nil {
+			t.Fatal(path, err)
+		}
+		if got := string(body[key]); got != "[]" {
+			t.Errorf("%s: %q is %s, not []: a client cannot take its length", path, key, got)
+		}
+	}
+}
