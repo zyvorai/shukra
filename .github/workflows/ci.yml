@@ -21,14 +21,18 @@ jobs:
           sudo apt-get install -y clang-18 llvm-18 linux-tools-common linux-tools-generic
           ver="$(uname -r)"
           sudo apt-get install -y "linux-tools-${ver}" || true
-          if ! command -v clang >/dev/null 2>&1; then
-            sudo ln -sfn "$(command -v clang-18)" /usr/local/bin/clang
-          fi
-          if ! command -v llvm-strip >/dev/null 2>&1; then
-            sudo ln -sfn "$(command -v llvm-strip-18)" /usr/local/bin/llvm-strip
+          clang_bin="$(command -v clang-18 || true)"
+          strip_bin="$(command -v llvm-strip-18 || true)"
+          if [ -z "$strip_bin" ] && [ -x /usr/lib/llvm-18/bin/llvm-strip ]; then
+            strip_bin=/usr/lib/llvm-18/bin/llvm-strip
           fi
           real="$(find /usr/lib/linux-tools -type f -name bpftool | head -1)"
+          echo "clang=$clang_bin strip=$strip_bin bpftool=$real"
+          test -n "$clang_bin"
+          test -n "$strip_bin"
           test -n "$real"
+          sudo ln -sfn "$clang_bin" /usr/local/bin/clang
+          sudo ln -sfn "$strip_bin" /usr/local/bin/llvm-strip
           sudo ln -sfn "$real" /usr/local/bin/bpftool
           clang --version
           llvm-strip --version
