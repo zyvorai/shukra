@@ -19,6 +19,9 @@ const (
 	KindGuestFlow     Kind = "guest_flow"
 	// KindGuestInbound is a TCP SYN sent TO a guest: someone connecting in. Src is the peer, Dst the guest.
 	KindGuestInbound Kind = "guest_inbound"
+	// KindGuestDNS is a DNS query the guest sent, with the name it asked for. It is a first question over
+	// UDP port 53 seen on the tap, so a resolver the guest reaches over TLS or HTTPS is not seen.
+	KindGuestDNS Kind = "guest_dns"
 )
 
 const (
@@ -63,6 +66,11 @@ type Event struct {
 	Blocked bool   `json:"blocked,omitempty"`
 	DPort   uint16 `json:"dport,omitempty"`
 	Message string `json:"message,omitempty"`
+	// DNSName and QType are set on guest_dns events. The name is lower-cased, and a name that did not fit is
+	// cut short and says so in DNSTruncated.
+	DNSName      string `json:"dns_name,omitempty"`
+	QType        string `json:"qtype,omitempty"`
+	DNSTruncated bool   `json:"dns_truncated,omitempty"`
 	// Rule names the detection rule that fired, so a consumer can route on it
 	// without parsing Message.
 	Rule      string `json:"rule,omitempty"`

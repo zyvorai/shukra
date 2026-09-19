@@ -49,6 +49,14 @@ ports:                 # a connect (or, with proto, a UDP flow) to this destinat
     name: dns-out
     proto: udp         # tcp (the default), udp or any
 
+dns:                   # names the guest looked up over DNS (UDP port 53), one of suffix / exact / contains per rule
+  - name: crypto-pool
+    suffix: nanopool.org      # the name and everything under it, on a label boundary
+    severity: high
+  - name: paste-site
+    contains: pastebin
+    severity: medium
+
 exec_allow:            # may start under QEMU without an alert; lowercase prefix
   - node_exporter
 
@@ -59,6 +67,8 @@ thresholds:            # per VM, over a window
     window: 30s        # 5s to 10m, default 30s
     severity: medium   # default for thresholds
 ```
+
+**`dns`** rules match the name the guest asked for, in lower case (the rule is lower-cased too). `suffix: example.com` matches `example.com` and `a.b.example.com`, not `badexample.com`; `exact` is the whole name; `contains` is a substring. A rule takes exactly one of the three. The detection says the guest asked, is `guest_attributed`, and is held back for the suppression time per rule, VM and name. Names are only recorded while `shukrad` runs without `-dns-events=false`, so a `dns` rule says nothing on a daemon that has names off. See [DNS names](../tap.md#dns-names).
 
 **`exec_allow`** adds to the names that are always fine (`qemu-system*` and QEMU's own `cpu`, `io` and `vhost` threads). It does not replace them.
 

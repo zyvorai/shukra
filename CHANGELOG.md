@@ -4,6 +4,14 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### Guest DNS names
+
+- **`guest_dns` events:** the name a guest asked for in a plain DNS query over UDP port 53, with its type, IPv4 and IPv6. The tap program only recognises a query and copies its question; the daemon decodes it (lower-cased, sanitised, cut at 253 bytes). A repeat of a name and type is announced once a minute, at most 200 per tap per second on their own budget. See [DNS names](docs/tap.md#dns-names).
+- **`dns:` detection rules** matching a name by `suffix`, `exact` or `contains`.
+- **`shukrad -dns-events=false`** makes the program not read DNS at all. The switch is a pinned map that the daemon sets on every start.
+- `shukractl watch` prints the name, and the console's Connections page lists the names a guest looked up.
+- Not seen: answers, queries over TCP, DNS over TLS or HTTPS, a second question, compressed names.
+
 ### Drops and handshakes (#7, #8)
 
 - **New `drops` program** (Linux 5.17+): what the kernel dropped on each VM tap, by the kernel's own reason and the function that freed the packet. Shukra's isolation drops are subtracted, so another program dropping a VM's traffic (a dataplane, Cilium, a `tc` filter) is named, and a guest that is not reading its NIC shows as `FULL_RING`. It reads the tracepoint record by field name, so it survives the layout change in Linux 6.9. See [Where packets die](docs/drops.md).

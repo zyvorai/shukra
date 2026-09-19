@@ -129,6 +129,7 @@ export function Connections() {
   const all = data?.events || [];
   const host = all.filter((e) => e.kind === 'tcp_connect' || e.kind === 'tcp_retransmit');
   const guest = all.filter((e) => e.kind === 'guest_connect' || e.kind === 'guest_flow' || e.kind === 'guest_inbound');
+  const names = all.filter((e) => e.kind === 'guest_dns');
   return (
     <div>
       <HostBanner />
@@ -139,6 +140,15 @@ export function Connections() {
           err=""
           rows={guest}
           cols={['ts', 'vm', 'kind', 'proto', 'src', 'dst', 'dport', 'blocked', 'attribution', 'guest_attributed']}
+          format={{ vm: (v) => String((v as { name?: string } | undefined)?.name ?? '—'), blocked: (v) => (v ? 'dropped' : '—') }}
+        />
+      )}
+      {names.length > 0 && (
+        <Trace
+          title="Names the guest looked up (DNS over UDP port 53, seen on the VM tap)"
+          err=""
+          rows={names}
+          cols={['ts', 'vm', 'dns_name', 'qtype', 'src', 'dst', 'blocked']}
           format={{ vm: (v) => String((v as { name?: string } | undefined)?.name ?? '—'), blocked: (v) => (v ? 'dropped' : '—') }}
         />
       )}

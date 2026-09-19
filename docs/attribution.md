@@ -23,6 +23,6 @@ KVM exit, scheduler, and block counters use the same PID join. Block latency is 
 ## What is not measured
 
 - **CPU steal**, and which **process** inside the guest made a connection. A guest event names the VM and the address, not the guest process. Shukra never runs anything in the VM.
-- **What is inside a connection.** The programs count and sample metadata and never read payloads: a guest's DNS names, HTTP requests and TLS content are not parsed. A DNS flow is seen as a flow to port 53.
+- **What is inside a connection.** The programs count and sample metadata and never read payloads: HTTP requests and TLS content are not parsed. The one thing read beyond headers is the name in a DNS query over UDP port 53 (see [DNS names](tap.md#dns-names)); DNS over TCP, TLS or HTTPS is seen only as a connection.
 - **A VM with no tap it can attach to.** A VM on user-mode networking has no tap, and a VM whose tap is in another network namespace (fluxvm's default) is one Shukra cannot see from the host's namespace. `shukractl doctor` names both. Their host-side counters still work; their guest traffic is not visible and they cannot be isolated.
 - **Traffic that never crosses the tap**, such as two guests on the same host bridge whose traffic does not pass through this tap, vhost-user, and SR-IOV.

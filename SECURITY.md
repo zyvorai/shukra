@@ -5,7 +5,8 @@ Shukra observes by default, and can isolate a VM only when you give it a managem
 ## What it reads, and what it never does
 
 - **It never runs anything inside a guest.** There is no agent. Everything is read from the host: `/proc`, kernel tracepoints, and the host side of each VM's tap interface.
-- **It does not read payloads.** The eBPF programs count and sample metadata. The tap program reads Ethernet, IP, TCP and UDP headers to count packets, follow TCP handshakes and name a flow's addresses and ports. The drops program reads which device dropped a packet and why. Application data, DNS names, HTTP and TLS content are not parsed or copied.
+- **It does not read application payloads.** The eBPF programs count and sample metadata. The tap program reads Ethernet, IP, TCP and UDP headers to count packets, follow TCP handshakes and name a flow's addresses and ports. The drops program reads which device dropped a packet and why. HTTP, TLS and other application data are not parsed or copied.
+- **The one exception is DNS names.** For a plain DNS query the guest sends to UDP port 53, the tap program copies the first question (at most 128 bytes: the name and the type) and Shukra records it as a `guest_dns` event. Answers, other UDP and everything over TCP, TLS or HTTPS are not read. A name says what a VM is doing, so it is treated as sensitive data (below), and `shukrad -dns-events=false` makes the program not look at DNS at all.
 - **What it can attribute is bounded.** Host TCP events are connects from a process, joined to a QEMU thread group when the PID matches: they are QEMU's own traffic, not the guest's. Traffic seen on a VM's tap is the guest's, and only that is marked `guest_attributed`. Shukra never names a guess: an unowned tap or PID stays `unattributed`.
 
 ## Isolation
@@ -48,11 +49,12 @@ A guest controls the bytes it sends. Shukra is built so that cannot hurt it:
 - Events from a tap are **rate-limited** (200 per tap per second), so a guest that floods SYNs or invents flows cannot flood the event ring or the daemon. The counters still see every packet.
 - Frames that cannot be parsed are counted and, under isolation, dropped. Nothing from a packet is used to index memory unchecked, and each program passes the kernel verifier.
 - A guest cannot change what Shukra attributes to it: attribution comes from the tap's owner, found on the host, not from anything in the packet.
+- A guest chooses the DNS names it asks for. A name is decoded in the daemon, lower-cased, cut at 253 bytes, and every byte that is not a printable character becomes `?`, so a name cannot carry a line break or an escape sequence into a log, a terminal or a consumer. Names are announced once a minute per tap and name (a fixed-size table), and at most 200 per tap per second, on their own budget so they cannot starve the connect events.
 - What a guest **can** do is generate load: a very high packet rate costs CPU in the tap program on that tap, and a flood of unanswered SYNs makes the pending table forget the oldest entries uncounted (`attempts` still counts every one).
 
 ## Data that identifies people
 
-Events, detections and the flight recorder hold VM names, UUIDs and the addresses a guest talked to. With `-data-dir` they are written to disk. Treat that directory as sensitive, and the alert sinks as a place that data leaves the host.
+Events, detections and the flight recorder hold VM names, UUIDs, the addresses a guest talked to and, unless you turn it off, the DNS names it looked up. With `-data-dir` they are written to disk. Treat that directory as sensitive, and the alert sinks as a place that data leaves the host.
 
 ## Reporting
 

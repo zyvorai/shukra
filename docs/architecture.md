@@ -93,7 +93,7 @@ The unit runs as root with six capabilities and a read-only filesystem apart fro
 | `CAP_NET_ADMIN` | load and attach the TCX tap program |
 | `CAP_SYS_PTRACE`, `CAP_DAC_READ_SEARCH` | read a VM's tap names from the tun fds of a QEMU that runs as another user |
 
-Nothing here reads packet payloads: the programs count and sample metadata, and the DNS and application layers are not parsed. See [SECURITY.md](../SECURITY.md).
+No program reads application payloads: they count and sample metadata. The one exception is the first question of a DNS query to UDP port 53, whose name is recorded unless `-dns-events=false`. See [SECURITY.md](../SECURITY.md).
 
 ## Kernel requirements
 

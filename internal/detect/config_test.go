@@ -99,6 +99,11 @@ func TestParseRejects(t *testing.T) {
 		"negative value":                                      "thresholds:\n  - {name: x, metric: wakeup_delay_ms, value: -1}\n",
 		"window too short":                                    "thresholds:\n  - {name: x, metric: wakeup_delay_ms, value: 1, window: 1s}\n",
 		"window too long":                                     "thresholds:\n  - {name: x, metric: wakeup_delay_ms, value: 1, window: 2h}\n",
+		"dns rule with no match":                              "dns:\n  - name: x\n",
+		"dns rule with two matches":                           "dns:\n  - {name: x, suffix: a.com, exact: b.com}\n",
+		"dns bad severity":                                    "dns:\n  - {name: x, suffix: a.com, severity: loud}\n",
+		"dns unknown field":                                   "dns:\n  - {name: x, sufix: a.com}\n",
+		"dns duplicate names":                                 "dns:\n  - {name: x, suffix: a.com}\n  - {name: x, exact: b.com}\n",
 		"bad threshold severity":                              "thresholds:\n  - {name: x, metric: wakeup_delay_ms, value: 1, severity: loud}\n",
 	}
 	for why, in := range cases {
@@ -137,7 +142,7 @@ func TestShippedExampleParses(t *testing.T) {
 	for _, line := range strings.Split(string(raw), "\n") {
 		body, isComment := strings.CutPrefix(line, "# ")
 		switch {
-		case isComment && regexp.MustCompile(`^(suppress|ports|exec_allow|thresholds):`).MatchString(body):
+		case isComment && regexp.MustCompile(`^(suppress|ports|dns|exec_allow|thresholds):`).MatchString(body):
 			live = true
 			on = append(on, body)
 		case live && strings.HasPrefix(line, "#  "):
@@ -153,7 +158,7 @@ func TestShippedExampleParses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("with examples enabled: %v\n%s", err, strings.Join(on, "\n"))
 	}
-	if len(full.Ports) != 3 || full.Ports[1].Proto != "udp" || full.Ports[2].Dir != "in" || len(full.Thresholds) != 1 || len(full.ExecAllow) != 1 || full.Suppress != DefaultSuppress {
+	if len(full.Ports) != 3 || full.Ports[1].Proto != "udp" || full.Ports[2].Dir != "in" || len(full.DNS) != 2 || len(full.Thresholds) != 1 || len(full.ExecAllow) != 1 || full.Suppress != DefaultSuppress {
 		t.Fatalf("%+v", full)
 	}
 }
@@ -227,5 +232,46 @@ ports:
 	}
 	if _, err := Parse([]byte("ports:\n  - {port: 22, dir: sideways}\n")); err == nil || !strings.Contains(err.Error(), "dir") {
 		t.Fatalf("a bad dir was accepted: %v", err)
+	}
+}
+
+func TestDNSRulesMatchOnLabelBoundariesAndIgnoreCase(t *testing.T) {
+	c, err := Parse([]byte(`
+dns:
+  - {name: pool, suffix: .Nanopool.ORG.}
+  - {name: exact, exact: Login.Example.com}
+  - {name: word, contains: PASTEBIN, severity: low}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range []struct {
+		name string
+		rule string
+	}{
+		{"nanopool.org", "pool"},
+		{"eth.NANOPOOL.org", "pool"},
+		{"a.b.nanopool.org.", "pool"},
+		{"badnanopool.org", ""}, // not on a label boundary
+		{"nanopool.org.evil.com", ""},
+		{"login.example.com", "exact"},
+		{"x.login.example.com", ""}, // exact means exact
+		{"my-pastebin-mirror.net", "word"},
+		{"example.com", ""},
+		{"", ""},
+	} {
+		r, ok := c.MatchDNS(x.name)
+		if x.rule == "" && ok || x.rule != "" && (!ok || r.Name != x.rule) {
+			t.Errorf("%q: got %+v %v, want rule %q", x.name, r, ok, x.rule)
+		}
+	}
+	if r, _ := c.MatchDNS("pastebin.com"); r.Severity != "low" {
+		t.Errorf("severity: %+v", r)
+	}
+	if r, _ := c.MatchDNS("nanopool.org"); r.Severity != "high" {
+		t.Errorf("a rule with no severity is high: %+v", r)
+	}
+	if _, ok := (*Config)(nil).MatchDNS("nanopool.org"); ok {
+		t.Error("a nil config matched")
 	}
 }
