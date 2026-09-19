@@ -5,7 +5,7 @@ Five of the six programs see the **VMM process** from the host: QEMU, or a FluxV
 | Program | Records | Caveat |
 |---|---|---|
 | `kvm` | Exit counts by reason. **Handling time**: `kvm_exit` to the next `kvm_entry` on the same vCPU thread, as a log2 histogram. Total time per reason | A halt blocks until an interrupt, so its time is guest idle. It is in the per-reason totals and left out of the latency histogram (reason 12 on VMX, 120 on SVM) |
-| `sched` | On-CPU time. **Run-queue delay** (wakeup to running) as a log2 histogram, per task | Per VMM thread with `?threads=1`, so a slow vCPU is distinguishable from a slow iothread |
+| `sched` | On-CPU time. **Run-queue delay** (wakeup to running) as a log2 histogram, per task. **vCPU preemption**: time a vCPU thread was runnable but off a host CPU, and who had it | Per VMM thread with `?threads=1`, so a slow vCPU is distinguishable from a slow iothread |
 | `block` | Completed requests, bytes, slowest request, and a log2 latency histogram, per direction | It is the QEMU I/O thread, not the guest filesystem. The slowest request is updated without a lock, so two CPUs racing can miss a slightly smaller maximum |
 | `tap` | Per-tap packets and bytes each way and what isolation dropped, from TCX on the VM's host interface. **What became of each TCP handshake**, both ways: accepted, refused, never answered, blocked by isolation, and retransmits, plus the time to be answered as a log2 histogram. A `guest_inbound` event per connection made to the guest. A `guest_connect` event per TCP SYN and a `guest_flow` event per new UDP flow, capped at 200 per tap per second | The only program that sees the guest. Needs Linux 6.6+. On FluxVM's default netns the interface is `vh<8hex>`, and the guest address is the one before NAT. See [Guest traffic and isolation](tap.md) |
 | `drops` | What the kernel dropped on each VM tap, counted by the kernel's own reason (`skb:kfree_skb`): TC_INGRESS, TC_EGRESS, FULL_RING and the rest, and the kernel function that freed the last one | Only the VM taps are counted. Shukra's own isolation drops appear as TC_INGRESS or TC_EGRESS, so they are subtracted using the tap program's `dropped` count: what is left is **someone else's**. A full queue (FULL_RING) is the guest not reading its NIC, and is reported on its own. The kernel function that freed them is named by the kernel itself (`bpf_snprintf` `%ps`, once when a reason is first seen on a tap), so it needs no capability; it is the function at the first free seen, and if the kernel cannot name it, `/proc/kallsyms` is tried and then the address is shown. Reason names come from this kernel's BTF, and an unknown reason is shown as its number |
@@ -66,6 +66,8 @@ There is no `_sum` series. The kernel keeps buckets, not a total, and a sum buil
 | `shukra_kvm_exit_latency_seconds` | histogram, `vm` |
 | `shukra_sched_on_cpu_seconds_total`, `shukra_sched_wakeup_delay_seconds_total` | counter, `vm` |
 | `shukra_sched_runqueue_delay_seconds` | histogram, `vm` |
+| `shukra_sched_vcpu_preempted_seconds_total` | counter, `vm`. vCPU threads only. No series for a VM the sched program has not measured, and none for `_host` |
+| `shukra_sched_vcpu_preempted_by_seconds_total` | counter, `vm`, `by`: `vm:<name>` for a thread of a QEMU process, otherwise a command name (`kworker`, `cilium-agent`) |
 | `shukra_block_latency_seconds` | histogram, `vm`, `op` |
 | `shukra_block_ops_total`, `shukra_block_bytes_total` | counter, `vm`, `op` |
 | `shukra_block_latency_max_seconds` | gauge, `vm`, `op` |
@@ -97,6 +99,20 @@ histogram_quantile(0.99, sum by (le, vm) (rate(shukra_tap_handshake_seconds_buck
 # packets the kernel dropped on a VM's tap, by reason
 sum by (vm, reason) (rate(shukra_tap_kernel_drops_total[5m]))
 ```
+
+## vCPU preemption
+
+`sched_switch` fires when a thread leaves a CPU. If a QEMU thread leaves while it is still **runnable** (still on the run queue), it was taken off the CPU while it wanted to run: preempted. The program remembers when, and who took the CPU (the incoming thread and its command name), and when the thread next gets a CPU the wait is added to that thread's total and to the pair (this thread, that thread). A thread that goes to sleep is dequeued before the switch, so sleeping is never counted.
+
+- **What the number is.** Time vCPU threads spent runnable but off a host CPU. It is the host's view of the guest losing its processor, and it is **not** the steal counter a guest reads: it does not include time the host was doing work for the guest, and the guest's own accounting is not consulted. Summed over a VM's vCPUs, so a 4-vCPU VM can be preempted for more than a second per second.
+- **vCPU threads only.** An iothread that waited for a CPU is not the guest losing its processor, and a thread no VM owns is not counted at all. A thread is a vCPU by the role the daemon's scan gave it, so a thread that appeared since the last scan (every 2 seconds) is missed until the next.
+- **Who.** A preemptor that is a thread of a QEMU process is named by its VM, `vm:<name>` (and `vm:<own name>` is the VM's own other threads: an iothread or another vCPU). Anything else is its command name with the per-CPU or per-instance suffix removed, so `kworker/3:1` and `kworker/u16:2` are one preemptor, `kworker`. The command name is what the kernel reported when the vCPU was preempted; a thread that renames itself after it starts is shown under its newest name. These are **host** process names.
+- **A yield counts.** A thread that calls `sched_yield` while runnable is also off the CPU while it wants to run, and cannot be told apart from being preempted at this hook. KVM yields between vCPUs (paravirtual spinlocks, PLE), so some of the time attributed to `vm:<own name>` is that.
+- **Totals are exact, the split is bounded.** The per-thread totals are exact. The table of who took the CPU is a fixed-size LRU keyed by the taking thread's id, which churns on a busy host, so the named preemptors of a very busy host can add up to a little less than the total.
+- **Not a finding by itself.** A vCPU is preempted a little all the time. Explain reports `cpu_preempted` only from 200 ms in the window and 5% of the time the vCPUs wanted to run (20% is high confidence).
+- **Cost.** Measured on a 12-CPU Xeon hypervisor with 10 VMs under the same live load: the previous `sched_switch` program took about 435 ns per switch, the new one about 490 ns with no VM watched and about 615 ns with the ten VMs watched, at about 60,000 switches a second. That is about 11 ms of CPU per second more, under 0.1% of the host. (These figures include the kernel's own run-time accounting, which was switched on for the measurement.)
+- **Checked against the kernel** by a test that pins two CPU-bound threads to one CPU: the victim is charged about half the run and the taker is named by the command the test gave it. A sleeping thread on the same CPU is not charged, and removing the runnable check makes the test fail.
+- **Where it is seen.** `shukractl trace sched`, `GET /api/v1/trace/sched` (`vcpuPreemptedNs`, `vcpuPreemptions`, `topPreemptors`), the Scheduler page, `shukra_sched_vcpu_preempted_*`, the threshold metric `vcpu_preempted_ms_per_sec`, and Explain.
 
 ## Known limits
 

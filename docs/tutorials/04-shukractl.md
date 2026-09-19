@@ -78,7 +78,7 @@ shukractl explain osboxes-debian
 shukractl recorder osboxes-debian --window 60s
 ```
 
-`explain` answers from evidence on hand. The causes it can give are `host_cpu_contention`, `storage_latency`, `kvm_exit_handling`, `tcp_retransmits`, and, from the guest's tap, `guest_traffic_dropped` (something other than Shukra is dropping its packets), `guest_not_reading_nic` and `guest_connects_failing`; otherwise `no_host_cause`, which says the cause may be inside the guest. The missing list is part of the answer: CPU steal, in-guest process, and guest tap attribution when the tap program is off. If those lines are present, Shukra is telling you it cannot see them.
+`explain` answers from evidence on hand. The causes it can give are `host_cpu_contention`, `cpu_preempted` (the vCPUs were taken off a host CPU, and it says by whom), `storage_latency`, `kvm_exit_handling`, `tcp_retransmits`, and, from the guest's tap, `guest_traffic_dropped` (something other than Shukra is dropping its packets), `guest_not_reading_nic` and `guest_connects_failing`; otherwise `no_host_cause`, which says the cause may be inside the guest. The missing list is part of the answer: the guest's own CPU steal counter, in-guest process, and guest tap attribution when the tap program is off. If those lines are present, Shukra is telling you it cannot see them.
 
 `recorder` replays the bounded per-VM ring, default cap 4096, default window 60s. With `-data-dir` the ring is saved every minute and on clean shutdown and reloaded at start; without it the ring starts empty after a restart. Kinds you will actually see: `exec`, `tcp_connect`, `tcp_retransmit`, `block_slow` (at least 10ms), `sched_delay` (at least 20ms), `detection`, and process exit. Counters do not each become an event.
 

@@ -27,7 +27,7 @@ Shukra is one privileged daemon on the hypervisor, a CLI and a console that only
 | Program | Attaches to | Keeps | Notes |
 |---|---|---|---|
 | `kvm` | `kvm_exit`, `kvm_entry`, `kvm_mmio`, `kvm_pio` | Per-thread exit counts by reason, entry counts, exit-handling time as a log2 histogram and time per reason | Hand-laid tracepoint records, because KVM records are not in vmlinux BTF on 6.8. `kvm_pio` does not exist on arm64 |
-| `sched` | `sched_switch`, `sched_wakeup`, `sched_process_exec`, `sched_process_exit` | On-CPU time and run-queue delay per thread, a `watched` set of VMM thread groups | Exec and exit events are filtered in the kernel to children of a watched VMM (QEMU, or a FluxVM backend) |
+| `sched` | `sched_switch`, `sched_wakeup`, `sched_process_exec`, `sched_process_exit` | On-CPU time, run-queue delay and vCPU preemption (runnable but off CPU, and who took it) per thread, a `watched` set of VMM thread groups | Exec and exit events are filtered in the kernel to children of a watched VMM (QEMU, or a FluxVM backend) |
 | `block` | `block_rq_issue`, `block_rq_complete` | Latency histogram, bytes and requests per direction, slowest request | Attributed to the task that dispatched the request. About 3% land on a kernel worker |
 | `net` | `tcp_v4_connect`, `tcp_v6_connect`, `tcp_retransmit_skb` | Exact connect counts; 1 in 64 retransmits become events | The VMM's own sockets. Never the guest. The attribution string is still `qemu-process` |
 | `drops` | `skb:kfree_skb` | Per VM tap and drop reason: a count and the kernel function that freed the packet | Filters to VM taps first. Reads the record by field name (CO-RE). See [drops](drops.md) |
@@ -76,7 +76,7 @@ Rules live in one YAML file (`-watchlist`), re-read on `SIGHUP`:
 - **destinations**: a CIDR watchlist, matched on the address a connect went to, or the peer that connected in.
 - **ports**: a port, with `proto` (`tcp`, `udp`, `any`) and `dir` (`out`, `in`, `any`).
 - **exec_allow**: names that may start under QEMU without an alert.
-- **thresholds**: a per-VM metric over a window (block p99, run-queue delay, retransmits, KVM exit rate and latency, guest drops, connection failures, inbound connections).
+- **thresholds**: a per-VM metric over a window (block p99, run-queue delay, vCPU preemption, retransmits, KVM exit rate and latency, guest drops, connection failures, inbound connections).
 - **suppress**: a repeat of the same detection inside a window is held back and counted.
 
 A detection keeps the attribution of the event that caused it, so a rule that fires on something the guest did says the guest did it. Detections go to the API, the console and any configured sink (signed webhook, syslog, JSONL file), each with its own queue so a stuck webhook cannot delay the others.

@@ -24,6 +24,7 @@ Observe. Protect. Explain.
 |---|---|
 | Why is this VM slow right now? | `shukractl explain <vm>`: ranked host-side causes over the last minute, with evidence and a list of what Shukra cannot see |
 | Is the host, the disk or a noisy neighbour to blame? | `trace kvm`, `trace sched`, `trace block`: exit handling time, run-queue delay per vCPU thread, block latency histograms |
+| Who took my vCPU's CPU? | `trace sched`, `explain` (`cpu_preempted`): how long the vCPUs were runnable but off a host CPU, and which VM or host process had it |
 | What is this VM connecting to, who connects to it, and what names does it look up? | `guest_connect`, `guest_flow`, `guest_inbound` and `guest_dns` events, seen on the VM's own tap |
 | Did the connection get an answer? | `trace tap`: every TCP handshake ends as accepted, refused, never answered or blocked, with the handshake time |
 | Is something dropping this VM's traffic, or is it Shukra? | `trace drops` and `doctor`: what the kernel dropped on the tap, by reason, with Shukra's own isolation subtracted |
@@ -38,7 +39,7 @@ Six programs. Hot paths stay in maps. The ring buffer is only for discrete event
 | Program | Hooks | What it records |
 |---|---|---|
 | `kvm` | `kvm_exit`, `kvm_entry`, `kvm_mmio`, `kvm_pio` | Exit counts by reason, exit handling time (histogram, halts excluded) and time per reason |
-| `sched` | wakeup, switch, exec, exit | On-CPU time, run-queue delay (histogram, per thread), exec and exit events for QEMU children |
+| `sched` | wakeup, switch, exec, exit | On-CPU time, run-queue delay (histogram, per thread), **vCPU preemption** (how long a vCPU was runnable but off a host CPU, and who had it), exec and exit events for QEMU children |
 | `block` | `block_rq_issue`, `block_rq_complete` | Latency histogram, requests, bytes and the slowest request, per direction |
 | `net` | `tcp_v4_connect`, `tcp_v6_connect`, sampled `tcp_retransmit_skb` | Exact connect counts (IPv4 and IPv6) and 1-in-64 retransmit samples: **the QEMU process's** sockets |
 | `tap` | TCX on each VM tap (Linux 6.6+) | The guest's own traffic: per-tap counters; an event per TCP connect, per new UDP flow and per connection made *to* the guest, and the name in each DNS query over UDP/53; what became of each TCP handshake (accepted, refused, never answered, blocked) and how long it took; and isolation |
@@ -51,7 +52,7 @@ Identity comes from the host: the QEMU command line (`-name` / `guest=`, `-uuid`
 ## What this release will not pretend
 
 - **Host TCP is QEMU's, not the guest's.** `tcp_v4_connect` and `tcp_v6_connect` events are `attribution: "qemu-process"` and `guest_attributed: false`. Only events seen on a VM's tap are `guest_attributed: true`, and only for a tap that belongs to a VM in the current scan. A tap no VM owns stays unattributed. See [attribution](docs/attribution.md).
-- **No agent, no payloads.** Shukra never runs inside a guest and never reads application data. The one thing it reads beyond headers is the name in a plain DNS query over UDP port 53 (`-dns-events=false` turns that off); answers, DNS over TCP, TLS or HTTPS, and everything else are not read. It can say *which VM and which address*, not *which process inside the guest*. CPU steal is not measured.
+- **No agent, no payloads.** Shukra never runs inside a guest and never reads application data. The one thing it reads beyond headers is the name in a plain DNS query over UDP port 53 (`-dns-events=false` turns that off); answers, DNS over TCP, TLS or HTTPS, and everything else are not read. It can say *which VM and which address*, not *which process inside the guest*. The guest's own CPU steal counter is not read; the host's view of the same thing, vCPU preemption and who caused it, is measured.
 - **Isolation is real, and conditional.** `shukractl isolate` really drops the VM's tap traffic, but only with an explicit management allow list (`-isolate-allow`), only on Linux 6.6 or newer, and `applied` is `true` only after the kernel took the change. Without an allow list it is refused. Enforcement survives a daemon crash, restart or stop when `/sys/fs/bpf` is a bpf filesystem.
 - **A VM Shukra cannot see says so.** User-mode networking has no tap. A tap that is not in the host namespace, and that was not mapped to one, has no guest traffic, no drop counts and cannot be isolated. `shukractl doctor` names it. FluxVM's default per-VM netns is mapped to the host veth and is traced. See [FluxVM](docs/tap.md#fluxvm).
 - **A program that is not measuring reports detached, with the reason.** A build without root, clang, or `/sys/kernel/btf/vmlinux` still serves discovered VMs. It never invents a counter, and a VM with no measurement has no series, not a zero.
@@ -145,7 +146,7 @@ exec_allow: [node_exporter]
 suppress: 5m
 ```
 
-A detection keeps the attribution of the event that caused it, so a rule that fires on something the guest did says the guest did it. Metrics: `block_read_p99_ms`, `block_write_p99_ms`, `wakeup_delay_ms`, `runqueue_delay_p99_ms`, `kvm_exit_latency_p99_ms`, `kvm_exits_per_sec`, `tcp_retransmits_per_sec`, the block throughput metrics, and, from the guest's tap, `guest_drops_per_sec`, `guest_connect_refused_per_sec`, `guest_connect_timeouts_per_sec` and `guest_inbound_per_sec`. A rule says nothing until a full window of history exists, and nothing for a VM whose measurement is not on. See [Detection rules](docs/tutorials/06-watchlist.md) and [Alert sinks](docs/tutorials/07-alert-sinks.md) (signed webhook, syslog, JSONL file).
+A detection keeps the attribution of the event that caused it, so a rule that fires on something the guest did says the guest did it. Metrics: `block_read_p99_ms`, `block_write_p99_ms`, `wakeup_delay_ms`, `runqueue_delay_p99_ms`, `vcpu_preempted_ms_per_sec`, `kvm_exit_latency_p99_ms`, `kvm_exits_per_sec`, `tcp_retransmits_per_sec`, the block throughput metrics, and, from the guest's tap, `guest_drops_per_sec`, `guest_connect_refused_per_sec`, `guest_connect_timeouts_per_sec` and `guest_inbound_per_sec`. A rule says nothing until a full window of history exists, and nothing for a VM whose measurement is not on. See [Detection rules](docs/tutorials/06-watchlist.md) and [Alert sinks](docs/tutorials/07-alert-sinks.md) (signed webhook, syslog, JSONL file).
 
 ## Monitor the daemon
 
