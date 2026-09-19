@@ -214,13 +214,23 @@ OTHER0=$(dtap otherDrops); SHUK0=$(dtap shukraDropped)
 # TCX may already have created the clsact qdisc, so an existing one is fine, and only the filter is
 # removed afterwards: deleting the qdisc could take Shukra's own links with it.
 sudo tc qdisc add dev vethh clsact 2>/dev/null || true
+# The filter drops every frame on the tap, ARP included. If the guest had to ask who has 10.99.0.1 while it is
+# on, the answer could never come and most pings would never leave the guest, so the entry is made permanent
+# first and only frames the guest really sends are counted.
+guest ping -c 1 -W 1 10.99.0.1 >/dev/null 2>&1
+HOSTMAC=$(sudo ip -n g1 neigh show 10.99.0.1 | awk '{print $3}' | head -1)
+sudo ip -n g1 neigh replace 10.99.0.1 lladdr "$HOSTMAC" dev vethg nud permanent
+tcin() { api "$U/api/v1/trace/drops" | J "sum(r['count'] for r in d['rows'] if r['tap']=='vethh' and r['reason']=='TC_INGRESS')"; }
+TC0=$(tcin)
 sudo tc filter add dev vethh ingress matchall action drop
 check "the filter is really on the tap" "sudo tc filter show dev vethh ingress | grep -q matchall"
-guest ping -c 20 -i 0.05 -W 1 10.99.0.1 >/dev/null 2>&1; sleep 1
-OTHER1=$(dtap otherDrops); SHUK1=$(dtap shukraDropped)
+SENT=$(guest ping -c 20 -i 0.05 -W 1 10.99.0.1 2>&1 | sed -n 's/^\([0-9]*\) packets transmitted.*/\1/p'); sleep 1
+OTHER1=$(dtap otherDrops); SHUK1=$(dtap shukraDropped); TC1=$(tcin)
 sudo tc filter del dev vethh ingress
+sudo ip -n g1 neigh del 10.99.0.1 dev vethg 2>/dev/null
+echo "  ping sent ${SENT:-?}; the kernel's TC_INGRESS on the tap rose $TC0 -> $TC1; otherDrops $OTHER0 -> $OTHER1; Shukra's own $SHUK0 -> $SHUK1"
 check "Shukra's own programs are still on the tap after the filter is gone" "sudo bpftool net show dev vethh 2>/dev/null | grep -q shukra_tap_from_guest"
-check "twenty pings dropped by a tc filter are counted as the kernel's TC_INGRESS on that tap" "api $U/api/v1/trace/drops | J \"sum(r['count'] for r in d['rows'] if r['tap']=='vethh' and r['reason']=='TC_INGRESS')\" | awk '\$1>=20{f=1} END{exit !f}'"
+check "twenty pings were sent, and every one the tc filter dropped is the kernel's TC_INGRESS on that tap (rose by at least twenty: $TC0 -> $TC1)" "[ \"${SENT:-0}\" = 20 ] && [ $((TC1-TC0)) -ge 20 ]"
 check "they are 'other', not Shukra's: otherDrops rose by at least twenty ($OTHER0 -> $OTHER1)" "[ $((OTHER1-OTHER0)) -ge 20 ]"
 check "and Shukra says it dropped none of them ($SHUK0 -> $SHUK1)" "[ $SHUK1 -eq $SHUK0 ]"
 check "doctor names the VM and the tap" "api $U/api/v1/doctor | J \"any(c['id']=='vm-drops-not-shukra' and 'taptest (vethh' in c['detail'] for c in d['checks'])\" | grep -q True"
