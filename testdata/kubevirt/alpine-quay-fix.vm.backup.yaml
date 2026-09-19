@@ -1,0 +1,151 @@
+# A KubeVirt VirtualMachine as `kubectl get vm -o yaml` printed it, kept as a fixture.
+# Redacted: the cloud-init password and the host address (now 203.0.113.10, a documentation address)
+# were replaced. Everything else is as it was, including generation 6 and the interface that
+# declares only port 3389, which is why masquerade forwards nothing else to this guest.
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  annotations:
+    kubevirt.io/latest-observed-api-version: v1
+    kubevirt.io/storage-observed-api-version: v1
+  creationTimestamp: "2026-09-09T10:27:12Z"
+  finalizers:
+  - kubevirt.io/virtualMachineControllerFinalize
+  generation: 6
+  labels:
+    kubevirt.io/vm: alpine-quay-fix
+    os: alpine
+    os.version: "3.19"
+  name: alpine-quay-fix
+  namespace: default
+  resourceVersion: "7317301"
+  uid: 9dd6f497-ff7f-4fc5-a0e5-605281b2b581
+spec:
+  running: true
+  template:
+    metadata:
+      annotations:
+        kubevirt.io/pci-topology-version: v3
+      labels:
+        kubevirt.io/vm: alpine-quay-fix
+        os: alpine
+        os.version: "3.19"
+    spec:
+      architecture: amd64
+      domain:
+        clock:
+          timer:
+            hpet:
+              present: false
+            pit:
+              present: true
+              tickPolicy: delay
+            rtc:
+              present: true
+              tickPolicy: catchup
+              track: guest
+          utc: {}
+        cpu:
+          cores: 1
+          sockets: 1
+          threads: 1
+        devices:
+          disks:
+          - bootOrder: 1
+            disk:
+              bus: virtio
+            name: rootdisk
+          - bootOrder: 2
+            disk:
+              bus: virtio
+            name: datadisk
+          - disk:
+              bus: virtio
+            name: cloudinitdisk
+          interfaces:
+          - masquerade: {}
+            model: virtio
+            name: default
+            ports:
+            - name: rdp
+              port: 3389
+              protocol: TCP
+          rng: {}
+        firmware:
+          serial: c8dda709-204a-44ea-8ac2-227565598af3
+          uuid: 5fcf2040-5fa4-4053-81d4-8a8816c219f4
+        machine:
+          type: q35
+        memory:
+          guest: 512Mi
+        resources:
+          requests:
+            memory: 512Mi
+      networks:
+      - name: default
+        pod: {}
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo:latest
+          imagePullPolicy: IfNotPresent
+        name: rootdisk
+      - emptyDisk:
+          capacity: 10Gi
+        name: datadisk
+      - cloudInitNoCloud:
+          userData: "#cloud-config\nuser: alpine\npassword: REDACTED-password\nlock_passwd:
+            false\nchpasswd: { expire: True }\nssh_pwauth: False\npackages:\n  - curl\nmanage_resolv_conf:
+            true\nresolv_conf:\n  nameservers: ['10.43.0.10']\n  searchdomains:\n
+            \   - veyron-system.svc.cluster.local\n    - svc.cluster.local\n    -
+            cluster.local\n\nwrite_files:\n  - path: /usr/local/sbin/veyron-install-guestkit.sh\n
+            \   permissions: '0755'\n    content: |\n      #!/bin/sh\n      set -eu\n
+            \     URLS=\"\n      https://203.0.113.10:30151/api/v1/platform/guestkit/binary\n
+            \     https://veyron-api.veyron-system.svc.cluster.local/api/v1/platform/guestkit/binary\n
+            \     https://github.com/zyvorai/guestkit/releases/download/guestkit-agent-v0.3.14/guestkitd\n
+            \     \"\n      mkdir -p /usr/local/bin\n      for attempt in $(seq 1
+            30); do\n        for url in $URLS; do\n          [ -z \"$url\" ] && continue\n
+            \         if curl -fkSL -o /usr/local/bin/guestkit \"$url\" 2>/dev/null
+            && [ -s /usr/local/bin/guestkit ]; then\n            chmod 0755 /usr/local/bin/guestkit\n
+            \           exit 0\n          fi\n        done\n        sleep 10\n      done\n
+            \     echo \"GuestKit binary download failed after 30 attempts\" >&2\n
+            \     exit 1\n\n  - path: /etc/systemd/system/guestkit-agent.service\n
+            \   content: |\n      [Unit]\n      Description=GuestKit Agent (Zyvor)\n
+            \     After=network-online.target\n      Wants=network-online.target\n
+            \     \n      [Service]\n      ExecStart=/bin/sh -c 'until [ -e /dev/virtio-ports/org.qemu.guest_agent.0
+            ]; do sleep 2; done; exec /usr/local/bin/guestkit agent --channel virtio'\n
+            \     Restart=always\n      RestartSec=5\n      User=root\n      StandardOutput=journal\n
+            \     StandardError=journal\n      \n      [Install]\n      WantedBy=multi-user.target\nruncmd:\n
+            \ - /usr/local/sbin/veyron-install-guestkit.sh\n  - [ rc-update, add,
+            guestkit-agent, default ]\n  - [ rc-service, guestkit-agent, start ]\n"
+        name: cloudinitdisk
+status:
+  conditions:
+  - lastProbeTime: null
+    lastTransitionTime: "2026-09-19T10:37:43Z"
+    status: "True"
+    type: Ready
+  - lastProbeTime: null
+    lastTransitionTime: null
+    status: "True"
+    type: LiveMigratable
+  - lastProbeTime: null
+    lastTransitionTime: null
+    status: "True"
+    type: StorageLiveMigratable
+  created: true
+  desiredGeneration: 6
+  observedGeneration: 6
+  printableStatus: Running
+  ready: true
+  runStrategy: Always
+  volumeSnapshotStatuses:
+  - enabled: false
+    name: rootdisk
+    reason: Snapshot is not supported for this volumeSource type [rootdisk]
+  - enabled: false
+    name: datadisk
+    reason: Snapshot is not supported for this volumeSource type [datadisk]
+  - enabled: false
+    name: cloudinitdisk
+    reason: Snapshot is not supported for this volumeSource type [cloudinitdisk]
