@@ -150,7 +150,7 @@ func (a *Agent) Ingest(e event.Event) {
 		e.TS = time.Now().UTC()
 	}
 	cfg := a.cfg.Load()
-	if e.Kind == event.KindGuestConnect {
+	if e.Kind == event.KindGuestConnect || e.Kind == event.KindGuestFlow {
 		a.ingestGuest(e, cfg)
 		return
 	}
@@ -217,15 +217,25 @@ func (a *Agent) Ingest(e event.Event) {
 // was seen. The detection keeps the event's attribution, so a rule that fires on
 // what the guest did says the guest did it.
 func (a *Agent) connectRules(e event.Event, cfg *detect.Config, detection func(rule, severity, msg string) event.Event) {
+	proto := e.Proto
+	if proto == "" {
+		proto = "tcp" // a host connect is always TCP
+	}
 	if e.Dst != "" {
 		if rule, ok := cfg.Watch.Match(net.ParseIP(e.Dst)); ok {
-			a.raise(e.TS, cfg, "dest|"+rule.Name+"|"+e.VM.Name+"|"+e.Attribution+"|"+e.Dst,
+			// TCP and UDP to the same address are different facts, so an alert for one
+			// does not hide the other.
+			a.raise(e.TS, cfg, "dest|"+rule.Name+"|"+e.VM.Name+"|"+e.Attribution+"|"+proto+"|"+e.Dst,
 				detection(rule.Name, rule.Severity, rule.Name+" destination "+e.Dst))
 		}
 	}
-	if rule, ok := cfg.MatchPort(e.DPort); ok {
-		a.raise(e.TS, cfg, fmt.Sprintf("port|%s|%s|%s|%s:%d", rule.Name, e.VM.Name, e.Attribution, e.Dst, e.DPort),
-			detection(rule.Name, rule.Severity, fmt.Sprintf("%s port %d to %s", rule.Name, e.DPort, e.Dst)))
+	if rule, ok := cfg.MatchPort(e.DPort, proto); ok {
+		note := ""
+		if proto != "tcp" {
+			note = " (" + proto + ")"
+		}
+		a.raise(e.TS, cfg, fmt.Sprintf("port|%s|%s|%s|%s|%s:%d", rule.Name, e.VM.Name, e.Attribution, proto, e.Dst, e.DPort),
+			detection(rule.Name, rule.Severity, fmt.Sprintf("%s port %d%s to %s", rule.Name, e.DPort, note, e.Dst)))
 	}
 }
 

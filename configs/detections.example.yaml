@@ -16,10 +16,15 @@ destinations:
     name: unexpected-egress
 
 # Connect to a watched destination port, whatever the address.
+# proto is tcp (the default), udp or any. A rule with no proto has always meant a
+# TCP connect, so it still does. Destination rules above apply to every protocol.
 # ports:
 #   - port: 25
 #     name: smtp-egress
 #     severity: medium
+#   - port: 53
+#     name: dns-out
+#     proto: udp
 
 # Process names that may start under a QEMU process without an alert, matched as
 # a lowercase prefix. QEMU's own threads are always allowed.

@@ -30,10 +30,13 @@ The same file holds the other rule types below. It is read strictly: an unknown 
 ```yaml
 suppress: 5m           # default; 0s alerts every time
 
-ports:                 # any connect to this destination port
+ports:                 # a connect (or, with proto, a UDP flow) to this destination port
   - port: 25
     name: smtp-egress
     severity: medium
+  - port: 53
+    name: dns-out
+    proto: udp         # tcp (the default), udp or any
 
 exec_allow:            # may start under QEMU without an alert; lowercase prefix
   - node_exporter

@@ -16,6 +16,7 @@ const (
 	KindVMStart       Kind = "vm_start"
 	KindVMStop        Kind = "vm_stop"
 	KindGuestConnect  Kind = "guest_connect"
+	KindGuestFlow     Kind = "guest_flow"
 )
 
 const (
@@ -53,7 +54,9 @@ type Event struct {
 	Dst  string `json:"dst,omitempty"`
 	// Src, Iface and Blocked are set on events seen on a VM tap. Iface is the tap
 	// name, and Blocked says isolation dropped the connect attempt.
-	Src     string `json:"src,omitempty"`
+	Src string `json:"src,omitempty"`
+	// Proto is "tcp" or "udp" on events seen on a tap.
+	Proto   string `json:"proto,omitempty"`
 	Iface   string `json:"iface,omitempty"`
 	Blocked bool   `json:"blocked,omitempty"`
 	DPort   uint16 `json:"dport,omitempty"`

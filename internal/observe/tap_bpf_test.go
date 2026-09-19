@@ -16,6 +16,7 @@ func tapSample(family byte) []byte {
 	binary.LittleEndian.PutUint16(b[12:14], 8080)
 	binary.LittleEndian.PutUint16(b[14:16], 41000)
 	b[16] = family
+	b[18] = 6 // a TCP connect, unless a test says otherwise
 	return b
 }
 
@@ -58,5 +59,32 @@ func TestDecodeTapRejectsWhatItCannotTrust(t *testing.T) {
 	binary.LittleEndian.PutUint32(stray[8:12], 99) // an interface we no longer track
 	if _, ok := decodeTap(stray, nameOf); ok {
 		t.Fatal("an event for an untracked interface was accepted")
+	}
+}
+
+func TestDecodeTapUDPFlow(t *testing.T) {
+	b := tapSample(2)
+	b[18] = 17
+	copy(b[24:28], net.ParseIP("10.99.0.2").To4())
+	copy(b[40:44], net.ParseIP("10.99.0.1").To4())
+	e, ok := decodeTap(b, nameOf)
+	if !ok || e.Kind != event.KindGuestFlow || e.Proto != "udp" || e.Dst != "10.99.0.1" {
+		t.Fatalf("%+v %v", e, ok)
+	}
+}
+
+func TestDecodeTapTreatsProtoZeroAsTCPForAnUpgrade(t *testing.T) {
+	// During an upgrade the previous program can still emit events from before the
+	// field existed. They were TCP connects and must not be dropped.
+	b := tapSample(2)
+	b[18] = 0
+	copy(b[40:44], net.ParseIP("10.99.0.1").To4())
+	e, ok := decodeTap(b, nameOf)
+	if !ok || e.Kind != event.KindGuestConnect || e.Proto != "tcp" {
+		t.Fatalf("%+v %v", e, ok)
+	}
+	b[18] = 1 // ICMP: not something this program emits
+	if _, ok := decodeTap(b, nameOf); ok {
+		t.Fatal("an unknown protocol was accepted")
 	}
 }

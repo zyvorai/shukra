@@ -48,7 +48,10 @@ const (
 
 // PortRule notices a connect to a destination port, whatever the address.
 type PortRule struct {
-	Port     uint16 `yaml:"port"`
+	Port uint16 `yaml:"port"`
+	// Proto is "tcp" (the default, so an existing rule means what it always did),
+	// "udp", or "any".
+	Proto    string `yaml:"proto"`
 	Severity string `yaml:"severity"`
 	Name     string `yaml:"name"`
 }
@@ -132,6 +135,13 @@ func Parse(b []byte) (*Config, error) {
 		if r.Name == "" {
 			r.Name = fmt.Sprintf("port-%d", r.Port)
 		}
+		switch r.Proto {
+		case "":
+			r.Proto = "tcp"
+		case "tcp", "udp", "any":
+		default:
+			return nil, fmt.Errorf("ports: %q: proto %q is not tcp, udp or any", r.Name, r.Proto)
+		}
 		if r.Severity == "" {
 			r.Severity = "high"
 		}
@@ -187,13 +197,17 @@ func Parse(b []byte) (*Config, error) {
 	return c, nil
 }
 
-// MatchPort returns the first port rule for a destination port.
-func (c *Config) MatchPort(port uint16) (PortRule, bool) {
+// MatchPort returns the first port rule for a destination port and protocol. A
+// rule with no proto is a TCP rule, as it was before UDP was seen at all.
+func (c *Config) MatchPort(port uint16, proto string) (PortRule, bool) {
 	if c == nil || port == 0 {
 		return PortRule{}, false
 	}
+	if proto == "" {
+		proto = "tcp"
+	}
 	for _, r := range c.Ports {
-		if r.Port == port {
+		if r.Port == port && (r.Proto == "any" || r.Proto == proto || (r.Proto == "" && proto == "tcp")) {
 			return r, true
 		}
 	}

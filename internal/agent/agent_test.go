@@ -547,3 +547,93 @@ func TestAHostConnectDoesNotHideTheGuestsConnectToTheSameAddress(t *testing.T) {
 		t.Fatalf("suppressed %d, want the one repeated guest connect", st.Suppressed())
 	}
 }
+
+func guestFlow(ag *Agent, iface, src, dst string, dport uint16, blocked bool) {
+	ag.Ingest(event.Event{Kind: event.KindGuestFlow, Proto: "udp", TS: time.Now().UTC(), Iface: iface, Src: src, Dst: dst, DPort: dport, Blocked: blocked})
+}
+
+func TestAGuestUDPFlowIsAttributedToTheVM(t *testing.T) {
+	ag, st := newTapAgent(t, "")
+	guestFlow(ag, "tapdb", "10.0.0.5", "8.8.8.8", 53, false)
+	got := kinds(st, event.KindGuestFlow)
+	if len(got) != 1 {
+		t.Fatalf("%+v", got)
+	}
+	e := got[0]
+	if e.VM.Name != "db" || !e.GuestAttributed || e.Attribution != event.AttributionGuestTap || e.Proto != "udp" || e.Dst != "8.8.8.8" || e.DPort != 53 {
+		t.Fatalf("%+v", e)
+	}
+	// The tap that no VM owns is still never named.
+	guestFlow(ag, "tapstray", "10.0.0.9", "8.8.8.8", 53, false)
+	stray := kinds(st, event.KindGuestFlow)
+	if len(stray) != 2 || stray[1].VM.Name != "" || stray[1].GuestAttributed {
+		t.Fatalf("%+v", stray)
+	}
+}
+
+func TestDestinationRulesApplyToUDPButPortRulesOnlyWhenAskedTo(t *testing.T) {
+	ag, st := newTapAgent(t, `
+destinations:
+  - {cidr: 203.0.113.0/24, name: bad-net}
+ports:
+  - {port: 53, name: tcp-dns}
+  - {port: 123, name: ntp, proto: udp}
+  - {port: 5353, name: mdns, proto: any}
+`)
+	guestFlow(ag, "tapdb", "10.0.0.5", "203.0.113.9", 9999, false) // any protocol to a watched network
+	guestFlow(ag, "tapdb", "10.0.0.5", "9.9.9.9", 53, false)       // UDP 53: the rule is TCP-only
+	guestFlow(ag, "tapdb", "10.0.0.5", "9.9.9.9", 123, false)      // UDP 123: the rule says udp
+	guestFlow(ag, "tapdb", "10.0.0.5", "9.9.9.9", 5353, false)     // any
+	ag.Ingest(event.Event{Kind: event.KindGuestConnect, Proto: "tcp", TS: time.Now().UTC(), Iface: "tapdb", Src: "10.0.0.5", Dst: "9.9.9.9", DPort: 53})
+	rules := map[string]event.Event{}
+	for _, d := range st.Detections("db") {
+		rules[d.Rule] = d
+		if !d.GuestAttributed || d.Attribution != event.AttributionGuestTap || d.Iface != "tapdb" {
+			t.Fatalf("a detection on guest traffic lost its attribution: %+v", d)
+		}
+	}
+	for _, want := range []string{"bad-net", "ntp", "mdns", "tcp-dns"} {
+		if _, ok := rules[want]; !ok {
+			t.Errorf("rule %s did not fire: %v", want, rules)
+		}
+	}
+	if len(rules) != 4 || len(st.Detections("db")) != 4 {
+		t.Fatalf("UDP 53 must not match a TCP-only rule: %d detections %v", len(st.Detections("db")), rules)
+	}
+	if !strings.Contains(rules["ntp"].Message, "(udp)") || strings.Contains(rules["tcp-dns"].Message, "(") {
+		t.Fatalf("the message should name a non-TCP protocol: %q %q", rules["ntp"].Message, rules["tcp-dns"].Message)
+	}
+}
+
+func TestTCPAndUDPToTheSamePortAreSeparateAlerts(t *testing.T) {
+	ag, st := newTapAgent(t, "suppress: 1m\nports:\n  - {port: 53, name: dns, proto: any}\n")
+	ag.Ingest(event.Event{Kind: event.KindGuestConnect, Proto: "tcp", TS: time.Now().UTC(), Iface: "tapdb", Src: "10.0.0.5", Dst: "9.9.9.9", DPort: 53})
+	guestFlow(ag, "tapdb", "10.0.0.5", "9.9.9.9", 53, false)
+	guestFlow(ag, "tapdb", "10.0.0.5", "9.9.9.9", 53, false) // a repeat of the UDP one
+	if got := len(st.Detections("db")); got != 2 || st.Suppressed() != 1 {
+		t.Fatalf("%d detections, %d suppressed: TCP and UDP are different facts, and only the repeat collapses", got, st.Suppressed())
+	}
+}
+
+func TestATCPAlertForAWatchedAddressDoesNotHideAUDPFlowToIt(t *testing.T) {
+	ag, st := newTapAgent(t, "suppress: 5m\ndestinations:\n  - {cidr: 203.0.113.0/24, name: bad-net}\n")
+	ag.Ingest(event.Event{Kind: event.KindGuestConnect, Proto: "tcp", TS: time.Now().UTC(), Iface: "tapdb", Src: "10.0.0.5", Dst: "203.0.113.9", DPort: 443})
+	guestFlow(ag, "tapdb", "10.0.0.5", "203.0.113.9", 5000, false)
+	var tcp, udp int
+	for _, d := range st.Detections("db") {
+		switch d.Proto {
+		case "tcp":
+			tcp++
+		case "udp":
+			udp++
+		}
+	}
+	if tcp != 1 || udp != 1 {
+		t.Fatalf("tcp %d udp %d: talking to a watched address over UDP after TCP is a separate alert", tcp, udp)
+	}
+	// A repeat of either is still collapsed.
+	guestFlow(ag, "tapdb", "10.0.0.5", "203.0.113.9", 5001, false)
+	if len(st.Detections("db")) != 2 || st.Suppressed() != 1 {
+		t.Fatalf("%d detections, %d suppressed", len(st.Detections("db")), st.Suppressed())
+	}
+}

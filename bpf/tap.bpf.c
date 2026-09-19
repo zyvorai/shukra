@@ -29,6 +29,7 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 #define ETH_P_ARP 0x0806
 #define ETH_P_IPV6 0x86DD
 #define IPPROTO_TCP_ 6
+#define IPPROTO_UDP_ 17
 #define IPPROTO_ICMPV6_ 58
 
 #define FAMILY_INET 2
@@ -37,6 +38,10 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 /* At most this many connect events per tap per second. A guest that floods SYNs
    must not be able to flood the ring, and the counters still see every packet. */
 #define EVENTS_PER_SEC 200
+
+/* A UDP flow is announced once, then again only after it has been quiet or long
+   lived for this long. A busy stream must not become a stream of events. */
+#define UDP_FLOW_REFRESH_NS 60000000000ull
 
 struct tap_stat {
 	__u64 from_pkts;
@@ -112,6 +117,26 @@ struct {
 	__type(value, struct rate);
 } tap_rate SEC(".maps");
 
+/* UDP flows seen recently, so only a new flow produces an event. The key is made of
+   values the guest controls, so this is an LRU with a fixed size: the guest cannot
+   grow it, only turn it over. */
+struct flow_key {
+	__u32 ifindex;
+	__u16 sport;
+	__u16 dport;
+	__u8 family;
+	__u8 pad[3];
+	__u8 src[16];
+	__u8 dst[16];
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, 65536);
+	__type(key, struct flow_key);
+	__type(value, __u64);
+} udp_flows SEC(".maps");
+
 /* Decoded by offset in internal/observe/tap.go. Every field is placed explicitly. */
 struct tap_event {
 	__u64 ts_ns;    /* 0 */
@@ -119,8 +144,9 @@ struct tap_event {
 	__u16 dport;    /* 12 */
 	__u16 sport;    /* 14 */
 	__u8 family;    /* 16 */
-	__u8 dropped;   /* 17: 1 when isolation dropped this connect attempt */
-	__u8 pad[6];    /* 18 */
+	__u8 dropped;   /* 17: 1 when isolation dropped this packet */
+	__u8 proto;     /* 18: 6 for a TCP connect, 17 for a new UDP flow */
+	__u8 pad[5];    /* 19 */
 	__u8 src[16];   /* 24: IPv4 uses the first 4 bytes */
 	__u8 dst[16];   /* 40 */
 };                      /* 56 */
@@ -159,7 +185,7 @@ static __always_inline int may_emit(__u32 ifindex) {
 	return __sync_fetch_and_add(&r->count, 1) < EVENTS_PER_SEC;
 }
 
-static __always_inline void emit_connect(__u32 ifindex, __u8 family, const __u8 *src, const __u8 *dst,
+static __always_inline void emit_connect(__u32 ifindex, __u8 family, __u8 proto, const __u8 *src, const __u8 *dst,
 					 __u16 sport, __u16 dport, __u8 dropped) {
 	if (!may_emit(ifindex))
 		return;
@@ -172,6 +198,7 @@ static __always_inline void emit_connect(__u32 ifindex, __u8 family, const __u8 
 	e->sport = sport;
 	e->dport = dport;
 	e->family = family;
+	e->proto = proto;
 	e->dropped = dropped;
 	__u32 n = family == FAMILY_INET ? 4 : 16;
 	/* Constant-size copies so the verifier can bound them. */
@@ -183,6 +210,33 @@ static __always_inline void emit_connect(__u32 ifindex, __u8 family, const __u8 
 		__builtin_memcpy(e->dst, dst, 16);
 	}
 	bpf_ringbuf_submit(e, 0);
+}
+
+/* Multicast and broadcast (mDNS, SSDP, DHCP discovery) are how a LAN talks to itself.
+   They are counted, but they do not become events. */
+static __always_inline int is_multicast(__u8 family, const __u8 *dst) {
+	if (family == FAMILY_INET)
+		return dst[0] >= 224; /* 224.0.0.0/4 multicast, and 240/4 with 255.255.255.255 */
+	return dst[0] == 0xff;
+}
+
+/* True when this UDP flow has not been announced in the last UDP_FLOW_REFRESH_NS. */
+static __always_inline int new_udp_flow(__u32 ifindex, __u8 family, const __u8 *src, const __u8 *dst,
+					__u16 sport, __u16 dport) {
+	struct flow_key k = {.ifindex = ifindex, .sport = sport, .dport = dport, .family = family};
+	if (family == FAMILY_INET) {
+		__builtin_memcpy(k.src, src, 4);
+		__builtin_memcpy(k.dst, dst, 4);
+	} else {
+		__builtin_memcpy(k.src, src, 16);
+		__builtin_memcpy(k.dst, dst, 16);
+	}
+	__u64 now = bpf_ktime_get_ns();
+	__u64 *last = bpf_map_lookup_elem(&udp_flows, &k);
+	if (last && now - *last < UDP_FLOW_REFRESH_NS)
+		return 0;
+	bpf_map_update_elem(&udp_flows, &k, &now, BPF_ANY);
+	return 1;
 }
 
 static __always_inline int allowed4(const __u8 *addr) {
@@ -220,6 +274,7 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 	const __u8 *src = 0, *dst = 0;
 	__u16 sport = 0, dport = 0;
 	int syn = 0;
+	__u8 l4 = 0;
 
 	if (proto == ETH_P_IP) {
 		struct iphdr *ip = (void *)(eth + 1);
@@ -239,6 +294,14 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 				sport = __builtin_bswap16(tcp->source);
 				dport = __builtin_bswap16(tcp->dest);
 				syn = tcp->syn && !tcp->ack;
+				l4 = IPPROTO_TCP_;
+			}
+		} else if (ip->protocol == IPPROTO_UDP_ && ip->ihl >= 5) {
+			struct udphdr *udp = (void *)ip + ip->ihl * 4;
+			if ((void *)(udp + 1) <= end) {
+				sport = __builtin_bswap16(udp->source);
+				dport = __builtin_bswap16(udp->dest);
+				l4 = IPPROTO_UDP_;
 			}
 		}
 	} else if (proto == ETH_P_IPV6) {
@@ -266,6 +329,14 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 				sport = __builtin_bswap16(tcp->source);
 				dport = __builtin_bswap16(tcp->dest);
 				syn = tcp->syn && !tcp->ack;
+				l4 = IPPROTO_TCP_;
+			}
+		} else if (ip6->nexthdr == IPPROTO_UDP_) {
+			struct udphdr *udp = (void *)(ip6 + 1);
+			if ((void *)(udp + 1) <= end) {
+				sport = __builtin_bswap16(udp->source);
+				dport = __builtin_bswap16(udp->dest);
+				l4 = IPPROTO_UDP_;
 			}
 		}
 	} else if (isolated && proto != ETH_P_ARP) {
@@ -274,8 +345,12 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 		drop = 1;
 	}
 
-	if (from_guest && syn && src && dst)
-		emit_connect(ifindex, family, src, dst, sport, dport, drop);
+	if (from_guest && src && dst) {
+		if (syn)
+			emit_connect(ifindex, family, IPPROTO_TCP_, src, dst, sport, dport, drop);
+		else if (l4 == IPPROTO_UDP_ && !is_multicast(family, dst) && new_udp_flow(ifindex, family, src, dst, sport, dport))
+			emit_connect(ifindex, family, IPPROTO_UDP_, src, dst, sport, dport, drop);
+	}
 
 account:;
 	struct tap_stat *s = stat_for(ifindex);

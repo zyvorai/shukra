@@ -137,10 +137,20 @@ func decodeTap(b []byte, name func(ifindex uint32) string) (event.Event, bool) {
 		return event.Event{}, false
 	}
 	e := event.Event{
-		Kind:    event.KindGuestConnect,
 		Iface:   name(binary.LittleEndian.Uint32(b[8:12])),
 		DPort:   binary.LittleEndian.Uint16(b[12:14]),
 		Blocked: b[17] != 0,
+	}
+	// A TCP SYN is a connect and a new UDP flow is a flow. proto 0 is a TCP event
+	// from a build that predates the field, which the previous program can still
+	// emit during an upgrade until the new one is swapped in, so it is TCP.
+	switch b[18] {
+	case 0, 6:
+		e.Kind, e.Proto = event.KindGuestConnect, "tcp"
+	case 17:
+		e.Kind, e.Proto = event.KindGuestFlow, "udp"
+	default:
+		return event.Event{}, false
 	}
 	switch b[16] {
 	case 2:

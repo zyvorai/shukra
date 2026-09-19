@@ -17,6 +17,6 @@ type TapCounters struct {
 
 // tap event, decoded by offset. bpf/tap.bpf.c asserts this size at compile time.
 //
-//	 0 ts_ns u64   8 ifindex u32  12 dport u16  14 sport u16  16 family u8  17 dropped u8
+//	 0 ts_ns u64   8 ifindex u32  12 dport u16  14 sport u16  16 family u8  17 dropped u8  18 proto u8
 //	24 src [16]    40 dst [16]                                              = 56
 const tapEventSize = 56

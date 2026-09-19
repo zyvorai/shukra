@@ -7,6 +7,6 @@ The tap program, guest attribution and isolate are built. See [Guest traffic and
 - **Kernels older than 6.6.** TCX is required. A netlink `clsact` fallback would cover 5.x kernels.
 - **A DHCP and DNS story for isolated VMs.** Today they are only reachable if they are on the allow list.
 - **VLAN tags and IPv6 extension headers** are not parsed past the outer headers.
-- **UDP, ICMP and DNS events.** Only TCP SYNs produce events. Everything is counted.
+- **ICMP events and DNS names.** TCP connects and new UDP flows produce events. ICMP is only counted, and a DNS flow is seen as a flow to port 53, not as the name that was queried.
 - **Per-VM allow lists.** One allow list applies to every isolated VM.
 - **Which process in the guest.** Attribution stops at the VM. CPU steal is not measured either.

@@ -14,9 +14,11 @@ The daemon attaches the program to each VM's tap as the VM appears and takes it 
 Directions are named from the guest's side. Frames the guest sends are `from_guest` (TCX ingress on the tap), and frames sent to it are `to_guest`.
 
 - **Counters** per tap: packets and bytes each way, and packets and bytes dropped by isolation. Frames the host itself sent and the kernel looped back in (multicast) are not counted as the guest's. `shukractl trace tap`, `GET /api/v1/trace/tap`, and `shukra_tap_*` on `/metrics`.
-- **`guest_connect` events**: one per TCP SYN the guest sends (IPv4 and IPv6), with the guest's own source address, the destination and port, and the tap. A connect isolation dropped has `blocked: true`. At most 200 per tap per second, so a guest that floods SYNs cannot flood the event ring. The counters still see every packet.
+- **`guest_connect` events**: one per TCP SYN the guest sends (IPv4 and IPv6), with the guest's own source address, the destination and port, the tap, and `proto: "tcp"`. A connect isolation dropped has `blocked: true`.
+- **`guest_flow` events**: one per *new* UDP flow (`proto: "udp"`), so a guest's DNS, NTP or a UDP channel out is visible. A flow is announced when its first datagram is seen and again only after 60 seconds, so 20 datagrams on one flow are one event, and a new source port is a new flow. The flow table is a fixed-size LRU, so a guest cannot grow it, only turn it over. Multicast and broadcast (mDNS, SSDP, DHCP discovery) are counted in the tap's packets but produce no event.
+- Both kinds are capped at 200 events per tap per second, so a guest that floods SYNs or invents flows cannot flood the event ring. The counters still see every packet.
 
-The detection rules apply to these events exactly as they do to host connects: a `destinations` or `ports` rule that fires on a `guest_connect` produces a detection that is itself `guest_attributed: true` with `attribution: "guest-tap"`. A host connect and a guest connect to the same address are separate alerts, so one never hides the other.
+The detection rules apply to these events as they do to host connects. A `destinations` rule fires on any protocol. A `ports` rule fires on TCP unless it says `proto: udp` or `proto: any`, so a rule written before UDP was visible means what it always did. A detection on guest traffic is itself `guest_attributed: true` with `attribution: "guest-tap"` and carries the `proto`. A host connect and a guest connect to the same address, and TCP and UDP to the same address, are separate alerts, so none of them hides another.
 
 ## What guest_attributed means now
 
@@ -69,7 +71,7 @@ Pinning needs a bpf filesystem at `/sys/fs/bpf` (present on any systemd host). W
 
 - DHCP: a guest that must renew a lease will fail unless the DHCP server is on the allow list.
 - VLAN-tagged frames and IPv6 extension headers are judged by their outer addresses only, and the SYN event needs the TCP header to follow the IPv6 header directly. Traffic that cannot be parsed is dropped while isolated.
-- Non-TCP flows are counted and can be dropped but do not produce events.
+- ICMP and other protocols are counted and can be dropped, but do not produce events. UDP events carry addresses and ports, not the DNS name that was asked for.
 - Isolation blocks the VM's tap. It does not stop the guest talking to another guest on the same host bridge unless that traffic crosses this tap, and it does not touch vhost-user or SR-IOV interfaces.
 
 ## How it was checked

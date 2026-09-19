@@ -27,7 +27,7 @@ if [ -z "$BIN" ]; then
 fi
 BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
 cleanup() {
-  sudo pkill -f "$BIN -listen" 2>/dev/null; sudo "$BIN" -detach-all >/dev/null 2>&1; sudo pkill -f "qemu-system-x86_64 .*(taptest|tunvm)" 2>/dev/null; sudo pkill -f "$D/holder.py" 2>/dev/null; sudo ip link del tapx 2>/dev/null; kill "$HTTP_PID" 2>/dev/null
+  sudo pkill -f "$BIN -listen" 2>/dev/null; sudo "$BIN" -detach-all >/dev/null 2>&1; sudo pkill -f "qemu-system-x86_64 .*(taptest|tunvm)" 2>/dev/null; sudo pkill -f "$D/holder.py" 2>/dev/null; sudo ip link del tapx 2>/dev/null; kill "$HTTP_PID" "$UDP_PID" 2>/dev/null
   sudo ip netns del g1 2>/dev/null; sudo ip link del vethh 2>/dev/null; sudo rm -rf $D
 }
 trap cleanup EXIT
@@ -50,7 +50,7 @@ sleep 1
 printf '#!/bin/bash\nwhile true; do /bin/true; sleep 0.2; done\n' > "$D/loop.sh"; chmod +x "$D/loop.sh"
 bash -c "exec -a /usr/bin/qemu-system-x86_64 bash $D/loop.sh -name taptest -uuid 9999 -netdev tap,id=n0,ifname=vethh,script=no" >/dev/null 2>&1 &
 
-printf 'destinations:\n  - cidr: 10.99.0.3/32\n    name: watched-host\n    severity: high\n' > $D/rules.yaml
+printf 'destinations:\n  - cidr: 10.99.0.3/32\n    name: watched-host\n    severity: high\nports:\n  - port: 5300\n    name: udp-watch\n    proto: udp\n' > $D/rules.yaml
 A="Authorization: Bearer k"; U=127.0.0.1:30990
 guest() { sudo ip netns exec g1 "$@"; }
 code4() { guest curl -s -o /dev/null -m 2 -w %{http_code} "http://$1:8080/"; }
@@ -128,6 +128,79 @@ check "the non-allowed address is reachable again" "[ \"\$(code4 10.99.0.3)\" = 
 stopd
 start -isolate-allow 10.99.0.1/32,fd99::1/128
 check "a released VM is not re-isolated by a restart" "[ \"\$(code4 10.99.0.3)\" = 200 ]"
+
+echo "== 9. guest UDP: flows, rules, multicast, isolation"
+# One listener per address, so "delivered" and "dropped" can be told apart.
+cat > "$D/udpsrv.py" <<'PY'
+import select, socket, sys
+socks = {}
+for spec in sys.argv[1:]:
+    addr, port, path = spec.split(",")
+    fam = socket.AF_INET6 if ":" in addr else socket.AF_INET
+    s = socket.socket(fam, socket.SOCK_DGRAM); s.bind((addr, int(port))); socks[s] = path
+while True:
+    for s in select.select(list(socks), [], [])[0]:
+        s.recvfrom(2048)
+        open(socks[s], "a").write("x\n")
+PY
+for f in a4 b4 a6 b6; do : > "$D/udp-$f.log"; done
+python3 "$D/udpsrv.py" "10.99.0.1,9999,$D/udp-a4.log" "10.99.0.3,9999,$D/udp-b4.log" "fd99::1,9999,$D/udp-a6.log" "fd99::3,9999,$D/udp-b6.log" >/dev/null 2>&1 &
+UDP_PID=$!
+sleep 1
+usend() { guest python3 -c "
+import socket,sys
+addr,port,n,sport=sys.argv[1],int(sys.argv[2]),int(sys.argv[3]),int(sys.argv[4])
+s=socket.socket(socket.AF_INET6 if ':' in addr else socket.AF_INET,socket.SOCK_DGRAM)
+if sport: s.bind(('::' if ':' in addr else '0.0.0.0',sport))
+for _ in range(n): s.sendto(b'hello',(addr,port))
+" "$@"; }
+recvd() { wc -l < "$D/udp-$1.log" | tr -d ' '; }
+udpev() { api "$U/api/v1/events" | J "len([e for e in d['events'] if e['kind']=='guest_flow' and e.get('dst')=='$1' and e.get('dport')==$2 ${3:-}])"; }
+
+FROM0=$(api "$U/api/v1/trace/tap" | J "[r['fromGuestPackets'] for r in d['rows'] if r['vm']=='taptest'][0]")
+usend 10.99.0.1 9999 20 40000; sleep 1
+check "the datagrams are delivered (a monitor drops nothing)" "[ \"\$(recvd a4)\" = 20 ]"
+check "20 back-to-back datagrams on one flow are ONE event, not twenty" "[ \"\$(udpev 10.99.0.1 9999)\" = 1 ]"
+check "the event names the VM, the guest's address, the protocol and the tap, and is guest-attributed" \
+  "api $U/api/v1/events | J \"any(e['guest_attributed'] and e['attribution']=='guest-tap' and e['vm']['name']=='taptest' and e.get('proto')=='udp' and e.get('src')=='10.99.0.2' and e.get('iface')=='vethh' and e['dport']==9999 for e in d['events'] if e['kind']=='guest_flow' and e.get('dst')=='10.99.0.1')\" | grep -q True"
+usend 10.99.0.1 9999 1 40001; sleep 1
+check "a new source port is a new flow: a second event" "[ \"\$(udpev 10.99.0.1 9999)\" = 2 ]"
+
+# The guest needs a route for multicast, or the send fails before it reaches the tap and
+# this check would pass on earlier traffic without testing anything.
+sudo ip -n g1 route add 224.0.0.0/4 dev vethg 2>/dev/null
+FROM0=$(api "$U/api/v1/trace/tap" | J "[r['fromGuestPackets'] for r in d['rows'] if r['vm']=='taptest'][0]")
+usend 224.0.0.251 5353 3 0; sleep 1
+FROM1=$(api "$U/api/v1/trace/tap" | J "[r['fromGuestPackets'] for r in d['rows'] if r['vm']=='taptest'][0]")
+check "multicast is counted in the tap's packets (three more, and only those)" "[ \"$FROM1\" = \"\$((FROM0+3))\" ]"
+check "but multicast produces no event" "[ \"\$(udpev 224.0.0.251 5353)\" = 0 ]"
+
+usend fd99::1 9999 5 41000; sleep 1
+check "an IPv6 UDP flow is one event with the IPv6 destination" "[ \"\$(udpev fd99::1 9999)\" = 1 ] && [ \"\$(recvd a6)\" = 5 ]"
+
+usend 10.99.0.3 9999 1 41100; sleep 1
+check "a destination rule fires on UDP to a watched address, guest-attributed, protocol udp" \
+  "api $U/api/v1/events | J \"any(e['guest_attributed'] and e.get('proto')=='udp' and e['vm']['name']=='taptest' for e in d['events'] if e['kind']=='detection' and e.get('rule')=='watched-host')\" | grep -q True"
+usend 10.99.0.1 5300 1 41200; sleep 1
+check "a proto: udp port rule fires on UDP, and says udp" \
+  "api $U/api/v1/events | J \"any('(udp)' in e['message'] and e['guest_attributed'] for e in d['events'] if e['kind']=='detection' and e.get('rule')=='udp-watch')\" | grep -q True"
+usend 10.99.0.1 5301 1 41300; sleep 1
+check "a UDP flow to a port with no rule raises no detection for it" \
+  "api $U/api/v1/events | J \"[e for e in d['events'] if e['kind']=='detection' and '5301' in e.get('message','')]\" | grep -q '\[\]'"
+
+api -X POST -d '{"vm":"taptest"}' $U/api/v1/isolate >/dev/null; sleep 1
+B4=$(recvd b4); A4=$(recvd a4); B6=$(recvd b6); A6=$(recvd a6)
+usend 10.99.0.3 9999 3 42000; usend 10.99.0.1 9999 3 42001; usend fd99::3 9999 3 42002; usend fd99::1 9999 3 42003; sleep 1
+check "isolated: UDP to the allowed IPv4 address is still delivered" "[ \"\$(recvd a4)\" = \"\$((A4+3))\" ]"
+check "isolated: UDP to a non-allowed IPv4 address is dropped" "[ \"\$(recvd b4)\" = \"$B4\" ]"
+check "isolated: UDP to the allowed IPv6 address is still delivered" "[ \"\$(recvd a6)\" = \"\$((A6+3))\" ]"
+check "isolated: UDP to a non-allowed IPv6 address is dropped" "[ \"\$(recvd b6)\" = \"$B6\" ]"
+check "the dropped flow is an event marked blocked" "[ \"\$(udpev 10.99.0.3 9999 \"and e.get('blocked')\")\" -ge 1 ]"
+check "and the allowed flow is not marked blocked" "[ \"\$(udpev 10.99.0.1 9999 \"and e.get('blocked')\")\" = 0 ]"
+api -X POST -d '{"vm":"taptest"}' $U/api/v1/release >/dev/null; sleep 1
+usend 10.99.0.3 9999 2 42100; sleep 1
+check "released: UDP to that address is delivered again" "[ \"\$(recvd b4)\" = \"\$((B4+2))\" ]"
+kill $UDP_PID 2>/dev/null
 
 echo "== 8. enforcement outlives the daemon"
 ALLOW="-isolate-allow 10.99.0.1/32,fd99::1/128"
