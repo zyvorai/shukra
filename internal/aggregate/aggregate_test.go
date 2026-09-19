@@ -45,3 +45,71 @@ func TestBlockPercentiles(t *testing.T) {
 		t.Fatalf("%+v", rows)
 	}
 }
+
+func hist64(bucket int, n uint64) []uint64 {
+	h := make([]uint64, 64)
+	h[bucket] = n
+	return h
+}
+
+func TestSchedRunQueuePercentilesMergeThreads(t *testing.T) {
+	vms := []identity.VM{{Name: "db", PID: 100, Threads: []int{100, 101}}}
+	by := map[uint32]Counters{
+		100: {OnCPUNs: 5, WakeupCount: 99, SchedHist: hist64(10, 99)}, // ~2µs
+		101: {OnCPUNs: 7, WakeupCount: 1, SchedHist: hist64(20, 1)},   // ~2ms, one outlier
+	}
+	rows := Sched(vms, by, "db")
+	if len(rows) != 1 || !rows[0].Measured || rows[0].OnCPUNs != 12 {
+		t.Fatalf("%+v", rows)
+	}
+	// 100 samples, one slow: the 99th is still a fast one, so p50 and p99 both read
+	// the fast bucket's edge. Only the maximum would show the outlier.
+	if rows[0].WakeupDelayP50Ns != 1<<11 || rows[0].WakeupDelayP99Ns != 1<<11 {
+		t.Fatalf("p50=%d p99=%d", rows[0].WakeupDelayP50Ns, rows[0].WakeupDelayP99Ns)
+	}
+	if len(rows[0].WakeupHist) != 64 || rows[0].WakeupHist[10] != 99 || rows[0].WakeupHist[20] != 1 {
+		t.Fatalf("merged histogram: %v", rows[0].WakeupHist)
+	}
+}
+
+func TestSchedThreadsSeparatesVCPUFromIOThread(t *testing.T) {
+	vms := []identity.VM{
+		{Name: "db", PID: 100, Threads: []int{100, 101, 102}, ThreadInfo: []identity.Thread{
+			{TID: 100, Comm: "qemu-system-x86", Role: "main"},
+			{TID: 101, Comm: "CPU 0/KVM", Role: "vcpu"},
+			{TID: 102, Comm: "IO iothread1", Role: "iothread"}, // no counters yet
+		}},
+		{Name: "web", PID: 200, Threads: []int{200}},
+	}
+	by := map[uint32]Counters{
+		101: {OnCPUNs: 900, WakeupCount: 10, WakeupDelayNs: 50, SchedHist: hist64(12, 10)},
+		100: {OnCPUNs: 100},
+		200: {OnCPUNs: 1}, // a VM whose thread info was not read
+		999: {OnCPUNs: 1 << 40},
+	}
+	got := SchedThreads(vms, by, "db")
+	if len(got) != 2 {
+		t.Fatalf("a thread with no counters must be left out, and other VMs excluded: %+v", got)
+	}
+	var vcpu ThreadRow
+	for _, r := range got {
+		if r.Role == "vcpu" {
+			vcpu = r
+		}
+	}
+	if vcpu.TID != 101 || vcpu.Comm != "CPU 0/KVM" || vcpu.OnCPUNs != 900 || vcpu.WakeupDelayP99Ns != 1<<13 {
+		t.Fatalf("%+v", vcpu)
+	}
+	all := SchedThreads(vms, by, "")
+	if len(all) != 3 { // db: 100 and 101; web: 200 with an "unknown" role
+		t.Fatalf("%+v", all)
+	}
+	for _, r := range all {
+		if r.VM == "web" && r.Role != "unknown" {
+			t.Fatalf("role %q", r.Role)
+		}
+		if r.TID == 999 {
+			t.Fatal("host thread attributed to a VM")
+		}
+	}
+}

@@ -90,6 +90,58 @@ func readSched(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {
 		c.WakeupDelayNs += val.WakeupDelay
 		c.WakeupCount += val.WakeupCount
 	}
+	readHist2(maps["sched_hist"], func(c *aggregate.Counters) *[]uint64 { return &c.SchedHist }, by)
+}
+
+// readHist2 reads a map keyed by {u32 pid, u32 bucket} into a log2 histogram.
+func readHist2(m *ebpf.Map, dst func(*aggregate.Counters) *[]uint64, by map[uint32]*aggregate.Counters) {
+	if m == nil {
+		return
+	}
+	var key struct{ Pid, Bucket uint32 }
+	var val uint64
+	it := m.Iterate()
+	for it.Next(&key, &val) {
+		h := dst(slot(by, key.Pid))
+		if *h == nil {
+			*h = make([]uint64, hist.Buckets)
+		}
+		if int(key.Bucket) < len(*h) {
+			(*h)[key.Bucket] += val
+		}
+	}
+}
+
+// SetWatched tells the sched program which tgids are QEMU processes, so exec and
+// exit events are only emitted for them and their children. It adds the missing
+// ones and removes the ones that are gone.
+func SetWatched(tgids []uint32) {
+	for _, live := range bpfgen.Collections() {
+		if live.Coll == nil || live.Name != "sched" {
+			continue
+		}
+		m := live.Coll.Maps["watched"]
+		if m == nil {
+			return
+		}
+		want := make(map[uint32]bool, len(tgids))
+		for _, t := range tgids {
+			want[t] = true
+			_ = m.Put(t, uint8(1))
+		}
+		var have []uint32
+		var k uint32
+		var v uint8
+		it := m.Iterate()
+		for it.Next(&k, &v) {
+			if !want[k] {
+				have = append(have, k)
+			}
+		}
+		for _, k := range have {
+			_ = m.Delete(k)
+		}
+	}
 }
 
 func readBlock(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {

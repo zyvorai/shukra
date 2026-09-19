@@ -95,7 +95,12 @@ func routes(st *state.State) *http.ServeMux {
 		writeJSON(w, http.StatusOK, map[string]any{"rows": st.KVM(r.URL.Query().Get("vm"))})
 	})
 	mux.HandleFunc("GET /api/v1/trace/sched", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"rows": st.Sched(r.URL.Query().Get("vm"))})
+		vm := r.URL.Query().Get("vm")
+		out := map[string]any{"rows": st.Sched(vm)}
+		if r.URL.Query().Get("threads") == "1" {
+			out["threads"] = st.SchedThreads(vm)
+		}
+		writeJSON(w, http.StatusOK, out)
 	})
 	mux.HandleFunc("GET /api/v1/trace/block", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"rows": st.Block(r.URL.Query().Get("vm"))})

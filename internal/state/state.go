@@ -385,6 +385,12 @@ func (s *State) Sched(vm string) []aggregate.SchedRow {
 	return aggregate.Sched(s.vms, s.byPID, vm)
 }
 
+func (s *State) SchedThreads(vm string) []aggregate.ThreadRow {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return aggregate.SchedThreads(s.vms, s.byPID, vm)
+}
+
 func (s *State) Block(vm string) []aggregate.BlockRow {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

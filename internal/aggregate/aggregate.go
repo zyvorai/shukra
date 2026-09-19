@@ -23,6 +23,7 @@ type Counters struct {
 	OnCPUNs       uint64
 	WakeupDelayNs uint64
 	WakeupCount   uint64
+	SchedHist     []uint64 // run-queue delay, log2 ns
 	BlockRead     []uint64
 	BlockWrite    []uint64
 	BlockReadMax  uint64
@@ -53,7 +54,11 @@ type SchedRow struct {
 	OnCPUNs       uint64 `json:"onCpuNs"`
 	WakeupDelayNs uint64 `json:"wakeupDelayNs"`
 	WakeupCount   uint64 `json:"wakeupCount"`
-	Measured      bool   `json:"measured"`
+	// Run-queue delay percentiles are log2 bucket edges, so up to 2x high.
+	WakeupDelayP50Ns uint64   `json:"wakeupDelayP50Ns"`
+	WakeupDelayP99Ns uint64   `json:"wakeupDelayP99Ns"`
+	WakeupHist       []uint64 `json:"wakeupHist,omitempty"`
+	Measured         bool     `json:"measured"`
 }
 
 type BlockRow struct {
@@ -92,6 +97,7 @@ func add(dst, src *Counters) {
 	dst.OnCPUNs += src.OnCPUNs
 	dst.WakeupDelayNs += src.WakeupDelayNs
 	dst.WakeupCount += src.WakeupCount
+	dst.SchedHist = addHist(dst.SchedHist, src.SchedHist)
 	dst.BlockRead = addHist(dst.BlockRead, src.BlockRead)
 	dst.BlockWrite = addHist(dst.BlockWrite, src.BlockWrite)
 	if src.BlockReadMax > dst.BlockReadMax {
@@ -227,7 +233,52 @@ func Sched(vms []identity.VM, byPID map[uint32]Counters, vm string) []SchedRow {
 		out = append(out, SchedRow{
 			VM: b.name, OnCPUNs: b.c.OnCPUNs, WakeupDelayNs: b.c.WakeupDelayNs,
 			WakeupCount: b.c.WakeupCount, Measured: b.c.OnCPUNs+b.c.WakeupCount > 0,
+			WakeupDelayP50Ns: hist.Percentile(b.c.SchedHist, 50),
+			WakeupDelayP99Ns: hist.Percentile(b.c.SchedHist, 99),
+			WakeupHist:       b.c.SchedHist,
 		})
+	}
+	return out
+}
+
+// ThreadRow is one QEMU thread's scheduler counters, so a slow vCPU can be told
+// apart from a slow iothread. Role is inferred from the thread's comm.
+type ThreadRow struct {
+	VM               string `json:"vm"`
+	TID              int    `json:"tid"`
+	Comm             string `json:"comm,omitempty"`
+	Role             string `json:"role"`
+	OnCPUNs          uint64 `json:"onCpuNs"`
+	WakeupDelayNs    uint64 `json:"wakeupDelayNs"`
+	WakeupCount      uint64 `json:"wakeupCount"`
+	WakeupDelayP99Ns uint64 `json:"wakeupDelayP99Ns"`
+}
+
+// SchedThreads breaks the scheduler counters down by QEMU thread. A thread with
+// no counters yet is left out rather than shown as zero.
+func SchedThreads(vms []identity.VM, byPID map[uint32]Counters, vm string) []ThreadRow {
+	var out []ThreadRow
+	for _, v := range vms {
+		if vm != "" && v.Name != vm {
+			continue
+		}
+		info := v.ThreadInfo
+		if len(info) == 0 {
+			for _, tid := range v.Threads {
+				info = append(info, identity.Thread{TID: tid, Role: "unknown"})
+			}
+		}
+		for _, t := range info {
+			c, ok := byPID[uint32(t.TID)]
+			if !ok {
+				continue
+			}
+			out = append(out, ThreadRow{
+				VM: v.Name, TID: t.TID, Comm: t.Comm, Role: t.Role,
+				OnCPUNs: c.OnCPUNs, WakeupDelayNs: c.WakeupDelayNs, WakeupCount: c.WakeupCount,
+				WakeupDelayP99Ns: hist.Percentile(c.SchedHist, 99),
+			})
+		}
 	}
 	return out
 }

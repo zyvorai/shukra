@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/zyvorai/shukra/internal/event"
+	"github.com/zyvorai/shukra/internal/state"
 )
 
 func det(rule string) event.Event {
@@ -223,12 +224,23 @@ func TestSlowSinkDropsWithoutBlockingTheOtherSink(t *testing.T) {
 	if dropped == 0 || dropped > 50 {
 		t.Fatalf("dropped %d", dropped)
 	}
+	// The healthy sink is not held up by the stuck one. Whether the emitter can
+	// outrun its worker depends on scheduling, so account for every event rather
+	// than assume none were dropped: delivered plus dropped is everything emitted.
 	deadline := time.Now().Add(5 * time.Second)
-	for len(quick.rules()) < n && time.Now().Before(deadline) {
+	var qs state.SinkStat
+	for time.Now().Before(deadline) {
+		qs = d.Stats()[1]
+		if qs.Sent+qs.Dropped == n {
+			break
+		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if len(quick.rules()) != n {
-		t.Fatalf("the healthy sink got %d of %d", len(quick.rules()), n)
+	if qs.Sent+qs.Dropped != n || qs.Sent < QueueSize {
+		t.Fatalf("healthy sink: sent %d dropped %d of %d", qs.Sent, qs.Dropped, n)
+	}
+	if d.Stats()[0].Sent != 0 {
+		t.Fatal("the stuck sink delivered something")
 	}
 	start = time.Now()
 	d.Close(50 * time.Millisecond) // the stuck sink is cancelled, not waited on forever

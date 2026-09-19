@@ -12,3 +12,6 @@ func Sample() map[uint32]aggregate.Counters { return nil }
 
 // Start does not read a ring. There is no program attached.
 func Start(func(event.Event)) {}
+
+// SetWatched has no map to update in this build.
+func SetWatched([]uint32) {}

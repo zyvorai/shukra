@@ -14,19 +14,44 @@ struct sched_val {
 	__u64 last_on_ns;
 };
 
+/* Every task on the host passes through sched_switch, so these are sized for a
+   busy hypervisor: an idle vCPU thread must not be evicted by other tasks. */
 struct {
 	__uint(type, BPF_MAP_TYPE_LRU_HASH);
-	__uint(max_entries, 16384);
+	__uint(max_entries, 65536);
 	__type(key, __u32);
 	__type(value, struct sched_val);
 } sched_stats SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_LRU_HASH);
-	__uint(max_entries, 16384);
+	__uint(max_entries, 65536);
 	__type(key, __u32);
 	__type(value, __u64);
 } wakeup_ts SEC(".maps");
+
+struct sched_hkey {
+	__u32 pid;
+	__u32 bucket;
+};
+
+/* Run-queue delay (wakeup to on-CPU) per task, as a log2 histogram. */
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, 65536);
+	__type(key, struct sched_hkey);
+	__type(value, __u64);
+} sched_hist SEC(".maps");
+
+/* tgids of the QEMU processes. Userspace keeps this in step with its /proc scan.
+   exec and exit events are only emitted for these processes and their children,
+   so a busy host does not flood the ring with every fork. */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 4096);
+	__type(key, __u32);
+	__type(value, __u8);
+} watched SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -80,14 +105,32 @@ int shukra_switch(struct trace_event_raw_sched_switch *ctx) {
 		__sync_fetch_and_add(&ns->wakeup_delay_ns, d);
 		__sync_fetch_and_add(&ns->wakeup_count, 1);
 		bpf_map_delete_elem(&wakeup_ts, &next);
+		struct sched_hkey hk = {.pid = next, .bucket = log2_bucket(d)};
+		__u64 *hc = bpf_map_lookup_elem(&sched_hist, &hk);
+		if (hc) {
+			__sync_fetch_and_add(hc, 1);
+		} else {
+			__u64 one = 1;
+			bpf_map_update_elem(&sched_hist, &hk, &one, BPF_NOEXIST);
+		}
 		if (d >= SCHED_DELAY_NS)
 			emit(KIND_SCHED_DELAY, next, d);
 	}
 	return 0;
 }
 
+/* True when the current task is in a watched QEMU process, or was started by one. */
+static __always_inline int in_watched_process(void) {
+	struct task_struct *t = (struct task_struct *)bpf_get_current_task();
+	__u32 tgid = bpf_get_current_pid_tgid() >> 32;
+	__u32 ppid = BPF_CORE_READ(t, real_parent, tgid);
+	return bpf_map_lookup_elem(&watched, &tgid) || bpf_map_lookup_elem(&watched, &ppid);
+}
+
 SEC("tracepoint/sched/sched_process_exec")
 int shukra_exec(struct trace_event_raw_sched_process_exec *ctx) {
+	if (!in_watched_process())
+		return 0;
 	__u32 pid = (__u32)bpf_get_current_pid_tgid();
 	emit(KIND_EXEC, pid, 0);
 	return 0;
@@ -98,6 +141,9 @@ int shukra_exit(struct trace_event_raw_sched_process_template *ctx) {
 	__u32 pid = BPF_CORE_READ(ctx, pid);
 	bpf_map_delete_elem(&sched_stats, &pid);
 	bpf_map_delete_elem(&wakeup_ts, &pid);
+	/* The cleanup above is unconditional. Only the event is filtered. */
+	if (!in_watched_process())
+		return 0;
 	emit(KIND_EXIT, pid, 0);
 	return 0;
 }

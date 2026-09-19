@@ -12,6 +12,19 @@
 #define BLOCK_SLOW_NS 10000000ull
 #define SCHED_DELAY_NS 20000000ull
 
+/* Slot for a latency in ns: bits.Len64(v)-1, and 0 for v <= 1. Mirrors
+   internal/hist.Bucket so userspace percentiles read the same buckets. */
+static __always_inline __u32 log2_bucket(__u64 v) {
+	__u32 r = 0;
+	if (v >> 32) { v >>= 32; r += 32; }
+	if (v >> 16) { v >>= 16; r += 16; }
+	if (v >> 8) { v >>= 8; r += 8; }
+	if (v >> 4) { v >>= 4; r += 4; }
+	if (v >> 2) { v >>= 2; r += 2; }
+	if (v >> 1) { r += 1; }
+	return r;
+}
+
 struct ring_event {
 	__u64 ts_ns;
 	__u32 pid;

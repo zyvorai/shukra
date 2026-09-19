@@ -67,6 +67,11 @@ func (a *Agent) Refresh() {
 		return
 	}
 	a.State.SetVMs(vms)
+	tgids := make([]uint32, 0, len(vms))
+	for _, vm := range vms {
+		tgids = append(tgids, uint32(vm.PID))
+	}
+	observe.SetWatched(tgids)
 	var programs []state.Program
 	for _, p := range observe.Programs() {
 		programs = append(programs, state.Program{Name: p.Name, Status: p.Status, Detail: p.Detail})

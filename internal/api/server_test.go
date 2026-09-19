@@ -240,3 +240,21 @@ func TestMetricsShowSuppressionAndSinks(t *testing.T) {
 		}
 	}
 }
+
+func TestSchedTraceThreadsAreOptIn(t *testing.T) {
+	st := state.New("node-07")
+	h := New(st, "k")
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(get(h, "/api/v1/trace/sched", "k").Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["threads"]; ok {
+		t.Fatal("threads returned without asking")
+	}
+	if err := json.Unmarshal(get(h, "/api/v1/trace/sched?threads=1", "k").Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["threads"]; !ok {
+		t.Fatal("threads=1 did not return threads")
+	}
+}
