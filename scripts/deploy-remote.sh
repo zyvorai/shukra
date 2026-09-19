@@ -18,6 +18,8 @@
 #                       the host, and a fresh host gets a random one.
 # SHUKRA_REMOTE_SUBDIR  checkout under $HOME (default: .deployments/shukra)
 # SHUKRA_SSH_OPTS       extra ssh/scp options, for example "-F ~/.lima/bpf/ssh.config"
+# SHUKRA_ALLOW_DETACHED=1  install a daemon with no BPF programs when they fail to build on a
+#                       host that has clang and BTF. Without it that is an error and nothing is installed.
 # UI/API: :30970
 set -euo pipefail
 
@@ -34,7 +36,7 @@ SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 ${EXTRA_
 POSITIONAL=()
 
 usage() {
-  sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 }
 
@@ -153,6 +155,10 @@ key_env=""
 if [[ -n "${SHUKRA_API_KEY:-}" ]]; then
   key_env="export SHUKRA_API_KEY='${SHUKRA_API_KEY}'"
 fi
+allow_env=""
+if [[ "${SHUKRA_ALLOW_DETACHED:-}" == "1" ]]; then
+  allow_env="export SHUKRA_ALLOW_DETACHED=1"
+fi
 
 if [[ -n "${PREBUILT}" ]]; then
   remote_script=$(cat <<EOF
@@ -184,6 +190,7 @@ set -euo pipefail
 cd ${REMOTE_DIR}
 export PATH="/usr/local/go/bin:/usr/local/bin:\$HOME/go/bin:/usr/bin:\$PATH"
 export GOTOOLCHAIN=auto
+${allow_env}
 
 if ! command -v go >/dev/null 2>&1; then
   echo "go is not installed on the host" >&2
@@ -208,8 +215,16 @@ BPF_TAG=""
 if command -v clang >/dev/null 2>&1 && [[ -r /sys/kernel/btf/vmlinux ]]; then
   if make generate && compgen -G "internal/bpfgen/*_bpfel.go" >/dev/null; then
     BPF_TAG="-tags shukrabpf"
+  elif [[ "\${SHUKRA_ALLOW_DETACHED:-}" == "1" ]]; then
+    echo "CO-RE objects were not generated; building without them (SHUKRA_ALLOW_DETACHED=1)" >&2
   else
-    echo "CO-RE objects were not generated; building without them" >&2
+    # This host says it can build them, so a failure is a real problem. Installing a
+    # daemon that reports every program detached over the one that is running would
+    # turn a build error into an outage of observability. Stop before installing.
+    echo "ERROR: clang and kernel BTF are present but the CO-RE objects did not build." >&2
+    echo "Nothing was installed and the running service was not touched." >&2
+    echo "Fix the build, or set SHUKRA_ALLOW_DETACHED=1 to install a detached daemon anyway." >&2
+    exit 1
   fi
 else
   echo "clang or BTF missing; programs will report detached" >&2
