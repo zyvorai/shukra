@@ -92,6 +92,7 @@ type State struct {
 	seq        uint64
 	connects   map[string]uint64
 	ready      bool
+	cpuVendor  string
 	persist    Persister
 	hooks      []func(event.Event)
 	suppressed uint64
@@ -373,10 +374,20 @@ func (s *State) Status() Status {
 	}
 }
 
+// SetCPUVendor records the host CPU vendor_id ("GenuineIntel", "AuthenticAMD").
+// KVM exit reasons are only named where the numbering for that vendor is known.
+func (s *State) SetCPUVendor(v string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cpuVendor = v
+}
+
 func (s *State) KVM(vm string) []aggregate.KVMRow {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return aggregate.KVM(s.vms, s.byPID, vm)
+	rows := aggregate.KVM(s.vms, s.byPID, vm)
+	aggregate.NameReasons(rows, s.cpuVendor)
+	return rows
 }
 
 func (s *State) Sched(vm string) []aggregate.SchedRow {

@@ -17,6 +17,8 @@ const (
 // Counters are scraped from maps, or supplied by tests. They are not guest metrics.
 type Counters struct {
 	Exits                           map[uint32]uint64
+	ExitNs                          map[uint32]uint64 // handling time per exit reason, halts included
+	KVMLat                          []uint64          // exit handling time, log2 ns, halts left out
 	Entries                         uint64
 	MMIO                            uint64
 	PIO                             uint64
@@ -38,17 +40,30 @@ type Counters struct {
 type Reason struct {
 	Reason uint32 `json:"reason"`
 	Count  uint64 `json:"count"`
+	// TotalNs is the host time spent handling this reason. For a halt it is guest
+	// idle time, which is why halts are not in the latency histogram.
+	TotalNs uint64 `json:"totalNs"`
+	// Name is set only where the exit numbering is known for the CPU vendor.
+	Name string `json:"name,omitempty"`
 }
 
 type KVMRow struct {
-	VM       string   `json:"vm"`
-	Runtime  string   `json:"runtime,omitempty"`
-	Exits    uint64   `json:"exits"`
-	Entries  uint64   `json:"entries"`
-	MMIO     uint64   `json:"mmio"`
-	PIO      uint64   `json:"pio"`
-	Top      []Reason `json:"topReasons"`
-	Measured bool     `json:"measured"`
+	VM      string   `json:"vm"`
+	Runtime string   `json:"runtime,omitempty"`
+	Exits   uint64   `json:"exits"`
+	Entries uint64   `json:"entries"`
+	MMIO    uint64   `json:"mmio"`
+	PIO     uint64   `json:"pio"`
+	Top     []Reason `json:"topReasons"`
+	// TopByTime is the reasons that cost the most host time. It is not the same list
+	// as Top: a rare, slow exit can outweigh a common, fast one.
+	TopByTime []Reason `json:"topReasonsByTime"`
+	// Handling latency, kvm_exit to the next kvm_entry, halts excluded. Percentiles
+	// are log2 bucket edges, so up to 2x high.
+	LatencyP50Ns uint64   `json:"exitLatencyP50Ns"`
+	LatencyP99Ns uint64   `json:"exitLatencyP99Ns"`
+	LatencyHist  []uint64 `json:"exitLatencyHist,omitempty"`
+	Measured     bool     `json:"measured"`
 }
 
 type SchedRow struct {
@@ -100,6 +115,15 @@ func add(dst, src *Counters) {
 			dst.Exits[k] += v
 		}
 	}
+	if src.ExitNs != nil {
+		if dst.ExitNs == nil {
+			dst.ExitNs = map[uint32]uint64{}
+		}
+		for k, v := range src.ExitNs {
+			dst.ExitNs[k] += v
+		}
+	}
+	dst.KVMLat = addHist(dst.KVMLat, src.KVMLat)
 	dst.Entries += src.Entries
 	dst.MMIO += src.MMIO
 	dst.PIO += src.PIO
@@ -207,7 +231,8 @@ func filter(rows []bucket, vm string) []bucket {
 	return out
 }
 
-// KVM aggregates exit reasons. Top is the three largest reasons.
+// KVM aggregates exit reasons. Top is the three most frequent reasons and
+// TopByTime the three that cost the most host time.
 func KVM(vms []identity.VM, byPID map[uint32]Counters, vm string) []KVMRow {
 	var out []KVMRow
 	for _, b := range filter(group(vms, byPID), vm) {
@@ -215,18 +240,36 @@ func KVM(vms []identity.VM, byPID map[uint32]Counters, vm string) []KVMRow {
 		var top []Reason
 		for reason, n := range b.c.Exits {
 			exits += n
-			top = append(top, Reason{Reason: reason, Count: n})
+			top = append(top, Reason{Reason: reason, Count: n, TotalNs: b.c.ExitNs[reason]})
 		}
+		byTime := append([]Reason(nil), top...)
 		sortReasons(top)
+		sortReasonsByTime(byTime)
 		if len(top) > 3 {
 			top = top[:3]
 		}
+		if len(byTime) > 3 {
+			byTime = byTime[:3]
+		}
 		out = append(out, KVMRow{
 			VM: b.name, Runtime: b.runtime, Exits: exits, Entries: b.c.Entries,
-			MMIO: b.c.MMIO, PIO: b.c.PIO, Top: top, Measured: exits+b.c.Entries+b.c.MMIO+b.c.PIO > 0,
+			MMIO: b.c.MMIO, PIO: b.c.PIO, Top: top, TopByTime: byTime,
+			LatencyP50Ns: hist.Percentile(b.c.KVMLat, 50), LatencyP99Ns: hist.Percentile(b.c.KVMLat, 99),
+			LatencyHist: b.c.KVMLat,
+			Measured:    exits+b.c.Entries+b.c.MMIO+b.c.PIO > 0,
 		})
 	}
 	return out
+}
+
+func sortReasonsByTime(rs []Reason) {
+	for i := 1; i < len(rs); i++ {
+		j := i
+		for j > 0 && rs[j].TotalNs > rs[j-1].TotalNs {
+			rs[j], rs[j-1] = rs[j-1], rs[j]
+			j--
+		}
+	}
 }
 
 func sortReasons(rs []Reason) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -22,12 +23,13 @@ import (
 
 // Agent owns the refresh loop. The CLI never calls it.
 type Agent struct {
-	State     *state.State
-	ProcRoot  string
-	Host      string
-	watchPath string
-	cfg       atomic.Pointer[detect.Config]
-	sup       detect.Suppressor
+	State      *state.State
+	ProcRoot   string
+	Host       string
+	watchPath  string
+	cfg        atomic.Pointer[detect.Config]
+	sup        detect.Suppressor
+	vendorOnce sync.Once
 	// eval is touched only by Refresh, which runs on one goroutine at a time.
 	eval detect.Evaluator
 }
@@ -67,6 +69,7 @@ func (a *Agent) Refresh() {
 		return
 	}
 	a.State.SetVMs(vms)
+	a.vendorOnce.Do(func() { a.State.SetCPUVendor(cpuVendor(a.ProcRoot)) })
 	tgids := make([]uint32, 0, len(vms))
 	for _, vm := range vms {
 		tgids = append(tgids, uint32(vm.PID))
@@ -226,4 +229,19 @@ func parentPID(root string, pid uint32) (uint32, bool) {
 		return uint32(n), true
 	}
 	return 0, false
+}
+
+// cpuVendor is the first vendor_id in <proc>/cpuinfo. It is empty on a CPU that
+// has none (arm64) or when the file cannot be read.
+func cpuVendor(root string) string {
+	b, err := os.ReadFile(filepath.Join(root, "cpuinfo"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if k, v, ok := strings.Cut(line, ":"); ok && strings.TrimSpace(k) == "vendor_id" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }

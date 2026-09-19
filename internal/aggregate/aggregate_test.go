@@ -140,3 +140,69 @@ func TestBlockOpsBytesMaxMergeAcrossThreads(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+func TestKVMTopByTimeIsNotTopByCount(t *testing.T) {
+	vms := []identity.VM{{Name: "db", PID: 100, Threads: []int{100, 101}}}
+	by := map[uint32]Counters{
+		100: {
+			Exits:   map[uint32]uint64{10: 1_000_000, 48: 40, 12: 5},
+			ExitNs:  map[uint32]uint64{10: 2_000_000_000, 48: 8_000_000_000, 12: 90_000_000_000},
+			Entries: 1,
+		},
+		101: {
+			Exits:  map[uint32]uint64{10: 1_000_000},
+			ExitNs: map[uint32]uint64{10: 2_000_000_000},
+			KVMLat: hist64(15, 99),
+		},
+	}
+	rows := KVM(vms, by, "db")
+	if len(rows) != 1 {
+		t.Fatalf("%+v", rows)
+	}
+	r := rows[0]
+	// Most frequent: reason 10, summed across threads. Costliest: 12 (a halt, so
+	// that time is guest idle), then 48.
+	if r.Top[0].Reason != 10 || r.Top[0].Count != 2_000_000 || r.Top[0].TotalNs != 4_000_000_000 {
+		t.Fatalf("top by count: %+v", r.Top)
+	}
+	if r.TopByTime[0].Reason != 12 || r.TopByTime[1].Reason != 48 || r.TopByTime[0].TotalNs != 90_000_000_000 {
+		t.Fatalf("top by time: %+v", r.TopByTime)
+	}
+	if r.LatencyP50Ns != 1<<16 || r.LatencyP99Ns != 1<<16 || len(r.LatencyHist) != 64 {
+		t.Fatalf("latency %d %d", r.LatencyP50Ns, r.LatencyP99Ns)
+	}
+	if !r.Measured {
+		t.Fatal("not measured")
+	}
+}
+
+func TestExitNamesOnlyWhereTheNumberingIsKnown(t *testing.T) {
+	cases := []struct {
+		vendor string
+		reason uint32
+		want   string
+	}{
+		{"GenuineIntel", 12, "hlt"},
+		{"GenuineIntel", 48, "ept_violation"},
+		{"GenuineIntel", 30, "io_instruction"},
+		{"GenuineIntel", 1<<31 | 33, "invalid_guest_state"}, // failed VM entry sets bit 31
+		{"GenuineIntel", 9999, ""},                          // unknown stays unnamed
+		{"AuthenticAMD", 12, ""},                            // SVM reuses small numbers for other things
+		{"AuthenticAMD", 123, ""},
+		{"", 12, ""}, // arm64 has no vendor_id, and reports an exception class
+	}
+	for _, c := range cases {
+		if got := ExitName(c.vendor, c.reason); got != c.want {
+			t.Errorf("ExitName(%q, %d) = %q, want %q", c.vendor, c.reason, got, c.want)
+		}
+	}
+	rows := []KVMRow{{Top: []Reason{{Reason: 12}}, TopByTime: []Reason{{Reason: 48}}}}
+	NameReasons(rows, "GenuineIntel")
+	if rows[0].Top[0].Name != "hlt" || rows[0].TopByTime[0].Name != "ept_violation" {
+		t.Fatalf("%+v", rows)
+	}
+	NameReasons(rows, "AuthenticAMD")
+	if rows[0].Top[0].Name != "" || rows[0].TopByTime[0].Name != "" {
+		t.Fatalf("names survived a vendor change: %+v", rows)
+	}
+}

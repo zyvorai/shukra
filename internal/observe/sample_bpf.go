@@ -66,6 +66,19 @@ func readKVM(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {
 			c.Exits[key.Reason] += val
 		}
 	}
+	if m := maps["kvm_reason_ns"]; m != nil {
+		var key struct{ Pid, Reason uint32 }
+		var val uint64
+		it := m.Iterate()
+		for it.Next(&key, &val) {
+			c := slot(by, key.Pid)
+			if c.ExitNs == nil {
+				c.ExitNs = map[uint32]uint64{}
+			}
+			c.ExitNs[key.Reason] += val
+		}
+	}
+	readHist2(maps["kvm_lat"], func(c *aggregate.Counters) *[]uint64 { return &c.KVMLat }, by)
 	readU32(maps["kvm_entries"], func(pid uint32, v uint64) { slot(by, pid).Entries += v })
 	readU32(maps["kvm_mmio"], func(pid uint32, v uint64) { slot(by, pid).MMIO += v })
 	readU32(maps["kvm_pio"], func(pid uint32, v uint64) { slot(by, pid).PIO += v })

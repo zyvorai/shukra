@@ -316,3 +316,43 @@ func TestUnrelatedParentIsNotJoined(t *testing.T) {
 		t.Fatal("the event should still be recorded, unattributed")
 	}
 }
+
+func TestCPUVendorFromProc(t *testing.T) {
+	root := t.TempDir()
+	if got := cpuVendor(root); got != "" {
+		t.Fatalf("no cpuinfo: %q", got)
+	}
+	write := func(s string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, "cpuinfo"), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("processor\t: 0\nvendor_id\t: GenuineIntel\nmodel name\t: Xeon\n\nprocessor\t: 1\nvendor_id\t: GenuineIntel\n")
+	if got := cpuVendor(root); got != "GenuineIntel" {
+		t.Fatalf("%q", got)
+	}
+	write("processor\t: 0\nBogoMIPS\t: 48.00\nCPU implementer\t: 0x61\n") // arm64: no vendor_id
+	if got := cpuVendor(root); got != "" {
+		t.Fatalf("arm64: %q", got)
+	}
+}
+
+func TestRefreshSetsVendorSoExitReasonsAreNamed(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "cpuinfo"), []byte("vendor_id\t: GenuineIntel\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st := state.New("node-07")
+	ag, err := New(st, root, "", "node-07")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ag.Refresh()
+	st.SetVMs([]identity.VM{{Name: "db", PID: 100, Threads: []int{100}}})
+	st.SetCounters(map[uint32]aggregate.Counters{100: {Exits: map[uint32]uint64{12: 3}}})
+	rows := st.KVM("db")
+	if len(rows) != 1 || rows[0].Top[0].Name != "hlt" {
+		t.Fatalf("%+v", rows)
+	}
+}
