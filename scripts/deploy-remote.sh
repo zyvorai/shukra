@@ -104,7 +104,7 @@ export SHUKRA_CLI_COLOR=false
 export SHUKRA_SKIP_DOTENV=1
 systemctl is-active shukra
 shukractl version
-shukractl status
+shukractl status --wait
 shukractl programs
 shukractl vms
 shukractl trace list
@@ -136,7 +136,8 @@ export SHUKRA_SKIP_DOTENV=1
 echo "---- shukractl version ----"
 shukractl version
 echo "---- shukractl status ----"
-shukractl status
+# The daemon takes a couple of seconds to load its programs after a restart, so wait for it.
+shukractl status --wait
 echo "---- shukractl programs ----"
 shukractl programs
 echo "---- shukractl vms ----"
