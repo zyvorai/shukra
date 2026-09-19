@@ -29,7 +29,7 @@ import (
 func main() {
 	listen := flag.String("listen", "127.0.0.1:30970", "API listen address")
 	proc := flag.String("proc", "/proc", "procfs root")
-	watch := flag.String("watchlist", "", "detection rules YAML: destinations, ports, exec_allow, thresholds, suppress")
+	watch := flag.String("watchlist", "", "detection rules YAML: destinations, ports, dns, exec_allow, thresholds, suppress")
 	web := flag.String("web", "web/dist", "console build to serve, if present")
 	dataDir := flag.String("data-dir", "", "directory that keeps detections, isolations and a recorder snapshot across restarts")
 	webhookURL := flag.String("webhook-url", "", "POST each detection as JSON to this URL (secret: SHUKRA_WEBHOOK_SECRET)")
@@ -38,6 +38,7 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "serve HTTPS with this certificate (PEM). Needs -tls-key. SIGHUP reloads it")
 	tlsKey := flag.String("tls-key", "", "private key for -tls-cert (PEM)")
 	isolateAllow := flag.String("isolate-allow", "", "comma-separated CIDRs an isolated VM can still reach (your management and monitoring networks). Without it isolate is refused")
+	dnsEvents := flag.Bool("dns-events", true, "record the names a guest looks up (guest_dns events). Names identify what a VM does: with false the program does not read DNS at all")
 	noAuth := flag.Bool("no-auth", false, "serve the API without a bearer key")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	detachAll := flag.Bool("detach-all", false, "remove every pinned tap program and its isolation, then exit. Works while the daemon is stopped")
@@ -127,6 +128,7 @@ func main() {
 		log.Fatalf("isolate-allow: %v", err)
 	}
 	st.SetEnforcer(observe.NewEnforcer(allow))
+	observe.SetDNSEvents(*dnsEvents)
 	st.SetTapSource(func() []state.TapStat {
 		var out []state.TapStat
 		for _, t := range observe.TapSample() {

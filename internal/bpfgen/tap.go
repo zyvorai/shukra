@@ -501,3 +501,23 @@ func TapStats() map[uint32]TapStat {
 	}
 	return out
 }
+
+// SetTapDNS turns DNS name events on or off in the kernel program. The switch lives in a pinned map so
+// it is the same for the program that is already attached, and the daemon sets it on every start:
+// what a previous run left there is never assumed. With it off the program does not look at DNS at all.
+func SetTapDNS(on bool) error {
+	tapMgr.mu.Lock()
+	defer tapMgr.mu.Unlock()
+	if err := loadTapLocked(); err != nil {
+		return err
+	}
+	m := tapMgr.coll.Maps["dns_cfg"]
+	if m == nil {
+		return errors.New("the tap program has no dns_cfg map")
+	}
+	var off uint32
+	if !on {
+		off = 1
+	}
+	return m.Put(uint32(0), off)
+}

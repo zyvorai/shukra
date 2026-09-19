@@ -120,24 +120,46 @@ func StartTap(handler func(event.Event)) {
 			lost.Add(1)
 			return
 		}
-		go func() {
-			var rec ringbuf.Record
-			for {
-				if err := rd.ReadInto(&rec); err != nil {
-					if errors.Is(err, os.ErrClosed) {
-						return
-					}
-					lost.Add(1)
-					continue
-				}
-				if e, ok := decodeTap(append([]byte(nil), rec.RawSample...), bpfgen.TapName); ok {
-					handler(e)
-				} else {
-					lost.Add(1)
-				}
+		readTapRing(rd, handler, decodeTap)
+		if m := coll.Maps["tap_dns"]; m != nil {
+			// A tap program from before DNS names has no such ring. Everything else still works.
+			if dns, err := ringbuf.NewReader(m); err == nil {
+				readTapRing(dns, handler, decodeDNS)
+			} else {
+				lost.Add(1)
 			}
-		}()
+		}
 	})
+}
+
+// readTapRing hands every record of a ring to decode and the result to handler. A record that does not decode
+// is counted as lost, never guessed at.
+func readTapRing(rd *ringbuf.Reader, handler func(event.Event), decode func([]byte, func(uint32) string) (event.Event, bool)) {
+	go func() {
+		var rec ringbuf.Record
+		for {
+			if err := rd.ReadInto(&rec); err != nil {
+				if errors.Is(err, os.ErrClosed) {
+					return
+				}
+				lost.Add(1)
+				continue
+			}
+			if e, ok := decode(append([]byte(nil), rec.RawSample...), bpfgen.TapName); ok {
+				handler(e)
+			} else {
+				lost.Add(1)
+			}
+		}
+	}()
+}
+
+// SetDNSEvents turns DNS name events on or off in the kernel program. It is set on every start, since the
+// switch is pinned and a previous run may have left it either way.
+func SetDNSEvents(on bool) {
+	if err := bpfgen.SetTapDNS(on); err != nil {
+		log.Printf("tap program: DNS name events: %v", err)
+	}
 }
 
 // decodeTap turns one tap ring sample into an event. The VM is filled in later,

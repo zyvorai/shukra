@@ -68,6 +68,30 @@ type PortRule struct {
 	Name     string `yaml:"name"`
 }
 
+// DNSRule notices a name the guest looked up. Exactly one of Suffix, Exact or Contains is set. Names are
+// compared in lower case, so a rule does not depend on how the guest wrote it.
+type DNSRule struct {
+	Name string `yaml:"name"`
+	// Suffix matches the name itself and everything under it: "example.com" matches example.com and
+	// a.b.example.com, but not badexample.com.
+	Suffix   string `yaml:"suffix"`
+	Exact    string `yaml:"exact"`
+	Contains string `yaml:"contains"`
+	Severity string `yaml:"severity"`
+}
+
+func (r DNSRule) matches(name string) bool {
+	switch {
+	case r.Exact != "":
+		return name == r.Exact
+	case r.Suffix != "":
+		return name == r.Suffix || strings.HasSuffix(name, "."+r.Suffix)
+	case r.Contains != "":
+		return strings.Contains(name, r.Contains)
+	}
+	return false
+}
+
 // Threshold notices a per-VM metric over a window. Op is ">" or ">=".
 type Threshold struct {
 	Name     string        `yaml:"name"`
@@ -83,6 +107,7 @@ type Config struct {
 	// Watch is the destination watchlist. It is never nil.
 	Watch      *Watchlist
 	Ports      []PortRule
+	DNS        []DNSRule
 	ExecAllow  []string
 	Thresholds []Threshold
 	// Suppress is how long a repeat of the same detection is held back.
@@ -100,6 +125,7 @@ type doc struct {
 	Suppress     *time.Duration `yaml:"suppress"`
 	Destinations []Rule         `yaml:"destinations"`
 	Ports        []PortRule     `yaml:"ports"`
+	DNS          []DNSRule      `yaml:"dns"`
 	ExecAllow    []string       `yaml:"exec_allow"`
 	Thresholds   []Threshold    `yaml:"thresholds"`
 }
@@ -171,6 +197,33 @@ func Parse(b []byte) (*Config, error) {
 			return nil, err
 		}
 		c.Ports = append(c.Ports, r)
+	}
+	for _, r := range d.DNS {
+		set := 0
+		norm := func(v string) string { return strings.Trim(strings.ToLower(strings.TrimSpace(v)), ".") }
+		r.Suffix, r.Exact = norm(r.Suffix), norm(r.Exact)
+		r.Contains = strings.ToLower(strings.TrimSpace(r.Contains))
+		for _, v := range []string{r.Suffix, r.Exact, r.Contains} {
+			if v != "" {
+				set++
+			}
+		}
+		if set != 1 {
+			return nil, fmt.Errorf("dns: rule %q needs exactly one of suffix, exact or contains", r.Name)
+		}
+		if r.Name == "" {
+			r.Name = "dns-" + r.Suffix + r.Exact + r.Contains
+		}
+		if r.Severity == "" {
+			r.Severity = "high"
+		}
+		if !severities[r.Severity] {
+			return nil, fmt.Errorf("dns: %q: severity %q is not low, medium, high or critical", r.Name, r.Severity)
+		}
+		if err := name("dns", r.Name); err != nil {
+			return nil, err
+		}
+		c.DNS = append(c.DNS, r)
 	}
 	for _, x := range d.ExecAllow {
 		x = strings.ToLower(strings.TrimSpace(x))
@@ -244,6 +297,20 @@ func (c *Config) MatchPortDir(port uint16, proto, dir string) (PortRule, bool) {
 		}
 	}
 	return PortRule{}, false
+}
+
+// MatchDNS returns the first DNS rule that a looked-up name matches.
+func (c *Config) MatchDNS(name string) (DNSRule, bool) {
+	if c == nil || name == "" {
+		return DNSRule{}, false
+	}
+	name = strings.TrimSuffix(strings.ToLower(name), ".")
+	for _, r := range c.DNS {
+		if r.matches(name) {
+			return r, true
+		}
+	}
+	return DNSRule{}, false
 }
 
 // AllowsExec reports whether comm starts with an operator-allowed name. The

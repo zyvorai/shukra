@@ -25,7 +25,7 @@ shukractl isolate payment-prod-03
 | `vms [--json]` | QEMU virtual machines found on the host |
 | `explain <vm> [--window 5m\|lifetime]` | Why a VM looks slow, from the last minute by default: ranked host-side causes with evidence, and what Shukra cannot see |
 | `recorder <vm> [--window 60s]` | Replay the flight recorder |
-| `watch [--json] [--once]` | Stream discrete events, resuming from the last one seen |
+| `watch [--json] [--once]` | Stream discrete events, resuming from the last one seen. A `guest_dns` line ends with `name=` and `qtype=` |
 | `export` | One JSON document: status, VMs, traces, events |
 | `security <vm>` | Watchlist detections for one VM |
 | `isolate <vm>`, `release <vm>` | Drop or restore the VM's tap traffic. Refused without a management allow list; says if it was not enforced |

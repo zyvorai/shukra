@@ -94,6 +94,7 @@ An event carries `seq` (only grows), `product: "shukra"`, `kind`, `ts`, `vm` (`n
 | `guest_connect` | The guest sent a TCP SYN. `src` is the guest, `dst` and `dport` where to, `proto: "tcp"`, `iface`, `blocked` | `guest-tap` |
 | `guest_flow` | The guest started a new UDP flow. `proto: "udp"` | `guest-tap` |
 | `guest_inbound` | A TCP SYN was sent **to** the guest. `src` is the peer, `dst` the guest, `dport` the guest port | `guest-tap` |
+| `guest_dns` | The guest asked for a name over UDP port 53. `dns_name` (lower-case), `qtype`, `src` the guest, `dst` the resolver, `dport: 53`, `blocked`, and `dns_truncated` when the name did not fit | `guest-tap` |
 | `detection` | A rule fired. `rule`, `severity`, `message`, and the attribution of the event that triggered it | as the trigger |
 | `vm_start`, `vm_stop` | A QEMU process appeared or went away | `qemu-process` |
 

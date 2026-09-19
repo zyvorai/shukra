@@ -151,7 +151,7 @@ func (a *Agent) Ingest(e event.Event) {
 		e.TS = time.Now().UTC()
 	}
 	cfg := a.cfg.Load()
-	if e.Kind == event.KindGuestConnect || e.Kind == event.KindGuestFlow || e.Kind == event.KindGuestInbound {
+	if e.Kind == event.KindGuestConnect || e.Kind == event.KindGuestFlow || e.Kind == event.KindGuestInbound || e.Kind == event.KindGuestDNS {
 		a.ingestGuest(e, cfg)
 		return
 	}
@@ -226,6 +226,10 @@ func (a *Agent) connectRules(e event.Event, cfg *detect.Config, detection func(r
 		a.inboundRules(e, cfg, detection)
 		return
 	}
+	if e.Kind == event.KindGuestDNS {
+		a.dnsRules(e, cfg, detection)
+		return
+	}
 	if e.Dst != "" {
 		if rule, ok := cfg.Watch.Match(net.ParseIP(e.Dst)); ok {
 			// TCP and UDP to the same address are different facts, so an alert for one
@@ -241,6 +245,16 @@ func (a *Agent) connectRules(e event.Event, cfg *detect.Config, detection func(r
 		}
 		a.raise(e.TS, cfg, fmt.Sprintf("port|%s|%s|%s|%s|%s:%d", rule.Name, e.VM.Name, e.Attribution, proto, e.Dst, e.DPort),
 			detection(rule.Name, rule.Severity, fmt.Sprintf("%s port %d%s to %s", rule.Name, e.DPort, note, e.Dst)))
+	}
+}
+
+// dnsRules applies the dns rules to a name the guest looked up. Only the name is judged: the resolver's
+// address is not a destination the guest connected to, and the flow itself already produced its own
+// guest_flow event that the destination and port rules see. Blocked or not, a lookup is a lookup.
+func (a *Agent) dnsRules(e event.Event, cfg *detect.Config, detection func(rule, severity, msg string) event.Event) {
+	if rule, ok := cfg.MatchDNS(e.DNSName); ok {
+		a.raise(e.TS, cfg, "dns|"+rule.Name+"|"+e.VM.Name+"|"+e.DNSName,
+			detection(rule.Name, rule.Severity, fmt.Sprintf("%s: looked up %s (%s)", rule.Name, e.DNSName, e.QType)))
 	}
 }
 

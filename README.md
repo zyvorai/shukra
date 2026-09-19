@@ -24,7 +24,7 @@ Observe. Protect. Explain.
 |---|---|
 | Why is this VM slow right now? | `shukractl explain <vm>`: ranked host-side causes over the last minute, with evidence and a list of what Shukra cannot see |
 | Is the host, the disk or a noisy neighbour to blame? | `trace kvm`, `trace sched`, `trace block`: exit handling time, run-queue delay per vCPU thread, block latency histograms |
-| What is this VM connecting to, and who connects to it? | `guest_connect`, `guest_flow` and `guest_inbound` events, seen on the VM's own tap |
+| What is this VM connecting to, who connects to it, and what names does it look up? | `guest_connect`, `guest_flow`, `guest_inbound` and `guest_dns` events, seen on the VM's own tap |
 | Did the connection get an answer? | `trace tap`: every TCP handshake ends as accepted, refused, never answered or blocked, with the handshake time |
 | Is something dropping this VM's traffic, or is it Shukra? | `trace drops` and `doctor`: what the kernel dropped on the tap, by reason, with Shukra's own isolation subtracted |
 | Is a guest not reading its NIC? | `doctor` (`vm-nic-not-consumed`) and `explain` (`guest_not_reading_nic`) |
@@ -41,7 +41,7 @@ Six programs. Hot paths stay in maps. The ring buffer is only for discrete event
 | `sched` | wakeup, switch, exec, exit | On-CPU time, run-queue delay (histogram, per thread), exec and exit events for QEMU children |
 | `block` | `block_rq_issue`, `block_rq_complete` | Latency histogram, requests, bytes and the slowest request, per direction |
 | `net` | `tcp_v4_connect`, `tcp_v6_connect`, sampled `tcp_retransmit_skb` | Exact connect counts (IPv4 and IPv6) and 1-in-64 retransmit samples: **the QEMU process's** sockets |
-| `tap` | TCX on each VM tap (Linux 6.6+) | The guest's own traffic: per-tap counters; an event per TCP connect, per new UDP flow and per connection made *to* the guest; what became of each TCP handshake (accepted, refused, never answered, blocked) and how long it took; and isolation |
+| `tap` | TCX on each VM tap (Linux 6.6+) | The guest's own traffic: per-tap counters; an event per TCP connect, per new UDP flow and per connection made *to* the guest, and the name in each DNS query over UDP/53; what became of each TCP handshake (accepted, refused, never answered, blocked) and how long it took; and isolation |
 | `drops` | `skb:kfree_skb` on each VM tap (Linux 5.17+) | What the kernel dropped on the tap and why, by the kernel's own reason and the function that freed it, with Shukra's own isolation drops subtracted, so another program dropping a VM's traffic (Cilium, a dataplane, a `tc` filter) or a guest not reading its NIC is named |
 
 Percentiles come from log2 buckets and can read up to 2x high. See [What each program measures](docs/signals.md) for every caveat.
@@ -51,7 +51,7 @@ Identity comes from the host: the QEMU command line (`-name` / `guest=`, `-uuid`
 ## What this release will not pretend
 
 - **Host TCP is QEMU's, not the guest's.** `tcp_v4_connect` and `tcp_v6_connect` events are `attribution: "qemu-process"` and `guest_attributed: false`. Only events seen on a VM's tap are `guest_attributed: true`, and only for a tap that belongs to a VM in the current scan. A tap no VM owns stays unattributed. See [attribution](docs/attribution.md).
-- **No agent, no payloads.** Shukra never runs inside a guest and never reads application data. It can say *which VM and which address*, not *which process inside the guest*. CPU steal is not measured.
+- **No agent, no payloads.** Shukra never runs inside a guest and never reads application data. The one thing it reads beyond headers is the name in a plain DNS query over UDP port 53 (`-dns-events=false` turns that off); answers, DNS over TCP, TLS or HTTPS, and everything else are not read. It can say *which VM and which address*, not *which process inside the guest*. CPU steal is not measured.
 - **Isolation is real, and conditional.** `shukractl isolate` really drops the VM's tap traffic, but only with an explicit management allow list (`-isolate-allow`), only on Linux 6.6 or newer, and `applied` is `true` only after the kernel took the change. Without an allow list it is refused. Enforcement survives a daemon crash, restart or stop when `/sys/fs/bpf` is a bpf filesystem.
 - **A VM Shukra cannot see says so.** A VM on user-mode networking, or whose tap is in another network namespace (fluxvm's default), has no guest traffic, no drop counts and cannot be isolated. `shukractl doctor` names it.
 - **A program that is not measuring reports detached, with the reason.** A build without root, clang, or `/sys/kernel/btf/vmlinux` still serves discovered VMs. It never invents a counter, and a VM with no measurement has no series, not a zero.
@@ -136,6 +136,8 @@ ports:
   - {port: 25, name: smtp-egress}                    # a connect the VM made (the default)
   - {port: 53, name: dns-out, proto: udp}            # tcp (default), udp or any
   - {port: 22, name: ssh-into-vm, dir: in}           # a connection made TO the VM
+dns:                             # a name the guest looked up (UDP port 53): suffix, exact or contains
+  - {name: crypto-pool, suffix: nanopool.org, severity: high}
 thresholds:                      # a per-VM metric over a window
   - {name: vm-traffic-dropped, metric: guest_drops_per_sec, value: 5, window: 30s}
   - {name: slow-disk, metric: block_write_p99_ms, value: 50}

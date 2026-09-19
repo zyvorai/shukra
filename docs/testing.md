@@ -35,6 +35,7 @@ It has a section per behaviour, each with exact assertions:
 6. UDP flows: one event per flow, none for multicast, IPv6, both rule kinds, isolation dropping UDP.
 7. Drops: a real `tc` filter drops the guest's packets and they are counted as `other`; then isolation drops them and they are **not**.
 8. TCP handshakes both ways: open, closed, silently dropped, retransmitted and isolated ports, IPv4 and IPv6, with the identity checked exactly.
+9. DNS names: case folding, repeats announced once, A and AAAA, IPv6, a name too long for the copy, malformed and non-query packets ignored, a `dns` rule, a blocked query, and `-dns-events=false` and back across daemon restarts.
 
 ### Never run it on a live hypervisor
 

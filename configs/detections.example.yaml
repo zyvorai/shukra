@@ -31,6 +31,18 @@ destinations:
 #     name: ssh-into-vm
 #     dir: in
 
+# Names a guest looks up over DNS (UDP port 53, seen on its tap). Give exactly one of
+# suffix (the name and everything under it), exact, or contains. Names are compared in
+# lower case. A DNS name identifies what a VM is doing, so run shukrad with
+# -dns-events=false if you do not want names recorded at all.
+# dns:
+#   - name: crypto-pool
+#     suffix: nanopool.org
+#     severity: high
+#   - name: paste-site
+#     contains: pastebin
+#     severity: medium
+
 # Process names that may start under a QEMU process without an alert, matched as
 # a lowercase prefix. QEMU's own threads are always allowed.
 # exec_allow:

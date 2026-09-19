@@ -288,7 +288,11 @@ func printEvent(e map[string]any, asJSON bool, out io.Writer) error {
 	if asJSON {
 		return json.NewEncoder(out).Encode(e)
 	}
-	_, err := fmt.Fprintf(out, "%v  %v  %v  vm=%v  dst=%v\n", e["ts"], e["kind"], e["attribution"], nested(e, "vm", "name"), e["dst"])
+	extra := ""
+	if n, ok := e["dns_name"].(string); ok {
+		extra = fmt.Sprintf("  name=%v  qtype=%v", n, e["qtype"])
+	}
+	_, err := fmt.Fprintf(out, "%v  %v  %v  vm=%v  dst=%v%s\n", e["ts"], e["kind"], e["attribution"], nested(e, "vm", "name"), e["dst"], extra)
 	return err
 }
 
