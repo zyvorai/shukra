@@ -25,15 +25,25 @@ static __always_inline __u32 log2_bucket(__u64 v) {
 	return r;
 }
 
+#define FAMILY_INET 2
+#define FAMILY_INET6 10
+
+/* One discrete event. Userspace decodes this by offset (internal/observe/decode.go),
+   so every field is explicitly placed and there is no implicit padding. */
 struct ring_event {
-	__u64 ts_ns;
-	__u32 pid;
-	__u32 tgid;
-	__u32 kind;
-	__u16 dport;
-	__u32 dst_be;
-	__u64 aux_ns;
-	__u8 comm[16];
-};
+	__u64 ts_ns;    /* 0 */
+	__u32 pid;      /* 8 */
+	__u32 tgid;     /* 12 */
+	__u32 kind;     /* 16 */
+	__u16 dport;    /* 20 */
+	__u16 family;   /* 22: FAMILY_INET or FAMILY_INET6 for network events, else 0 */
+	__u32 dst_be;   /* 24: IPv4 destination, network order */
+	__u32 ppid;     /* 28: tgid of the parent process, for exec and exit, else 0 */
+	__u64 aux_ns;   /* 32 */
+	__u8 comm[16];  /* 40 */
+	__u8 dst6[16];  /* 56: IPv6 destination when family is FAMILY_INET6 */
+};                      /* 72 */
+
+_Static_assert(sizeof(struct ring_event) == 72, "ring_event layout changed: update internal/observe/decode.go");
 
 #endif

@@ -270,3 +270,49 @@ func TestStrictReloadRejectsTypoAndKeepsRules(t *testing.T) {
 		t.Fatal("old rules lost after a rejected reload")
 	}
 }
+
+func TestExecAndExitJoinByKernelPPIDWithoutProc(t *testing.T) {
+	// No /proc entries at all: the process is already gone, as short-lived ones are.
+	ag, st, _ := newAgent(t, "")
+	ag.Ingest(event.Event{Kind: event.KindExec, PID: 500, PPID: 100, Comm: "curl"})
+	ag.Ingest(event.Event{Kind: event.KindExit, PID: 500, PPID: 100, Comm: "curl"})
+	evs := st.Events("db")
+	kinds := map[event.Kind]int{}
+	for _, e := range evs {
+		kinds[e.Kind]++
+		if e.GuestAttributed || e.Attribution != event.AttributionQEMU || e.TGID != 100 {
+			t.Fatalf("%+v", e)
+		}
+	}
+	if kinds[event.KindExec] != 1 || kinds[event.KindExit] != 1 || kinds[event.KindDetection] != 1 {
+		t.Fatalf("%v", kinds)
+	}
+	// Only the exec is a detection. An exit is never "unexpected".
+	if d := st.Detections("db"); len(d) != 1 || d[0].Rule != "unexpected-exec" || d[0].PPID != 100 {
+		t.Fatalf("%+v", d)
+	}
+}
+
+func TestKernelPPIDOfAnAllowedProcessIsAttributedButNotFlagged(t *testing.T) {
+	ag, st, _ := newAgent(t, "exec_allow: [backup-agent]\n")
+	ag.Ingest(event.Event{Kind: event.KindExec, PID: 500, PPID: 100, Comm: "backup-agent"})
+	ag.Ingest(event.Event{Kind: event.KindExec, PID: 501, PPID: 100, Comm: "qemu-img"}) // not allowed
+	got := st.Events("db")
+	if len(got) != 3 { // both execs, plus one detection for qemu-img
+		t.Fatalf("%+v", got)
+	}
+	if d := st.Detections("db"); len(d) != 1 || !strings.Contains(d[0].Message, "qemu-img") {
+		t.Fatalf("%+v", d)
+	}
+}
+
+func TestUnrelatedParentIsNotJoined(t *testing.T) {
+	ag, st, _ := newAgent(t, "")
+	ag.Ingest(event.Event{Kind: event.KindExit, PID: 500, PPID: 4321, Comm: "sh"})
+	if len(st.Events("db")) != 0 || len(st.Detections("")) != 0 {
+		t.Fatal("an exit under an unrelated parent was attributed to a VM")
+	}
+	if len(st.Events("")) != 1 {
+		t.Fatal("the event should still be recorded, unattributed")
+	}
+}

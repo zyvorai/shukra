@@ -409,7 +409,10 @@ func (s *State) Net(vm string) []aggregate.NetRow {
 	}
 	seen := map[string]bool{}
 	for i := range rows {
-		rows[i].Connects += counts[rows[i].VM]
+		// The kernel counter and the event count are the same connects seen two
+		// ways, so take the larger. The map is exact; the ring can lose events.
+		// With no program attached only the events exist.
+		rows[i].Connects = max(rows[i].Connects, counts[rows[i].VM])
 		seen[rows[i].VM] = true
 	}
 	for name, n := range counts {

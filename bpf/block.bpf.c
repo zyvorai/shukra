@@ -134,6 +134,7 @@ int shukra_rq_complete(struct trace_event_raw_block_rq_completion *ctx) {
 		struct ring_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
 		if (!e)
 			return 0;
+		__builtin_memset(e, 0, sizeof(*e));
 		e->ts_ns = now;
 		e->pid = pid;
 		e->tgid = bpf_get_current_pid_tgid() >> 32;

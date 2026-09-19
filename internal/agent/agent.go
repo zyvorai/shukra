@@ -140,14 +140,21 @@ func (a *Agent) Ingest(e event.Event) {
 			break
 		}
 	}
+	// exec and exit carry the parent's tgid from the kernel, which is still right
+	// after the process has gone. /proc is only the fallback for an exec without one.
 	unexpected := false
-	if !found && e.Kind == event.KindExec && !allowedExec(e.Comm) && !cfg.AllowsExec(e.Comm) {
-		if ppid, ok := parentPID(a.ProcRoot, e.PID); ok {
+	if !found && (e.Kind == event.KindExec || e.Kind == event.KindExit) {
+		expected := e.Kind != event.KindExec || allowedExec(e.Comm) || cfg.AllowsExec(e.Comm)
+		ppid := e.PPID
+		if ppid == 0 && !expected {
+			ppid, _ = parentPID(a.ProcRoot, e.PID)
+		}
+		if ppid != 0 {
 			for _, vm := range vms {
 				if vm.Owns(ppid) {
 					joined = vm
 					found = true
-					unexpected = true
+					unexpected = !expected
 					break
 				}
 			}

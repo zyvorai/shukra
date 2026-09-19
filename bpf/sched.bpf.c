@@ -67,10 +67,13 @@ static __always_inline struct sched_val *stat(__u32 pid) {
 	return bpf_map_lookup_elem(&sched_stats, &pid);
 }
 
-static __always_inline void emit(__u32 kind, __u32 pid, __u64 aux) {
+static __always_inline void emit(__u32 kind, __u32 pid, __u64 aux, __u32 ppid) {
 	struct ring_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
 	if (!e)
 		return;
+	/* Reserved ring memory is not zeroed. */
+	__builtin_memset(e, 0, sizeof(*e));
+	e->ppid = ppid;
 	e->ts_ns = bpf_ktime_get_ns();
 	e->pid = pid;
 	e->tgid = bpf_get_current_pid_tgid() >> 32;
@@ -114,25 +117,27 @@ int shukra_switch(struct trace_event_raw_sched_switch *ctx) {
 			bpf_map_update_elem(&sched_hist, &hk, &one, BPF_NOEXIST);
 		}
 		if (d >= SCHED_DELAY_NS)
-			emit(KIND_SCHED_DELAY, next, d);
+			emit(KIND_SCHED_DELAY, next, d, 0);
 	}
 	return 0;
 }
 
 /* True when the current task is in a watched QEMU process, or was started by one. */
-static __always_inline int in_watched_process(void) {
+static __always_inline int in_watched_process(__u32 *ppid_out) {
 	struct task_struct *t = (struct task_struct *)bpf_get_current_task();
 	__u32 tgid = bpf_get_current_pid_tgid() >> 32;
 	__u32 ppid = BPF_CORE_READ(t, real_parent, tgid);
+	*ppid_out = ppid;
 	return bpf_map_lookup_elem(&watched, &tgid) || bpf_map_lookup_elem(&watched, &ppid);
 }
 
 SEC("tracepoint/sched/sched_process_exec")
 int shukra_exec(struct trace_event_raw_sched_process_exec *ctx) {
-	if (!in_watched_process())
+	__u32 ppid = 0;
+	if (!in_watched_process(&ppid))
 		return 0;
 	__u32 pid = (__u32)bpf_get_current_pid_tgid();
-	emit(KIND_EXEC, pid, 0);
+	emit(KIND_EXEC, pid, 0, ppid);
 	return 0;
 }
 
@@ -142,8 +147,9 @@ int shukra_exit(struct trace_event_raw_sched_process_template *ctx) {
 	bpf_map_delete_elem(&sched_stats, &pid);
 	bpf_map_delete_elem(&wakeup_ts, &pid);
 	/* The cleanup above is unconditional. Only the event is filtered. */
-	if (!in_watched_process())
+	__u32 ppid = 0;
+	if (!in_watched_process(&ppid))
 		return 0;
-	emit(KIND_EXIT, pid, 0);
+	emit(KIND_EXIT, pid, 0, ppid);
 	return 0;
 }

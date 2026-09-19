@@ -40,10 +40,13 @@ type Event struct {
 	GuestAttributed bool      `json:"guest_attributed"`
 	PID             uint32    `json:"pid,omitempty"`
 	TGID            uint32    `json:"tgid,omitempty"`
-	Comm            string    `json:"comm,omitempty"`
-	Dst             string    `json:"dst,omitempty"`
-	DPort           uint16    `json:"dport,omitempty"`
-	Message         string    `json:"message,omitempty"`
+	// PPID is the tgid of the parent process, read by the kernel program for exec
+	// and exit events. It lets an event be joined to a VM after the process is gone.
+	PPID    uint32 `json:"ppid,omitempty"`
+	Comm    string `json:"comm,omitempty"`
+	Dst     string `json:"dst,omitempty"`
+	DPort   uint16 `json:"dport,omitempty"`
+	Message string `json:"message,omitempty"`
 	// Rule names the detection rule that fired, so a consumer can route on it
 	// without parsing Message.
 	Rule      string `json:"rule,omitempty"`

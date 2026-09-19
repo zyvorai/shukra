@@ -190,6 +190,7 @@ func readBlock(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {
 
 func readRetrans(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {
 	readU32(maps["net_retrans"], func(pid uint32, v uint64) { slot(by, pid).Retransmits += v })
+	readU32(maps["net_connects"], func(pid uint32, v uint64) { slot(by, pid).Connects += v })
 }
 
 func readU32(m *ebpf.Map, fn func(pid uint32, v uint64)) {

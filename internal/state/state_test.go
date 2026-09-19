@@ -160,3 +160,31 @@ func TestSuppressedAndSinkStats(t *testing.T) {
 		t.Fatalf("%d %+v", st.Suppressed(), st.SinkStats())
 	}
 }
+
+func TestNetConnectsTakeTheLargerOfKernelCounterAndEvents(t *testing.T) {
+	st := New("node-07")
+	st.SetVMs([]identity.VM{{Name: "db", PID: 100, Threads: []int{100}}})
+	connect := func() {
+		st.AddEvent(event.Event{Kind: event.KindTCPConnect, VM: event.VM{Name: "db"}, PID: 100, Dst: "1.1.1.1"})
+	}
+	connect()
+	connect()
+	// No program attached: only the two events exist.
+	if rows := st.Net("db"); len(rows) != 1 || rows[0].Connects != 2 {
+		t.Fatalf("events only: %+v", rows)
+	}
+	// The kernel counter saw 5, and the ring delivered 2 of them. The same
+	// connects seen two ways must not be added together.
+	st.SetCounters(map[uint32]aggregate.Counters{100: {Connects: 5}})
+	if rows := st.Net("db"); len(rows) != 1 || rows[0].Connects != 5 {
+		t.Fatalf("counter ahead of events: %+v", rows)
+	}
+	// If the events are somehow ahead of a stale counter, show what was seen.
+	connect()
+	connect()
+	connect()
+	connect()
+	if rows := st.Net("db"); rows[0].Connects != 6 {
+		t.Fatalf("events ahead of counter: %+v", rows)
+	}
+}
