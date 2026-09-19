@@ -10,6 +10,9 @@ Type=simple
 # (for example "-tls-cert /etc/shukra/tls.crt -tls-key /etc/shukra/tls.key
 # -webhook-url https://...") live here, readable by root only. Keys are kept out of
 # this file because `systemctl show` prints a unit's Environment= to every user.
+# An empty default keeps systemd from noting an unset variable on every start. The
+# file below overrides it.
+Environment=SHUKRA_EXTRA_ARGS=
 EnvironmentFile=-/etc/shukra/env
 ExecStart=@BIN_DIR@/shukrad -listen 0.0.0.0:30970 -web @WEB_DIR@ -watchlist /etc/shukra/detections.yaml -data-dir /var/lib/shukra $SHUKRA_EXTRA_ARGS
 ExecReload=/bin/kill -HUP $MAINPID
