@@ -1,0 +1,67 @@
+//go:build ignore
+
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
+#include "event.h"
+
+char LICENSE[] SEC("license") = "Dual BSD/GPL";
+
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, 8192);
+	__type(key, __u32);
+	__type(value, __u64);
+} net_retrans SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 1 << 20);
+} events SEC(".maps");
+
+static __always_inline void emit_net(__u32 kind, __u32 dst_be, __u16 dport) {
+	struct ring_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+	if (!e)
+		return;
+	__u64 id = bpf_get_current_pid_tgid();
+	e->ts_ns = bpf_ktime_get_ns();
+	e->pid = (__u32)id;
+	e->tgid = id >> 32;
+	e->kind = kind;
+	e->dst_be = dst_be;
+	e->dport = dport;
+	bpf_get_current_comm(&e->comm, sizeof(e->comm));
+	bpf_ringbuf_submit(e, 0);
+}
+
+SEC("kprobe/tcp_v4_connect")
+int BPF_KPROBE(shukra_tcp_v4_connect, struct sock *sk, struct sockaddr *uaddr) {
+	struct sockaddr_in addr = {};
+	if (bpf_probe_read_kernel(&addr, sizeof(addr), uaddr) < 0)
+		return 0;
+	emit_net(KIND_TCP_CONNECT, addr.sin_addr.s_addr, __builtin_bswap16(addr.sin_port));
+	return 0;
+}
+
+SEC("tracepoint/tcp/tcp_retransmit_skb")
+int shukra_retrans(struct trace_event_raw_tcp_event_sk_skb *ctx) {
+	__u32 pid = (__u32)bpf_get_current_pid_tgid();
+	__u64 *n = bpf_map_lookup_elem(&net_retrans, &pid);
+	if (n)
+		__sync_fetch_and_add(n, 1);
+	else {
+		__u64 one = 1;
+		bpf_map_update_elem(&net_retrans, &pid, &one, BPF_NOEXIST);
+	}
+	/* One in 64 retransmits becomes a flight-recorder sample, not every skb. */
+	if ((bpf_get_prandom_u32() & 63) != 0)
+		return 0;
+	__u16 dport = ctx->dport;
+	__u32 dst = ((__u32)ctx->daddr[0]) |
+		    ((__u32)ctx->daddr[1] << 8) |
+		    ((__u32)ctx->daddr[2] << 16) |
+		    ((__u32)ctx->daddr[3] << 24);
+	emit_net(KIND_TCP_RETRANS, dst, dport);
+	return 0;
+}

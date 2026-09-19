@@ -1,0 +1,72 @@
+# Run it locally
+
+You can build and browse Shukra on a laptop. Programs will report detached. That is correct. The daemon still scans `/proc` for `qemu-system-*` and serves the API. It does not fill in counters it did not collect.
+
+## Build
+
+Go 1.25 or newer. Node 22 if you want the console bundle.
+
+```bash
+make build
+make web
+```
+
+`make build` writes `bin/shukrad` and `bin/shukractl`. `make web` runs the console tests and writes `web/dist`.
+
+## Start the daemon
+
+```bash
+./bin/shukrad -listen 127.0.0.1:30970 -web web/dist
+```
+
+If `SHUKRA_API_KEY` is empty, the log line is the token: `shukra`. Set your own before you listen on anything but loopback.
+
+```bash
+export SHUKRA_API_KEY="$(openssl rand -hex 16)"
+./bin/shukrad -listen 127.0.0.1:30970 -web web/dist -watchlist configs/detections.example.yaml
+```
+
+Flags:
+
+| Flag | Default | |
+|---|---|---|
+| `-listen` | `127.0.0.1:30970` | API and console |
+| `-proc` | `/proc` | Where QEMU is discovered |
+| `-watchlist` | empty | Destination YAML. No file means no detections |
+| `-web` | `web/dist` | Console bundle. Missing directory means API only |
+
+## Ask the CLI
+
+In another terminal:
+
+```bash
+export SHUKRA_URL=http://127.0.0.1:30970
+export SHUKRA_API_KEY=shukra   # or the token you set
+./bin/shukractl status
+./bin/shukractl programs
+./bin/shukractl vms
+```
+
+`programs` should list `kvm`, `sched`, `block`, and `net`, each `detached`, with no invented numbers. `vms` is empty unless a `qemu-system` process is actually running on this machine.
+
+The same token signs you into the console at `http://127.0.0.1:30970`.
+
+## Console without a daemon
+
+Useful for layout work.
+
+```bash
+cd web
+VITE_FIXTURE=1 npm run dev
+```
+
+Open `http://127.0.0.1:5173` and sign in with `shukra`. The pages are a fixture. Do not treat them as a live hypervisor.
+
+## Tests
+
+```bash
+make test
+npm --prefix web test
+```
+
+Next: [attach the traces](02-attach-traces.md) on Linux, or [deploy](03-deploy.md) straight to a hypervisor.

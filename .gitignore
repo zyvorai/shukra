@@ -1,0 +1,13 @@
+bin/
+web/node_modules/
+web/dist/
+bpf/vmlinux.h
+bpf/*.o
+internal/bpfgen/*_bpfel.go
+internal/bpfgen/*_bpfeb.go
+internal/bpfgen/*_bpfel_*.go
+internal/bpfgen/*_bpfeb_*.go
+internal/bpfgen/*.o
+.env
+.env.*
+.DS_Store
