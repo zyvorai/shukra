@@ -62,7 +62,7 @@ func routes(st *state.State) *http.ServeMux {
 		writeJSON(w, http.StatusOK, st.Status())
 	})
 	mux.HandleFunc("GET /api/v1/vms", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"vms": st.VMs()})
+		writeJSON(w, http.StatusOK, map[string]any{"vms": orEmpty(st.VMs())})
 	})
 	mux.HandleFunc("GET /api/v1/events", func(w http.ResponseWriter, r *http.Request) {
 		since, err := parseSince(r.URL.Query().Get("since"))
@@ -115,25 +115,25 @@ func routes(st *state.State) *http.ServeMux {
 		writeJSON(w, http.StatusOK, map[string]any{"programs": st.Programs()})
 	})
 	mux.HandleFunc("GET /api/v1/trace/kvm", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"rows": st.KVM(r.URL.Query().Get("vm"))})
+		writeJSON(w, http.StatusOK, map[string]any{"rows": orEmpty(st.KVM(r.URL.Query().Get("vm")))})
 	})
 	mux.HandleFunc("GET /api/v1/trace/sched", func(w http.ResponseWriter, r *http.Request) {
 		vm := r.URL.Query().Get("vm")
-		out := map[string]any{"rows": st.Sched(vm)}
+		out := map[string]any{"rows": orEmpty(st.Sched(vm))}
 		if r.URL.Query().Get("threads") == "1" {
 			out["threads"] = st.SchedThreads(vm)
 		}
 		writeJSON(w, http.StatusOK, out)
 	})
 	mux.HandleFunc("GET /api/v1/trace/block", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"rows": st.Block(r.URL.Query().Get("vm"))})
+		writeJSON(w, http.StatusOK, map[string]any{"rows": orEmpty(st.Block(r.URL.Query().Get("vm")))})
 	})
 	mux.HandleFunc("GET /api/v1/trace/net", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"attribution":     "qemu-process",
 			"guestAttributed": false,
 			"note":            "These are connects from the QEMU process, not the guest.",
-			"rows":            st.Net(r.URL.Query().Get("vm")),
+			"rows":            orEmpty(st.Net(r.URL.Query().Get("vm"))),
 		})
 	})
 	mux.HandleFunc("GET /api/v1/explain", func(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +179,7 @@ func routes(st *state.State) *http.ServeMux {
 			"attribution":     "guest-tap",
 			"guestAttributed": true,
 			"note":            "Traffic seen on the host side of each VM tap: from_guest is what the guest sent, to_guest is what was sent to it.",
-			"rows":            st.Taps(r.URL.Query().Get("vm")),
+			"rows":            orEmpty(st.Taps(r.URL.Query().Get("vm"))),
 		})
 	})
 	return mux
@@ -289,4 +289,13 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(v)
+}
+
+// orEmpty makes a list that is empty encode as [] and not null, so a client can take its
+// length or loop over it without a special case for a daemon that has no VMs yet.
+func orEmpty[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
 }
