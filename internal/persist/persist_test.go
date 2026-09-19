@@ -192,3 +192,62 @@ func TestAttachRefusesUnusableDir(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 }
+
+func TestReleaseAllRecordsAReleaseSoTheNextStartDoesNotReIsolate(t *testing.T) {
+	dir := t.TempDir()
+	st := state.New("node-07")
+	h, err := Attach(st, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// db was isolated and stays so. cache was isolated then released. web was refused.
+	// mail was only partly isolated, which still counts as contained.
+	st.Restore(nil, nil, nil)
+	for _, iso := range []state.Isolation{
+		{VM: "db", Applied: true, Audit: state.Audit{Action: "isolate", VM: "db", Result: "applied"}},
+		{VM: "cache", Applied: true, Audit: state.Audit{Action: "isolate", VM: "cache", Result: "applied"}},
+		{VM: "cache", Applied: true, Audit: state.Audit{Action: "release", VM: "cache", Result: "applied"}},
+		{VM: "web", Audit: state.Audit{Action: "isolate", VM: "web", Result: "refused"}},
+		{VM: "mail", Audit: state.Audit{Action: "isolate", VM: "mail", Result: "partial"}},
+	} {
+		h.Isolation(iso)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := RecordReleaseAll(dir, "shukrad -detach-all")
+	if err != nil || n != 2 {
+		t.Fatalf("released %d (want db and mail): %v", n, err)
+	}
+	// A restarted daemon reads the trail back. Nothing is active, so nothing is re-applied.
+	st2 := state.New("node-07")
+	h2, err := Attach(st2, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h2.Close()
+	if a := st2.ActiveIsolations(); len(a) != 0 {
+		t.Fatalf("still active after detach-all: %v", a)
+	}
+	var lifted int
+	for _, iso := range st2.Isolations() {
+		if iso.Audit.Actor == "shukrad -detach-all" {
+			lifted++
+			if iso.Audit.Action != "release" || !iso.Applied {
+				t.Fatalf("%+v", iso)
+			}
+		}
+	}
+	if lifted != 2 {
+		t.Fatalf("%d release records in the trail", lifted)
+	}
+	// Running it again has nothing left to release, and records nothing.
+	if n, err := RecordReleaseAll(dir, "shukrad -detach-all"); err != nil || n != 0 {
+		t.Fatalf("second run: %d %v", n, err)
+	}
+	// With no trail at all it is a no-op, not an error.
+	if n, err := RecordReleaseAll(t.TempDir(), "x"); err != nil || n != 0 {
+		t.Fatalf("empty dir: %d %v", n, err)
+	}
+}

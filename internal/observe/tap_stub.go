@@ -8,6 +8,12 @@ import (
 	"github.com/zyvorai/shukra/internal/event"
 )
 
+// ShutdownTaps has nothing to detach in this build.
+func ShutdownTaps() {}
+
+// DetachAllTaps has nothing to detach in this build.
+func DetachAllTaps() int { return 0 }
+
 // SyncTaps does nothing in this build: there is no program to attach.
 func SyncTaps([]string) {}
 
@@ -32,6 +38,7 @@ func (*Enforcer) Available() (bool, string) {
 	return false, "this build has no BPF programs, so nothing can be enforced"
 }
 func (*Enforcer) AllowList() []string                { return nil }
+func (*Enforcer) Durable() bool                      { return false }
 func (*Enforcer) Isolated(string) bool               { return false }
 func (*Enforcer) Isolate([]string) ([]string, error) { return nil, errNoBPF }
 func (*Enforcer) Release([]string) ([]string, error) { return nil, errNoBPF }

@@ -40,7 +40,22 @@ func main() {
 	isolateAllow := flag.String("isolate-allow", "", "comma-separated CIDRs an isolated VM can still reach (your management and monitoring networks). Without it isolate is refused")
 	noAuth := flag.Bool("no-auth", false, "serve the API without a bearer key")
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	detachAll := flag.Bool("detach-all", false, "remove every pinned tap program and its isolation, then exit. Works while the daemon is stopped")
 	flag.Parse()
+	if *detachAll {
+		n := observe.DetachAllTaps()
+		fmt.Printf("detached %d tap links; every isolated VM is open again\n", n)
+		if *dataDir != "" {
+			r, err := persist.RecordReleaseAll(*dataDir, "shukrad -detach-all")
+			if err != nil {
+				log.Fatalf("recording the release in %s: %v", *dataDir, err)
+			}
+			fmt.Printf("recorded a release for %d VMs, so a restart will not isolate them again\n", r)
+		} else {
+			fmt.Println("no -data-dir given: the daemon's record of these isolations is unchanged, and a restart will re-apply them. Pass -data-dir to record the release")
+		}
+		return
+	}
 	if *showVersion {
 		fmt.Printf("%s %s\n", version.Product, version.Version)
 		return
@@ -221,6 +236,7 @@ func main() {
 	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		log.Fatal(serveErr)
 	}
+	observe.ShutdownTaps()
 	if alerts != nil {
 		alerts.Close(5 * time.Second)
 	}

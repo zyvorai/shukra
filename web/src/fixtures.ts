@@ -57,7 +57,7 @@ export function fixtureResponse(path: string, init?: RequestInit): unknown {
   }
   if (url.pathname === '/api/v1/trace/block') return { rows: filter(fixture.block, vm) };
   if (url.pathname === '/api/v1/security') {
-    return { vm: vm || '', detections: fixture.events.filter((e) => e.kind === 'detection'), enforcement: 'not_attached', allowList: [], reason: 'Fixture. No management allow list is configured, so isolate would be refused.' };
+    return { vm: vm || '', detections: fixture.events.filter((e) => e.kind === 'detection'), enforcement: 'not_attached', allowList: [], durable: false, reason: 'Fixture. No management allow list is configured, so isolate would be refused.' };
   }
   if ((url.pathname === '/api/v1/isolate' || url.pathname === '/api/v1/release') && init?.method === 'POST') {
     const action = url.pathname.endsWith('release') ? 'release' : 'isolate';

@@ -81,6 +81,6 @@ shukractl isolate osboxes-debian
 
 `security` is the destination watchlist. A hit means the QEMU process connected to a CIDR in the YAML. See [the watchlist tutorial](06-watchlist.md).
 
-`isolate` is a POST that does something. With the tap program attached and a management allow list configured (`shukrad -isolate-allow ...`), it drops the VM's tap traffic except ARP, IPv6 neighbour discovery and that list, and prints `applied true` with the taps it changed. `release` lifts it. Without an allow list it is refused and prints the reason, and `applied` stays `false`. `applied` is the daemon's word, set only after the kernel took the change, so a runbook can trust it. Isolation holds while `shukrad` runs and is re-applied after a restart, but the tap is open while the daemon is down. See [Guest traffic and isolation](../tap.md).
+`isolate` is a POST that does something. With the tap program attached and a management allow list configured (`shukrad -isolate-allow ...`), it drops the VM's tap traffic except ARP, IPv6 neighbour discovery and that list, and prints `applied true` with the taps it changed. `release` lifts it. Without an allow list it is refused and prints the reason, and `applied` stays `false`. `applied` is the daemon's word, set only after the kernel took the change, so a runbook can trust it. Isolation is pinned in the kernel: it survives a daemon crash or restart, and `shukrad -detach-all` lifts it when the daemon is down. See [Guest traffic and isolation](../tap.md).
 
 Next: the same facts in the [console](05-console.md).

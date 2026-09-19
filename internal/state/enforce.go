@@ -16,6 +16,9 @@ type Enforcer interface {
 	// AllowList is the management networks an isolated VM can still reach.
 	AllowList() []string
 	Isolated(tap string) bool
+	// Durable says whether enforcement outlives the daemon: true when the tap
+	// program's links and maps are pinned, false when it runs unpinned.
+	Durable() bool
 	// Isolate and Release return the taps they changed, and an error naming any they could not.
 	Isolate(taps []string) ([]string, error)
 	Release(taps []string) ([]string, error)
@@ -85,6 +88,14 @@ func (s *State) Taps(vm string) []TapRow {
 	return out
 }
 
+// Durable reports whether isolation outlives the daemon.
+func (s *State) Durable() bool {
+	s.mu.RLock()
+	e := s.enforcer
+	s.mu.RUnlock()
+	return e != nil && e.Durable()
+}
+
 // Enforcement says how isolation is enforced: "tcx" when it can be, and
 // "not_attached" otherwise with the reason.
 func (s *State) Enforcement() (mode string, allow []string, reason string) {
@@ -152,7 +163,12 @@ func (s *State) act(action, vmName, actor string) Isolation {
 			case err == nil && len(done) == len(vm.Taps):
 				rec.Applied, rec.Enforcement, rec.Audit.Result = true, "tcx", "applied"
 				if action == "isolate" {
-					rec.Reason = "Traffic to and from " + strings.Join(done, ", ") + " is dropped, except ARP, IPv6 neighbour discovery and " + strings.Join(enf.AllowList(), ", ") + ". This holds while shukrad runs: it is re-applied after a restart, but the tap is open while the daemon is down."
+					rec.Reason = "Traffic to and from " + strings.Join(done, ", ") + " is dropped, except ARP, IPv6 neighbour discovery and " + strings.Join(enf.AllowList(), ", ") + "."
+					if enf.Durable() {
+						rec.Reason += " It stays enforced if shukrad stops or crashes. Lift it with `shukractl release`, or with the daemon down, `shukrad -detach-all`."
+					} else {
+						rec.Reason += " This holds while shukrad runs: it is re-applied after a restart, but the tap is open while the daemon is down, because there is no bpf filesystem to pin it on."
+					}
 				} else {
 					rec.Reason = "Isolation lifted on " + strings.Join(done, ", ") + "."
 				}

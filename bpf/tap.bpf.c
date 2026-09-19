@@ -48,6 +48,7 @@ struct tap_stat {
 };
 
 struct {
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
 	__uint(type, BPF_MAP_TYPE_PERCPU_HASH);
 	__uint(max_entries, 1024);
 	__type(key, __u32); /* ifindex */
@@ -61,6 +62,7 @@ struct tap_policy {
 };
 
 struct {
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, 1024);
 	__type(key, __u32);
@@ -80,6 +82,7 @@ struct lpm6_key {
 };
 
 struct {
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
 	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
 	__uint(max_entries, 256);
 	__uint(map_flags, BPF_F_NO_PREALLOC);
@@ -88,6 +91,7 @@ struct {
 } allow4 SEC(".maps");
 
 struct {
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
 	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
 	__uint(max_entries, 256);
 	__uint(map_flags, BPF_F_NO_PREALLOC);
@@ -101,6 +105,7 @@ struct rate {
 };
 
 struct {
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, 1024);
 	__type(key, __u32);
@@ -123,6 +128,7 @@ struct tap_event {
 _Static_assert(sizeof(struct tap_event) == 56, "tap_event layout changed: update internal/observe/tap.go");
 
 struct {
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 18);
 } tap_events SEC(".maps");

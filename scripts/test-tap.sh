@@ -27,7 +27,7 @@ if [ -z "$BIN" ]; then
 fi
 BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
 cleanup() {
-  sudo pkill -f "$BIN -listen" 2>/dev/null; sudo pkill -f "qemu-system-x86_64 .*(taptest|tunvm)" 2>/dev/null; sudo pkill -f "$D/holder.py" 2>/dev/null; sudo ip link del tapx 2>/dev/null; kill "$HTTP_PID" 2>/dev/null
+  sudo pkill -f "$BIN -listen" 2>/dev/null; sudo "$BIN" -detach-all >/dev/null 2>&1; sudo pkill -f "qemu-system-x86_64 .*(taptest|tunvm)" 2>/dev/null; sudo pkill -f "$D/holder.py" 2>/dev/null; sudo ip link del tapx 2>/dev/null; kill "$HTTP_PID" 2>/dev/null
   sudo ip netns del g1 2>/dev/null; sudo ip link del vethh 2>/dev/null; sudo rm -rf $D
 }
 trap cleanup EXIT
@@ -112,10 +112,11 @@ T=$(api $U/api/v1/trace/tap)
 check "the tap reports isolated with dropped packets" "echo '$T' | J \"d['rows'][0]['isolated'] and d['rows'][0]['droppedPackets']>0\" | grep -q True"
 check "security shows enforcement tcx and the allow list" "api '$U/api/v1/security' | J \"d['enforcement']=='tcx' and '10.99.0.1/32' in d['allowList']\" | grep -q True"
 
-echo "== 4. isolation survives a daemon restart"
+echo "== 4. isolation survives a daemon restart (the links are pinned, so it is never open)"
 stopd
 start -isolate-allow 10.99.0.1/32,fd99::1/128
-check "the daemon re-applied the isolation" "grep -q 'isolation re-applied for taptest' $D/daemon.log"
+check "the restarted daemon reports the VM still isolated (it adopted the enforcement, it did not need to redo it)" \
+  "api $U/api/v1/trace/tap | J \"[r['isolated'] for r in d['rows'] if r['vm']=='taptest'][0]\" | grep -q True"
 check "the non-allowed address is still dropped after the restart" "[ \"\$(code4 10.99.0.3)\" = 000 ]"
 check "the allowed address is still reachable" "[ \"\$(code4 10.99.0.1)\" = 200 ]"
 
@@ -127,6 +128,57 @@ check "the non-allowed address is reachable again" "[ \"\$(code4 10.99.0.3)\" = 
 stopd
 start -isolate-allow 10.99.0.1/32,fd99::1/128
 check "a released VM is not re-isolated by a restart" "[ \"\$(code4 10.99.0.3)\" = 200 ]"
+
+echo "== 8. enforcement outlives the daemon"
+ALLOW="-isolate-allow 10.99.0.1/32,fd99::1/128"
+mine() { sudo bpftool net 2>/dev/null | grep -E "^vethh" | grep -c shukra_tap; }
+pins() { sudo sh -c 'ls /sys/fs/bpf/shukra/tap/link-* 2>/dev/null | wc -l'; }
+api -X POST -d '{"vm":"taptest"}' $U/api/v1/isolate >/dev/null; sleep 1
+check "isolated before the crash: the non-allowed address is dropped" "[ \"\$(code4 10.99.0.3)\" = 000 ]"
+check "the kernel holds two links on the tap, and they are pinned" "[ \"\$(mine)\" = 2 ] && [ \"\$(pins)\" -ge 2 ]"
+# A crash. No graceful shutdown runs, so nothing gets a chance to clean up.
+sudo pkill -9 -f "$BIN -listen"; sleep 1
+check "the daemon is really gone" "! pgrep -f '$BIN -listen' >/dev/null"
+check "AFTER THE CRASH the VM is still cut off (fail closed)" "[ \"\$(code4 10.99.0.3)\" = 000 ]"
+check "after the crash the allowed management address is still reachable" "[ \"\$(code4 10.99.0.1)\" = 200 ]"
+check "the links are still attached in the kernel" "[ \"\$(mine)\" = 2 ]"
+start $ALLOW
+check "the restarted daemon adopted the links: tap attached, and says it survives restarts" \
+  "api $U/api/v1/programs | J \"[p['detail'] for p in d['programs'] if p['name']=='tap'][0]\" | grep -q 'survives a daemon restart'"
+check "it reads the enforcement back from the kernel: the tap reports isolated" \
+  "api $U/api/v1/trace/tap | J \"[r['isolated'] for r in d['rows'] if r['vm']=='taptest'][0]\" | grep -q True"
+check "it did not need to re-apply anything" "! grep -q 'isolation re-applied' $D/daemon.log"
+check "still cut off after the restart" "[ \"\$(code4 10.99.0.3)\" = 000 ]"
+check "still exactly two links: it adopted them instead of attaching a second pair" "[ \"\$(mine)\" = 2 ]"
+
+R=$(api -X POST -d '{"vm":"taptest"}' $U/api/v1/release); sleep 1
+check "release opens the VM" "[ \"\$(code4 10.99.0.3)\" = 200 ]"
+stopd
+check "a graceful stop of a NOT isolated tap detaches everything: no link left on the VM" "[ \"\$(mine)\" = 0 ] && [ \"\$(pins)\" = 0 ]"
+check "and the VM is reachable" "[ \"\$(code4 10.99.0.3)\" = 200 ]"
+
+start $ALLOW
+api -X POST -d '{"vm":"taptest"}' $U/api/v1/isolate >/dev/null; sleep 1
+check "isolated again" "[ \"\$(code4 10.99.0.3)\" = 000 ]"
+stopd
+check "a graceful stop of an ISOLATED tap leaves it enforcing" "[ \"\$(code4 10.99.0.3)\" = 000 ] && [ \"\$(mine)\" = 2 ]"
+check "and says so in the log" "grep -q 'left 1 isolated taps enforcing' $D/daemon.log"
+
+# The kernel state is gone but the record still says isolated, as after a reboot: this
+# is the case the daemon re-applies, from what it recorded.
+sudo "$BIN" -detach-all >/dev/null
+check "with the kernel state gone, the VM is open" "[ \"\$(code4 10.99.0.3)\" = 200 ]"
+start $ALLOW
+check "the daemon re-applies the recorded isolation" "grep -q 'isolation re-applied for taptest' $D/daemon.log && [ \"\$(code4 10.99.0.3)\" = 000 ]"
+stopd
+
+OUT=$(sudo "$BIN" -detach-all -data-dir "$D/data")
+check "detach-all reports what it removed" "echo '$OUT' | grep -q 'detached 2 tap links'"
+check "detach-all records the release" "echo '$OUT' | grep -q 'recorded a release for 1 VMs'"
+check "detach-all opens the VM with no daemon running" "[ \"\$(code4 10.99.0.3)\" = 200 ] && [ \"\$(mine)\" = 0 ] && [ \"\$(pins)\" = 0 ]"
+start $ALLOW
+check "a restart after detach-all does not isolate the VM again" "[ \"\$(code4 10.99.0.3)\" = 200 ]"
+# the daemon is left running for the sections that follow
 
 echo "== 7. a real tun/tap: the host's own frames are not the guest's, and the guest's are"
 # A veth's peer sits in a namespace. A tap is what QEMU really holds, and the kernel

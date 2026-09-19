@@ -126,6 +126,9 @@ if [ -d /run/systemd/system ]; then
   systemctl stop shukra 2>/dev/null || true
   case "$1" in remove|purge) systemctl disable shukra >/dev/null 2>&1 || true ;; esac
 fi
+# Isolation outlives the daemon on purpose. Removing the package removes the thing
+# that could release it, so lift it here rather than leave a VM cut off for good.
+case "$1" in remove|purge) /usr/bin/shukrad -detach-all -data-dir /var/lib/shukra >/dev/null 2>&1 || true ;; esac
 exit 0
 PRERM
 

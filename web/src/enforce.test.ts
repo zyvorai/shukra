@@ -21,6 +21,16 @@ test('when enforcement is on, the page says exactly what stays reachable', () =>
   expect(on.allow).toHaveLength(2);
 });
 
+test('what happens when the daemon stops is said truthfully either way', () => {
+  const durable = describeEnforcement({ enforcement: 'tcx', allowList: ['10.0.0.1/32'], durable: true });
+  expect(durable.whenDaemonStops).toMatch(/stays isolated if the daemon stops or crashes/);
+  expect(durable.whenDaemonStops).toContain('-detach-all');
+  const fragile = describeEnforcement({ enforcement: 'tcx', allowList: ['10.0.0.1/32'], durable: false });
+  expect(fragile.whenDaemonStops).toMatch(/reachable while the daemon is down/);
+  expect(fragile.whenDaemonStops).not.toMatch(/stays isolated/);
+  expect(describeEnforcement({ enforcement: 'not_attached' }).whenDaemonStops).toBe('');
+});
+
 test('a result is worded from what the daemon reported, never from what was asked', () => {
   const done = describeResult({ vm: 'db', enforcement: 'tcx', applied: true, taps: ['tap0'], reason: 'Traffic is dropped.' }, 'isolate');
   expect(done).toEqual({ ok: true, text: 'db isolated (tap0). Traffic is dropped.' });

@@ -17,6 +17,7 @@ type fakeEnforcer struct {
 	isolated map[string]bool
 	failOn   map[string]bool
 	calls    []string
+	durable  bool
 }
 
 func newFake() *fakeEnforcer {
@@ -26,6 +27,7 @@ func newFake() *fakeEnforcer {
 func (f *fakeEnforcer) Available() (bool, string) { return f.ok, f.why }
 func (f *fakeEnforcer) AllowList() []string       { return f.allow }
 func (f *fakeEnforcer) Isolated(t string) bool    { return f.isolated[t] }
+func (f *fakeEnforcer) Durable() bool             { return f.durable }
 func (f *fakeEnforcer) set(op string, taps []string, on bool) ([]string, error) {
 	var done, failed []string
 	for _, t := range taps {
@@ -236,5 +238,33 @@ func TestStatusAndExplainSayWhetherGuestTrafficIsSeen(t *testing.T) {
 	}
 	if !has(st.Explain("db", timeNow()).Missing, "in-guest process identity") {
 		t.Fatal("what still is missing must stay listed")
+	}
+}
+
+func TestTheIsolationMessageSaysWhetherItOutlivesTheDaemon(t *testing.T) {
+	st, f := stateWithVM("tap0")
+	f.durable = true
+	got := st.Isolate("db", "cli")
+	if !strings.Contains(got.Reason, "stays enforced if shukrad stops or crashes") || !strings.Contains(got.Reason, "-detach-all") {
+		t.Fatalf("durable: %q", got.Reason)
+	}
+	if strings.Contains(got.Reason, "open while the daemon is down") {
+		t.Fatalf("a durable isolation claimed the tap opens when the daemon stops: %q", got.Reason)
+	}
+	if !st.Durable() {
+		t.Fatal("State.Durable disagrees with the enforcer")
+	}
+
+	st2, f2 := stateWithVM("tap0")
+	f2.durable = false
+	got = st2.Isolate("db", "cli")
+	if !strings.Contains(got.Reason, "open while the daemon is down") || strings.Contains(got.Reason, "stays enforced if shukrad stops") {
+		t.Fatalf("not durable: %q", got.Reason)
+	}
+	if st2.Durable() {
+		t.Fatal("an unpinned enforcer reported durable")
+	}
+	if New("x").Durable() {
+		t.Fatal("no enforcer cannot be durable")
 	}
 }

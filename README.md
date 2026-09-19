@@ -38,7 +38,7 @@ Identity comes from the QEMU command line (`-name` / `guest=`, `-uuid`, `ifname=
 
 - Host `tcp_v4_connect` and `tcp_v6_connect` are **QEMU-process** traffic, so those events are `guest_attributed: false`. Only events seen on a VM's tap, by the [tap program](docs/tap.md), are `guest_attributed: true`, and only for a tap that belongs to a VM in the scan.
 - CPU steal and which process inside the guest made a connection are not measured.
-- `shukractl isolate` really drops the VM's tap traffic, but only with an explicit management allow list (`-isolate-allow`), and `applied` is `true` only after the kernel took the change. Without an allow list it is refused. It needs Linux 6.6 or newer, and it lasts while `shukrad` runs: the tap is open while the daemon is down. See [what is left](docs/roadmap-taptrace.md).
+- `shukractl isolate` really drops the VM's tap traffic, but only with an explicit management allow list (`-isolate-allow`), and `applied` is `true` only after the kernel took the change. Without an allow list it is refused. It needs Linux 6.6 or newer. Enforcement is pinned in the kernel, so it survives a daemon crash or restart, and `shukrad -detach-all` lifts it. See [what is left](docs/roadmap-taptrace.md).
 - A build without root, clang, or `/sys/kernel/btf/vmlinux` still serves discovered VMs and reports every program **detached**. It does not invent counters.
 
 PacketWolf and Zeus OS are the intended consumers of this JSON. They are not in this repository.

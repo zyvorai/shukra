@@ -44,11 +44,26 @@ shukrad -isolate-allow 10.0.0.0/24,fd00:10::/64 ...
 
 `shukractl release <vm>` lifts it. The console's Isolate page enables the controls only when the daemon reports enforcement is available, and asks for a second confirmation that names what will be cut off and what stays reachable.
 
-### It survives a restart, but not a gap
+### Isolation outlives the daemon
 
-The daemon re-applies recorded isolations after a restart, when a VM comes back with a new tap, and when a tap appears after the request. A release is recorded too, so a released VM is not re-isolated.
+The tap program's links and maps are pinned under `/sys/fs/bpf/shukra/tap/`, so the kernel keeps enforcing when `shukrad` is not running:
 
-The enforcement itself lives in the running daemon. **If `shukrad` stops or crashes, its TCX links close and the tap is open until the daemon starts again and re-applies.** Plan upgrades and restarts with that in mind; pinning the links so they outlive the process is not built yet.
+- **A crash or `kill -9`** leaves every tap exactly as it was. An isolated VM stays isolated, and its allowed management addresses keep working, because the program and its maps are still there.
+- **A restart** adopts what is pinned: it points the existing links at the freshly loaded program (`BPF_LINK_UPDATE`, so there is no gap and no second pair of links), and reads the isolation flag back from the kernel, so what it reports is what the kernel is enforcing. Counters continue across the restart.
+- **A graceful stop** (`systemctl stop`) detaches every tap that is **not** isolated, so nothing of Shukra is left on a VM's interface once it is off. An isolated tap is left enforcing, on purpose: stopping the daemon must not reopen a VM that was cut off.
+- **A VM that went away while the daemon was down** has its stale link removed on the next start, and an interface that was replaced under the same name is re-attached fresh.
+
+The recorded isolations still matter. When the kernel state is gone but the record says "isolated", as after a reboot, the daemon re-applies it on start. A release is recorded too, so a released VM is not re-isolated.
+
+To lift enforcement without the daemon, for an emergency or an uninstall:
+
+```bash
+shukrad -detach-all -data-dir /var/lib/shukra
+```
+
+It removes every pinned link and map, so every VM is open again, and with `-data-dir` it also records a release for each isolated VM, so the next start does not isolate them again. Without `-data-dir` it says that a restart will re-apply them. The `.deb` runs this on removal, since removing the package removes the thing that could release an isolation.
+
+Pinning needs a bpf filesystem at `/sys/fs/bpf` (present on any systemd host). Without one the daemon runs unpinned, logs that, and reports `durable: false`; then isolation lasts only while the daemon runs and the isolate response says so. If a new build changes the map layout, the old pins cannot be reused: the daemon replaces them, logs it, and re-applies the recorded isolations, so the cost is a brief gap on upgrade.
 
 ### What isolation does not cover
 
@@ -59,4 +74,4 @@ The enforcement itself lives in the running daemon. **If `shukrad` stops or cras
 
 ## How it was checked
 
-`scripts/test-tap.sh` builds a real network path with no KVM: a network namespace stands in for the guest, a veth pair's host end stands in for the tap, and a fake QEMU process names that interface. It checks refusal without an allow list; guest events and detections attributed to the VM; the tap counters; that an allowed address stays reachable and a non-allowed one is dropped, over IPv4, IPv6 and ping, with the same address reachable again after release; the blocked-connect event; re-application after a daemon restart; no re-isolation of a released VM; and detaching when the VM goes. It runs on Linux 6.6 or newer as root and is part of CI.
+`scripts/test-tap.sh` builds a real network path with no KVM: a network namespace stands in for the guest, a veth pair's host end stands in for the tap, and a fake QEMU process names that interface. It checks refusal without an allow list; guest events and detections attributed to the VM; the tap counters; that an allowed address stays reachable and a non-allowed one is dropped, over IPv4, IPv6 and ping, with the same address reachable again after release; the blocked-connect event; re-application after a daemon restart; no re-isolation of a released VM; and detaching when the VM goes. It also proves enforcement outlives the daemon: a `kill -9` leaves the VM cut off, a restart adopts the links without adding a second pair, a graceful stop detaches a non-isolated tap and leaves an isolated one, and `-detach-all` reopens the VM and records the release. It runs on Linux 6.6 or newer as root and is part of CI.

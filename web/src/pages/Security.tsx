@@ -76,7 +76,7 @@ export function Isolate() {
       {confirming && (
         <div className="confirm" role="alertdialog" aria-label={`Confirm isolating ${vm}`}>
           <p>
-            <strong>Cut {vm} off from the network?</strong> Its tap will drop everything except ARP, IPv6 neighbour discovery and {view.allow.join(', ')}. It stays isolated until you release it, and the daemon re-applies it after a restart.
+            <strong>Cut {vm} off from the network?</strong> Its tap will drop everything except ARP, IPv6 neighbour discovery and {view.allow.join(', ')}. It stays isolated until you release it. {view.whenDaemonStops}
           </p>
           <button type="button" className="primary" onClick={() => act('isolate')}>
             Isolate {vm}

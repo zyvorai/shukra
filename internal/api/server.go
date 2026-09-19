@@ -135,7 +135,7 @@ func routes(st *state.State) *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/security", func(w http.ResponseWriter, r *http.Request) {
 		vm := r.URL.Query().Get("vm")
 		mode, allow, why := st.Enforcement()
-		out := map[string]any{"vm": vm, "detections": st.Detections(vm), "enforcement": mode, "allowList": allow}
+		out := map[string]any{"vm": vm, "detections": st.Detections(vm), "enforcement": mode, "allowList": allow, "durable": st.Durable()}
 		if why != "" {
 			out["reason"] = why
 		}

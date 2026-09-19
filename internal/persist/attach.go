@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"time"
 
 	"github.com/zyvorai/shukra/internal/event"
 	"github.com/zyvorai/shukra/internal/state"
@@ -93,4 +94,46 @@ func (h *Handle) Close() error {
 		err = e
 	}
 	return err
+}
+
+// RecordReleaseAll appends a release record for every VM whose latest recorded
+// action is an isolation that took effect. `shukrad -detach-all` lifts enforcement
+// in the kernel without the daemon, and this keeps the audit trail true to that:
+// otherwise the next start would see "isolated" and quietly re-apply it. It returns
+// how many VMs it recorded a release for.
+func RecordReleaseAll(dir, actor string) (int, error) {
+	path := filepath.Join(dir, isolationsFile)
+	all, err := ReadTail[state.Isolation](path, state.MaxEvents)
+	if err != nil {
+		return 0, err
+	}
+	last := map[string]state.Isolation{}
+	for _, iso := range all {
+		last[iso.VM] = iso
+	}
+	var active []state.Isolation
+	for _, iso := range last {
+		if iso.Audit.Action == "isolate" && (iso.Audit.Result == "applied" || iso.Audit.Result == "partial") {
+			active = append(active, iso)
+		}
+	}
+	if len(active) == 0 {
+		return 0, nil
+	}
+	l, err := OpenLog(path, DefaultMaxBytes)
+	if err != nil {
+		return 0, err
+	}
+	defer l.Close()
+	for _, iso := range active {
+		rec := state.Isolation{
+			VM: iso.VM, Enforcement: "tcx", Applied: true, Taps: iso.Taps,
+			Reason: "Isolation lifted by " + actor + ".",
+			Audit:  state.Audit{TS: time.Now().UTC(), Actor: actor, Action: "release", VM: iso.VM, Result: "applied"},
+		}
+		if err := l.Append(rec); err != nil {
+			return 0, err
+		}
+	}
+	return len(active), nil
 }

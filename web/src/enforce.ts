@@ -5,6 +5,8 @@ export type Security = {
   enforcement?: string;
   allowList?: string[];
   reason?: string;
+  /** True when enforcement outlives the daemon. */
+  durable?: boolean;
 };
 
 export type Isolation = {
@@ -22,11 +24,13 @@ export type EnforcementView = {
   headline: string;
   detail: string;
   allow: string[];
+  /** What happens to an isolated VM when the daemon stops. */
+  whenDaemonStops: string;
 };
 
 export function describeEnforcement(sec: Security | null): EnforcementView {
   if (!sec) {
-    return { canAct: false, headline: 'Checking enforcement…', detail: 'Waiting for the daemon.', allow: [] };
+    return { canAct: false, headline: 'Checking enforcement…', detail: 'Waiting for the daemon.', allow: [], whenDaemonStops: '' };
   }
   const allow = sec.allowList ?? [];
   if (sec.enforcement === 'tcx') {
@@ -35,6 +39,9 @@ export function describeEnforcement(sec: Security | null): EnforcementView {
       headline: 'Isolate is enforced on the VM tap',
       detail: `An isolated VM keeps ARP, IPv6 neighbour discovery and traffic to or from ${allow.join(', ')}. Everything else on its tap is dropped.`,
       allow,
+      whenDaemonStops: sec.durable
+        ? 'It stays isolated if the daemon stops or crashes. Release it here, or with shukrad -detach-all if the daemon is down.'
+        : 'It is re-applied when the daemon restarts, but the VM is reachable while the daemon is down.',
     };
   }
   return {
@@ -42,6 +49,7 @@ export function describeEnforcement(sec: Security | null): EnforcementView {
     headline: 'Isolate is not enforced',
     detail: sec.reason || 'The daemon has no enforcement attached. A request is only recorded.',
     allow,
+    whenDaemonStops: '',
   };
 }
 

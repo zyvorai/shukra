@@ -51,9 +51,26 @@ func TapProgram() (status, detail string) {
 	case n == 0:
 		return "detached", "no VM tap interfaces to attach to yet"
 	default:
-		return "attached", fmt.Sprintf("%d taps", n)
+		durable := "enforcement survives a daemon restart"
+		if !bpfgen.TapPinned() {
+			durable = "not pinned: enforcement lasts only while the daemon runs"
+		}
+		return "attached", fmt.Sprintf("%d taps, %s", n, durable)
 	}
 }
+
+// ShutdownTaps is the daemon's graceful exit. It detaches every tap that is not
+// isolated and leaves isolated ones enforcing. See bpfgen.ShutdownTaps.
+func ShutdownTaps() {
+	kept, detached := bpfgen.ShutdownTaps()
+	if kept+detached > 0 {
+		log.Printf("tap program: detached %d taps, left %d isolated taps enforcing", detached, kept)
+	}
+}
+
+// DetachAllTaps removes every pinned tap link and map, isolated or not, and says
+// how many links it detached. It works whether or not the daemon is running.
+func DetachAllTaps() int { return bpfgen.DetachAllTaps() }
 
 // TapSample reads the per-tap counters.
 func TapSample() []TapCounters {
@@ -179,6 +196,9 @@ func (e *Enforcer) AllowList() []string {
 }
 
 func (e *Enforcer) Isolated(tap string) bool { return bpfgen.TapIsolated(tap) }
+
+// Durable reports whether isolation survives the daemon, which needs a bpf filesystem to pin on.
+func (e *Enforcer) Durable() bool { return bpfgen.TapPinned() }
 
 func (e *Enforcer) set(taps []string, on bool) ([]string, error) {
 	var done []string
