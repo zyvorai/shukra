@@ -138,3 +138,92 @@ func TestThreadRoles(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 }
+
+// tapProc builds a fake /proc/<pid> whose fds include the given links.
+func tapProc(t *testing.T, root, pid, cmdline string, fds map[string][2]string) {
+	t.Helper()
+	dir := filepath.Join(root, pid)
+	for _, d := range []string{filepath.Join(dir, "task", pid), filepath.Join(dir, "fd"), filepath.Join(dir, "fdinfo")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte(cmdline), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for fd, v := range fds { // v = {link target, fdinfo}
+		if err := os.Symlink(v[0], filepath.Join(dir, "fd", fd)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "fdinfo", fd), []byte(v[1]), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestTapsFromTunFileDescriptorsForLibvirtVMs(t *testing.T) {
+	root := t.TempDir()
+	libvirt := "qemu-system-x86_64\x00-name\x00guest=db,debug-threads=on\x00-netdev\x00{\"type\":\"tap\",\"fd\":\"37\",\"id\":\"hostnet0\"}\x00"
+	tapProc(t, root, "100", libvirt, map[string][2]string{
+		"3":  {"/dev/null", "pos:\t0\nflags:\t02\n"},                      // not a tun
+		"37": {"/dev/net/tun", "pos:\t0\nflags:\t0104002\niff:\tvnet1\n"}, // the tap
+		"38": {"/dev/net/tun", "pos:\t0\nflags:\t0104002\niff:\tvnet1\n"}, // a second queue of the same tap
+		"39": {"/dev/net/tun", "pos:\t0\nflags:\t0104002\niff:\tvnet2\n"}, // a second NIC
+		"40": {"/dev/vhost-net", "pos:\t0\n"},                             // vhost, not a tap
+	})
+	vms, err := Scan(root, "node")
+	if err != nil || len(vms) != 1 {
+		t.Fatalf("%v %+v", err, vms)
+	}
+	got := vms[0].Taps
+	if len(got) != 2 || got[0] == got[1] {
+		t.Fatalf("taps %v: want vnet1 and vnet2 once each", got)
+	}
+	has := map[string]bool{got[0]: true, got[1]: true}
+	if !has["vnet1"] || !has["vnet2"] {
+		t.Fatalf("%v", got)
+	}
+}
+
+func TestCmdlineAndFDTapsAreMergedWithoutDuplicates(t *testing.T) {
+	root := t.TempDir()
+	cmd := "qemu-system-x86_64\x00-name\x00vm1\x00-netdev\x00tap,id=n0,ifname=tap0,script=no\x00"
+	tapProc(t, root, "200", cmd, map[string][2]string{
+		"9":  {"/dev/net/tun", "iff:\ttap0\n"}, // the same tap, named both ways
+		"10": {"/dev/net/tun", "iff:\ttap1\n"},
+	})
+	vms, _ := Scan(root, "node")
+	if len(vms) != 1 || len(vms[0].Taps) != 2 || vms[0].Taps[0] != "tap0" || vms[0].Taps[1] != "tap1" {
+		t.Fatalf("%+v", vms)
+	}
+}
+
+func TestUnreadableFDsLeaveTheCmdlineTapsAndNeverInventOne(t *testing.T) {
+	root := t.TempDir()
+	// No fd directory at all, as when the daemon lacks the privilege to read it.
+	dir := filepath.Join(root, "300")
+	if err := os.MkdirAll(filepath.Join(dir, "task", "300"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := "qemu-system-x86_64\x00-name\x00vm1\x00-netdev\x00tap,id=n0,ifname=tapX\x00"
+	if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte(cmd), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	vms, _ := Scan(root, "node")
+	if len(vms) != 1 || len(vms[0].Taps) != 1 || vms[0].Taps[0] != "tapX" {
+		t.Fatalf("%+v", vms)
+	}
+	// And a libvirt VM whose fds cannot be read has no known tap, not a guessed one.
+	other := t.TempDir()
+	libvirt := "qemu-system-x86_64\x00-name\x00guest=web\x00-netdev\x00{\"type\":\"tap\",\"fd\":\"37\"}\x00"
+	d2 := filepath.Join(other, "400")
+	if err := os.MkdirAll(filepath.Join(d2, "task", "400"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d2, "cmdline"), []byte(libvirt), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := Scan(other, "node"); len(v) != 1 || len(v[0].Taps) != 0 {
+		t.Fatalf("%+v", v)
+	}
+}

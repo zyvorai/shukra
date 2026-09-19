@@ -1,6 +1,10 @@
-.PHONY: deps generate build test install web
+.PHONY: deps generate build test test-bpf test-kernel test-tap test-live-guest install web dist
 
 PREFIX ?= /usr/local
+
+# Stamped into both binaries. A tag gives v1.2.3; otherwise the short commit.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.1.0)
+LDFLAGS := -X github.com/zyvorai/shukra/internal/version.Version=$(VERSION)
 
 deps:
 	go mod download
@@ -20,8 +24,14 @@ generate:
 
 build:
 	mkdir -p bin
-	go build -o bin/shukrad ./cmd/shukrad
-	go build -o bin/shukractl ./cmd/shukractl
+	go build -ldflags "$(LDFLAGS)" -o bin/shukrad ./cmd/shukrad
+	go build -ldflags "$(LDFLAGS)" -o bin/shukractl ./cmd/shukractl
+
+# A release tarball and a .deb for this machine's architecture, in dist/. Needs
+# Linux with clang, bpftool and kernel BTF, since the CO-RE objects are compiled
+# in and the result then needs only kernel BTF to run.
+dist:
+	VERSION=$(VERSION) ./scripts/package.sh
 
 test:
 	go test ./...
@@ -30,6 +40,23 @@ test:
 # build tag keeps these files out, so this target is for CI and a hypervisor.
 test-bpf:
 	go test -count=1 -tags shukrabpf ./...
+
+# Loads the real programs into the running kernel and checks what they count
+# against load the test generates. Needs root, BTF and `make generate`.
+test-kernel:
+	mkdir -p bin
+	go test -c -tags shukrabpf -o bin/observe.test ./internal/observe
+	sudo SHUKRA_BPF_TEST=1 bin/observe.test -test.run TestKernelIntegration -test.v
+
+# The tap program and isolation, end to end, in a network namespace. Needs Linux
+# 6.6+, root, and `make generate`.
+test-tap:
+	./scripts/test-tap.sh
+
+# A real KVM guest booted by fluxvm, seen by a running shukrad. Needs a hypervisor with
+# fluxvm and shukrad running; see scripts/test-live-guest.sh.
+test-live-guest:
+	./scripts/test-live-guest.sh
 
 web:
 	npm --prefix web ci

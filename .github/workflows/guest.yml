@@ -1,0 +1,133 @@
+name: Live guest (fluxvm)
+
+# Boots a real KVM guest with fluxvm and checks that shukrad sees what it sends:
+# the tap found and attached, guest_connect and guest_flow events, packet counts
+# against the kernel's, and the tap detached again. scripts/test-tap.sh covers the
+# same program with a namespace standing in for the guest; this is the real thing.
+#
+# It is not part of every push: it builds fluxvm from source and boots a cloud image,
+# and it needs a runner with /dev/kvm. It runs weekly, by hand, and when the tap
+# program or the script changes. If the runner has no KVM the job fails and says so,
+# rather than passing without having booted anything.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * 1"
+  pull_request:
+    paths:
+      - "bpf/tap.bpf.c"
+      - "bpf/event.h"
+      - "internal/bpfgen/tap.go"
+      - "internal/observe/tap*.go"
+      - "internal/identity/**"
+      - "scripts/test-live-guest.sh"
+      - ".github/workflows/guest.yml"
+
+jobs:
+  guest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: shukra
+    steps:
+      # fluxvm's fluxvm-image crate expects guestkit as its sibling, so the three
+      # checkouts sit side by side.
+      - uses: actions/checkout@v4
+        with:
+          path: shukra
+      - uses: actions/checkout@v4
+        with:
+          repository: zyvorai/fluxvm
+          path: fluxvm
+      - uses: actions/checkout@v4
+        with:
+          repository: zyvorai/guestkit
+          path: guestkit
+
+      - name: KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+          if [ ! -w /dev/kvm ]; then
+            echo "::error::this runner has no usable /dev/kvm, so no guest can be booted"
+            ls -l /dev/kvm || true
+            exit 1
+          fi
+          uname -r
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fluxvm
+
+      - name: Packages
+        # libvirt is only here for its default network: the virbr0 bridge with DHCP and
+        # NAT that the guest's tap joins.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 llvm-18 libbpf-dev linux-tools-common linux-tools-generic \
+            qemu-system-x86 qemu-utils cloud-image-utils libvirt-daemon-system libsystemd-dev libhivex-dev parted
+          ver="$(uname -r)"
+          sudo apt-get install -y "linux-tools-${ver}" || true
+          real="$(find /usr/lib/linux-tools /usr/lib/linux-tools-* -name bpftool \( -type f -o -type l \) 2>/dev/null | head -1)"
+          test -n "$real"
+          sudo ln -sfn "$(command -v clang-18)" /usr/local/bin/clang
+          sudo ln -sfn "$(command -v llvm-strip-18 || echo /usr/lib/llvm-18/bin/llvm-strip)" /usr/local/bin/llvm-strip
+          sudo ln -sfn "$real" /usr/local/bin/bpftool
+          sudo virsh net-start default || true
+          ip -br addr show virbr0
+
+      - name: Build shukrad with the BPF programs
+        run: |
+          make generate
+          go build -tags shukrabpf -o bin/shukrad ./cmd/shukrad
+
+      - name: Build fluxctl
+        working-directory: fluxvm
+        run: cargo build --release -p fluxctl
+
+      - name: Ubuntu cloud image
+        # About 600 MB and it rarely changes, so it is cached by URL.
+        id: image
+        uses: actions/cache@v4
+        with:
+          path: /tmp/noble.img
+          key: guest-noble-cloudimg-amd64-v1
+      - name: Download the image
+        if: steps.image.outputs.cache-hit != 'true'
+        run: curl -sSL --retry 3 --retry-delay 5 -o /tmp/noble.img https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+
+      - name: Start fluxvm
+        run: |
+          sudo install -m 0755 ../fluxvm/target/release/fluxctl /usr/local/bin/fluxctl
+          sudo install -m 0644 ../fluxvm/config.example.toml /etc/fluxvm.toml
+          sudo mkdir -p /var/lib/fluxvm/images
+          sudo cp /tmp/noble.img /var/lib/fluxvm/images/noble.img
+          sudo sh -c 'nohup fluxctl --config /etc/fluxvm.toml serve > /tmp/fluxvm.log 2>&1 &'
+          for i in $(seq 1 30); do sudo fluxctl list >/dev/null 2>&1 && break; sleep 1; done
+          sudo fluxctl list >/dev/null
+
+      - name: Start shukrad
+        run: |
+          sudo sh -c 'SHUKRA_API_KEY=ci-key nohup bin/shukrad -listen 127.0.0.1:30970 -web /nonexistent > /tmp/shukrad.log 2>&1 &'
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:30970/readyz >/dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:30970/readyz
+
+      - name: Boot a guest and check what shukra sees
+        env:
+          SHUKRA_API_KEY: ci-key
+          IMAGE: /var/lib/fluxvm/images/noble.img
+          BRIDGE: virbr0
+        run: scripts/test-live-guest.sh
+
+      - name: Logs
+        if: always()
+        run: |
+          echo "--- shukrad"; tail -40 /tmp/shukrad.log || true
+          echo "--- fluxvm"; tail -40 /tmp/fluxvm.log || true
+          echo "--- bpftool net"; sudo bpftool net 2>&1 | head -20 || true

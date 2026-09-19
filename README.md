@@ -20,7 +20,7 @@ Observe. Protect. Explain.
 
 ## What you get in 0.1
 
-Four observation programs. Hot paths stay in maps. The ring buffer is only for discrete events.
+Five observation programs. Hot paths stay in maps. The ring buffer is only for discrete events.
 
 | Program | Hooks | What it records |
 |---|---|---|
@@ -28,6 +28,7 @@ Four observation programs. Hot paths stay in maps. The ring buffer is only for d
 | `sched` | wakeup, switch, exec, exit | On-CPU time, run-queue delay (histogram, per thread), exec and exit events for QEMU children |
 | `block` | `block_rq_issue`, `block_rq_complete` | Latency histogram, requests, bytes and the slowest request, per direction |
 | `net` | `tcp_v4_connect`, `tcp_v6_connect`, sampled `tcp_retransmit_skb` | Exact connect counts (IPv4 and IPv6) and 1-in-64 retransmit samples |
+| `tap` | TCX on each VM tap (Linux 6.6+) | The guest's own traffic: per-tap counters, an event per TCP connect and per new UDP flow, and isolation |
 
 Percentiles come from log2 buckets and can read up to 2x high. See [What each program measures](docs/signals.md) for the caveats.
 
@@ -35,9 +36,9 @@ Identity comes from the QEMU command line (`-name` / `guest=`, `-uuid`, `ifname=
 
 ## What this release will not pretend
 
-- Host `tcp_v4_connect` is **QEMU-process** traffic. `guest_attributed` is always `false`.
-- CPU steal, in-guest processes, and packets on the VM tap are not measured. That is the [tap/TCX slice](docs/roadmap-taptrace.md).
-- `shukractl isolate` records the decision and returns `applied: false`. No TC, XDP, or Cilium program is attached.
+- Host `tcp_v4_connect` and `tcp_v6_connect` are **QEMU-process** traffic, so those events are `guest_attributed: false`. Only events seen on a VM's tap, by the [tap program](docs/tap.md), are `guest_attributed: true`, and only for a tap that belongs to a VM in the scan.
+- CPU steal and which process inside the guest made a connection are not measured.
+- `shukractl isolate` really drops the VM's tap traffic, but only with an explicit management allow list (`-isolate-allow`), and `applied` is `true` only after the kernel took the change. Without an allow list it is refused. It needs Linux 6.6 or newer. Enforcement is pinned in the kernel, so it survives a daemon crash or restart, and `shukrad -detach-all` lifts it. See [what is left](docs/roadmap-taptrace.md).
 - A build without root, clang, or `/sys/kernel/btf/vmlinux` still serves discovered VMs and reports every program **detached**. It does not invent counters.
 
 PacketWolf and Zeus OS are the intended consumers of this JSON. They are not in this repository.
@@ -74,6 +75,7 @@ shukractl status
 shukractl vms
 shukractl trace kvm --vm osboxes-debian
 shukractl explain osboxes-debian
+shukractl doctor
 shukractl recorder osboxes-debian --window 60s
 shukractl watch --json
 ```
@@ -96,7 +98,9 @@ The CLI never attaches a program. Pin paths, if a later loader adds them, stay u
 | `GET /metrics` | bearer | Prometheus text. A VM with no measured counters has no series, not a zero |
 | `GET /api/v1/events?since=<seq>` | bearer | Events newer than `seq`. Every event carries a `seq` that only grows |
 | `GET /api/v1/stream` | bearer | Server-sent events. Resume with `Last-Event-ID` or `?since=` |
-| `GET /api/v1/isolations` | bearer | Audit trail of isolate requests. Still `applied: false` |
+| `GET /api/v1/isolations` | bearer | Audit trail of isolate and release requests, and whether each took effect |
+| `POST /api/v1/isolate`, `POST /api/v1/release` | admin key | Isolate or release a VM. Refused without a management allow list |
+| `GET /api/v1/trace/tap` | bearer | Per-tap traffic from the guest's point of view |
 
 ### Keep state across restarts
 
@@ -142,7 +146,7 @@ Events that leave the daemon carry `product: "shukra"`. A joined event has `attr
 | [Detection rules](docs/tutorials/06-watchlist.md) | Destinations, ports, thresholds, suppression, what a detection means |
 | [Alert sinks](docs/tutorials/07-alert-sinks.md) | Signed webhook, syslog, JSONL file |
 
-Reference: [shukractl](docs/shukractl.md) · [Signals](docs/signals.md) · [Attribution](docs/attribution.md) · [Tap/TCX roadmap](docs/roadmap-taptrace.md) · [Security](SECURITY.md)
+Reference: [shukractl](docs/shukractl.md) · [Signals](docs/signals.md) · [Attribution](docs/attribution.md) · [Guest traffic and isolation](docs/tap.md) · [Tap: what is left](docs/roadmap-taptrace.md) · [Security](SECURITY.md)
 
 ## Development
 
@@ -150,6 +154,9 @@ Reference: [shukractl](docs/shukractl.md) · [Signals](docs/signals.md) · [Attr
 make test          # go test ./...
 make web           # npm ci, unit tests, production build
 make generate      # no-op without clang and /sys/kernel/btf/vmlinux
+make test-kernel   # load the programs into this kernel and check the counters (root, Linux)
+make test-tap      # guest traffic and isolation in a network namespace (root, Linux 6.6+)
+make dist          # release tarball and .deb for this architecture (Linux)
 ```
 
 Default `go build` does not link CO-RE objects, so CI and macOS stay green. The Linux tag is `shukrabpf`. A missing KVM tracepoint detaches only the `kvm` program.

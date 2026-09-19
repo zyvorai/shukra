@@ -17,7 +17,20 @@ import (
 // request is refused. Use NewNoAuth to serve without a key on purpose.
 // Isolate records a decision and does not attach a program.
 func New(st *state.State, apiKey string) http.Handler {
-	return auth(apiKey, routes(st))
+	return NewWithKeys(st, Keys{Admin: apiKey})
+}
+
+// Keys are the bearer keys the API accepts. Admin may do everything. ReadOnly may
+// only read, so a monitoring scrape can hold a key that cannot call isolate.
+// An empty key never matches.
+type Keys struct {
+	Admin    string
+	ReadOnly string
+}
+
+// NewWithKeys serves the API with an admin key and, optionally, a read-only key.
+func NewWithKeys(st *state.State, k Keys) http.Handler {
+	return auth(k, routes(st))
 }
 
 // NewNoAuth serves the API with no bearer check. Only /healthz and /readyz are
@@ -70,6 +83,16 @@ func routes(st *state.State) *http.ServeMux {
 		}
 		stream(w, r, st, r.URL.Query().Get("vm"), since)
 	})
+	mux.HandleFunc("GET /api/v1/doctor", func(w http.ResponseWriter, r *http.Request) {
+		checks := st.Doctor()
+		worst := "ok"
+		for _, c := range checks {
+			if c.Status == "fail" || (c.Status == "warn" && worst != "fail") || (c.Status == "info" && worst == "ok") {
+				worst = c.Status
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"worst": worst, "checks": checks})
+	})
 	mux.HandleFunc("GET /api/v1/isolations", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"isolations": st.Isolations()})
 	})
@@ -114,34 +137,69 @@ func routes(st *state.State) *http.ServeMux {
 		})
 	})
 	mux.HandleFunc("GET /api/v1/explain", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, st.Explain(r.URL.Query().Get("vm"), time.Now().UTC()))
+		window, err := parseExplainWindow(r.URL.Query().Get("window"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, st.ExplainOver(r.URL.Query().Get("vm"), time.Now().UTC(), window))
 	})
 	mux.HandleFunc("GET /api/v1/export", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, st.Export())
 	})
 	mux.HandleFunc("GET /api/v1/security", func(w http.ResponseWriter, r *http.Request) {
 		vm := r.URL.Query().Get("vm")
+		mode, allow, why := st.Enforcement()
+		out := map[string]any{"vm": vm, "detections": st.Detections(vm), "enforcement": mode, "allowList": allow, "durable": st.Durable()}
+		if why != "" {
+			out["reason"] = why
+		}
+		writeJSON(w, http.StatusOK, out)
+	})
+	act := func(do func(vm, actor string) state.Isolation) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				VM string `json:"vm"`
+			}
+			if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil || body.VM == "" {
+				http.Error(w, "vm is required", http.StatusBadRequest)
+				return
+			}
+			actor := r.Header.Get("X-Shukra-Actor")
+			if actor == "" {
+				actor = "api"
+			}
+			writeJSON(w, http.StatusOK, do(body.VM, actor))
+		}
+	}
+	mux.HandleFunc("POST /api/v1/isolate", act(st.Isolate))
+	mux.HandleFunc("POST /api/v1/release", act(st.Release))
+	mux.HandleFunc("GET /api/v1/trace/tap", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"vm":          vm,
-			"detections":  st.Detections(vm),
-			"enforcement": "not_attached",
+			"attribution":     "guest-tap",
+			"guestAttributed": true,
+			"note":            "Traffic seen on the host side of each VM tap: from_guest is what the guest sent, to_guest is what was sent to it.",
+			"rows":            st.Taps(r.URL.Query().Get("vm")),
 		})
 	})
-	mux.HandleFunc("POST /api/v1/isolate", func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			VM string `json:"vm"`
-		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil || body.VM == "" {
-			http.Error(w, "vm is required", http.StatusBadRequest)
-			return
-		}
-		actor := r.Header.Get("X-Shukra-Actor")
-		if actor == "" {
-			actor = "api"
-		}
-		writeJSON(w, http.StatusOK, st.Isolate(body.VM, actor))
-	})
 	return mux
+}
+
+// parseExplainWindow reads ?window=. Nothing means the default window, "0" or
+// "lifetime" means everything since the daemon attached, and anything else is a
+// duration between 10 seconds and the longest window history is kept for.
+func parseExplainWindow(raw string) (time.Duration, error) {
+	switch raw {
+	case "":
+		return state.DefaultExplainWindow, nil
+	case "0", "lifetime":
+		return 0, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 10*time.Second || d > state.MaxExplainWindow {
+		return 0, fmt.Errorf("window must be a duration from 10s to %s, or 0 for lifetime", state.MaxExplainWindow)
+	}
+	return d, nil
 }
 
 func parseSince(raw string) (uint64, error) {
@@ -189,7 +247,7 @@ func stream(w http.ResponseWriter, r *http.Request, st *state.State, vm string, 
 	}
 }
 
-func auth(apiKey string, next http.Handler) http.Handler {
+func auth(k Keys, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/assets/"),
@@ -199,14 +257,30 @@ func auth(apiKey string, next http.Handler) http.Handler {
 		}
 		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		got = strings.TrimSpace(got)
-		if apiKey == "" || subtle.ConstantTimeCompare([]byte(got), []byte(apiKey)) != 1 {
+		// Both keys are always compared so the time taken does not say which one matched.
+		admin := keyMatches(got, k.Admin)
+		readOnly := keyMatches(got, k.ReadOnly)
+		if !admin && !readOnly {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
 			return
 		}
+		if !admin && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"this key is read-only"}`))
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func keyMatches(got, want string) bool {
+	if want == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

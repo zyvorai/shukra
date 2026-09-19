@@ -30,11 +30,11 @@ Hash routes keep you on one origin. The mega-nav is the same set of pages.
 
 ## The banner on Host connections
 
-That page keeps a banner: these are QEMU-process connections, not the guest, and `guest_attributed` is false. It is not a warning you dismiss. Tap names on the VM page are identity, not a packet trace. If a connect looks like "the VM talked to the internet," re-read the banner and [attribution](../attribution.md).
+That page keeps a banner: the host connections are QEMU-process connections, not the guest, and `guest_attributed` is false. It is not a warning you dismiss. When the tap program is attached, a second table lists the guest's own connects seen on its tap, with the guest's source address and whether isolation dropped them. Only that table is the guest. If a host connect looks like "the VM talked to the internet," re-read the banner and [attribution](../attribution.md).
 
 ## Isolate
 
-The Apply control stays disabled. The page states that isolate is not attached. Recording a decision in the API does not program a NIC. When a later build attaches TC or TCX, this page is where that state will change, and it will have to say so in the response, not only in the button.
+The controls are enabled only when the daemon reports it can enforce: the tap program is attached and a management allow list is configured. Otherwise the page says why (for example that no allow list is set) and the buttons stay disabled. Isolate asks for a second confirmation that names what will be cut off, what stays reachable, and what happens if the daemon stops, and the result shown is what the daemon reported: applied, refused, or only partly done. Release lifts it. See [Guest traffic and isolation](../tap.md).
 
 ## Develop against it
 

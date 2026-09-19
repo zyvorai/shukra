@@ -52,6 +52,19 @@ jobs:
         run: go test -count=1 ./...
       - name: Go tests with shukrabpf
         run: make test-bpf
+      - name: BPF integration (loads the programs into the kernel)
+        # The test binary is built as this user and only that binary runs as root,
+        # so root never needs the Go module cache. It checks connect counts, block
+        # bytes and the exec filter against load it generates itself.
+        run: |
+          go test -c -tags shukrabpf -o "$RUNNER_TEMP/observe.test" ./internal/observe
+          sudo SHUKRA_BPF_TEST=1 "$RUNNER_TEMP/observe.test" -test.run TestKernelIntegration -test.v
+      - name: Tap program and isolation (network namespace, no KVM)
+        # A namespace stands in for the guest and a veth for its tap. Needs Linux 6.6+
+        # for TCX, so a red step here on an old runner kernel is a real answer.
+        run: scripts/test-tap.sh
+      - name: Installer
+        run: scripts/test-install.sh
       - name: Console tests
         run: npm --prefix web ci && npm --prefix web test
       - name: Console build

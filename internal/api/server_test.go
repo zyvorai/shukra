@@ -377,3 +377,111 @@ func TestMetricsDoNotNameKVMReasonsOnOtherVendors(t *testing.T) {
 		}
 	}
 }
+
+func TestReadOnlyKeyCanReadButNotAct(t *testing.T) {
+	st := state.New("node-07")
+	h := NewWithKeys(st, Keys{Admin: "admin-key", ReadOnly: "scrape-key"})
+	do := func(method, path, key string) int {
+		req := httptest.NewRequest(method, path, strings.NewReader(`{"vm":"db"}`))
+		if key != "" {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for _, c := range []struct {
+		method, path, key string
+		want              int
+	}{
+		{"GET", "/api/v1/status", "scrape-key", 200},
+		{"GET", "/metrics", "scrape-key", 200},
+		{"GET", "/api/v1/stream?since=0", "", 401},
+		{"POST", "/api/v1/isolate", "scrape-key", 403},
+		{"POST", "/api/v1/isolate", "admin-key", 200},
+		{"POST", "/api/v1/isolate", "wrong", 401},
+		{"GET", "/api/v1/status", "admin-key", 200},
+	} {
+		if c.path == "/api/v1/stream?since=0" {
+			continue // a long-lived response; the 401 path is covered by the other cases
+		}
+		if got := do(c.method, c.path, c.key); got != c.want {
+			t.Errorf("%s %s with %q: %d, want %d", c.method, c.path, c.key, got, c.want)
+		}
+	}
+	if len(st.Isolations()) != 1 {
+		t.Fatalf("only the admin key's request should have been recorded: %d", len(st.Isolations()))
+	}
+}
+
+func TestAnEmptyReadOnlyKeyNeverMatches(t *testing.T) {
+	h := NewWithKeys(state.New("n"), Keys{Admin: "admin-key"}) // no read-only key configured
+	req := httptest.NewRequest("GET", "/api/v1/status", nil)
+	req.Header.Set("Authorization", "Bearer ")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("an empty bearer matched an unset key: %d", rec.Code)
+	}
+	if rec = get(NewWithKeys(state.New("n"), Keys{ReadOnly: "r"}), "/api/v1/status", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no key at all: %d", rec.Code)
+	}
+}
+
+func TestExplainWindowParameter(t *testing.T) {
+	h := New(state.New("node-07"), "k")
+	for _, c := range []struct {
+		q    string
+		want int
+		win  string
+	}{
+		{"", 200, "lifetime"}, // no history yet, so the default window falls back
+		{"&window=lifetime", 200, "lifetime"}, {"&window=0", 200, "lifetime"},
+		{"&window=5m", 200, "lifetime"}, {"&window=90s", 200, "lifetime"},
+		{"&window=9s", 400, ""}, {"&window=6m", 400, ""}, {"&window=banana", 400, ""}, {"&window=-1m", 400, ""},
+	} {
+		rec := get(h, "/api/v1/explain?vm=x"+c.q, "k")
+		if rec.Code != c.want {
+			t.Errorf("%q: %d, want %d", c.q, rec.Code, c.want)
+			continue
+		}
+		if c.want == 200 {
+			var body struct {
+				Window string `json:"window"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Window != c.win {
+				t.Errorf("%q: window %q (%v), want %q", c.q, body.Window, err, c.win)
+			}
+		}
+	}
+}
+
+func TestDoctorEndpointReportsTheWorstFindingAndIsReadableWithTheReadOnlyKey(t *testing.T) {
+	// Distinctive values, so that finding one in the output could only mean a leak.
+	const admin, readOnly = "adm-7f3a91c2e5", "ro-4b8d60aa19"
+	st := state.New("node-07")
+	st.SetConfig(state.ConfigInfo{Listen: "0.0.0.0:30970", DevKey: true, KeyLen: len(admin), ReadOnlyKey: true})
+	h := NewWithKeys(st, Keys{Admin: admin, ReadOnly: readOnly})
+	rec := get(h, "/api/v1/doctor", readOnly)
+	if rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Worst  string        `json:"worst"`
+		Checks []state.Check `json:"checks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Worst != "fail" || len(body.Checks) == 0 || body.Checks[0].Status != "fail" {
+		t.Fatalf("%+v", body)
+	}
+	for _, k := range []string{admin, readOnly} {
+		if strings.Contains(rec.Body.String(), k) {
+			t.Fatalf("the audit output contains a key: %s", k)
+		}
+	}
+	if get(h, "/api/v1/doctor", "").Code != http.StatusUnauthorized {
+		t.Fatal("doctor is open without a key")
+	}
+}

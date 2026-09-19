@@ -18,23 +18,26 @@ func helpSections() []helpSection {
 	return []helpSection{
 		{title: "🖥  Hypervisor", cmds: []helpCmd{
 			{"status [--json] [--wait]", "Daemon board: mode, programs, VMs, detections"},
+			{"doctor [--json] [--strict]", "Audit the daemon: exposure, what is attached, what it cannot see"},
 			{"programs", "Which observation programs are attached"},
 			{"install-cli [--prefix DIR]", "Copy this binary onto PATH"},
 		}},
 		{title: "🔬  Trace", cmds: []helpCmd{
-			{"trace list", "kvm, sched, block, and net hooks"},
-			{"trace kvm|sched|block|net [--vm NAME] [--json]", "Per-VM counters from the daemon"},
+			{"trace list", "kvm, sched, block, net and tap programs"},
+			{"trace kvm|sched|block|net|tap [--vm NAME] [--json]", "Per-VM counters from the daemon"},
 		}},
 		{title: "🔍  Investigate", cmds: []helpCmd{
 			{"vms [--json]", "QEMU virtual machines from the host"},
-			{"explain <vm>", "Why this VM looks slow, from evidence on hand"},
+			{"explain <vm> [--window 5m|lifetime]", "Why this VM looks slow, from the last minute by default"},
 			{"recorder <vm> [--window 60s]", "Replay the flight recorder"},
 			{"watch [--json] [--once]", "Stream discrete events"},
 			{"export", "One JSON document: status, VMs, traces, events"},
 		}},
 		{title: "🛡️  Security", cmds: []helpCmd{
 			{"security <vm>", "Watchlist detections for one VM"},
-			{"isolate <vm>", "Record an isolate decision. Does not attach a program"},
+			{"isolate <vm>", "Drop the VM's tap traffic except the management allow list. Says if it was not enforced"},
+			{"release <vm>", "Lift an isolation"},
+			{"rules check <file> [--json]", "Validate a detection file offline, before reloading"},
 		}},
 	}
 }

@@ -1,0 +1,51 @@
+[Unit]
+Description=Shukra eBPF runtime intelligence for KVM
+Documentation=https://github.com/zyvorai/shukra
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# SHUKRA_API_KEY, SHUKRA_READONLY_KEY, SHUKRA_WEBHOOK_SECRET and SHUKRA_EXTRA_ARGS
+# (for example "-tls-cert /etc/shukra/tls.crt -tls-key /etc/shukra/tls.key
+# -webhook-url https://...") live here, readable by root only. Keys are kept out of
+# this file because `systemctl show` prints a unit's Environment= to every user.
+# An empty default keeps systemd from noting an unset variable on every start. The
+# file below overrides it.
+Environment=SHUKRA_EXTRA_ARGS=
+EnvironmentFile=-/etc/shukra/env
+ExecStart=@BIN_DIR@/shukrad -listen 0.0.0.0:30970 -web @WEB_DIR@ -watchlist /etc/shukra/detections.yaml -data-dir /var/lib/shukra $SHUKRA_EXTRA_ARGS
+ExecReload=/bin/kill -HUP $MAINPID
+StateDirectory=shukra
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=2
+
+# Least privilege, and why each capability is here. deploy-remote.sh drops the two
+# capability lines on a kernel older than 5.8, where CAP_BPF does not exist.
+#   CAP_BPF, CAP_PERFMON, CAP_SYS_RESOURCE  load programs, attach tracepoints and
+#                                           kprobes, read maps
+#   CAP_NET_ADMIN                           load and attach the TCX tap program
+#   CAP_SYS_PTRACE, CAP_DAC_READ_SEARCH     read a VM's tap names from the tun fds
+#                                           of a QEMU that runs as another user
+#                                           (libvirt passes taps as file descriptors)
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_NET_ADMIN CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE CAP_NET_ADMIN CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

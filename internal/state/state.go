@@ -46,17 +46,24 @@ type Audit struct {
 
 // Isolation is the response to an isolate request.
 type Isolation struct {
-	VM          string `json:"vm"`
-	Enforcement string `json:"enforcement"`
-	Applied     bool   `json:"applied"`
-	Reason      string `json:"reason"`
-	Audit       Audit  `json:"audit"`
+	VM          string   `json:"vm"`
+	Enforcement string   `json:"enforcement"`
+	Applied     bool     `json:"applied"`
+	Taps        []string `json:"taps,omitempty"`
+	Reason      string   `json:"reason"`
+	Audit       Audit    `json:"audit"`
 }
 
 // Explain is the evidence available for one VM, plus what this build cannot say.
 type Explain struct {
-	VM       identity.VM   `json:"vm"`
-	Question string        `json:"question"`
+	VM       identity.VM `json:"vm"`
+	Question string      `json:"question"`
+	// Findings are the host-side causes the counters support, best supported first.
+	Findings []Finding `json:"findings"`
+	// Window is how far back the findings look: a duration, or "lifetime" when
+	// there was not enough history yet or none was asked for.
+	Window   string        `json:"window"`
+	Basis    string        `json:"basis"`
 	Evidence []string      `json:"evidence"`
 	Missing  []string      `json:"missing"`
 	Events   []event.Event `json:"events"`
@@ -79,25 +86,32 @@ type Status struct {
 
 // State is safe for the HTTP server and the agent to share.
 type State struct {
-	mu         sync.RWMutex
-	started    time.Time
-	hostname   string
-	vms        []identity.VM
-	programs   []Program
-	byPID      map[uint32]aggregate.Counters
-	detections []event.Event
-	events     []event.Event
-	isolations []Isolation
-	rec        *recorder.Recorder
-	seq        uint64
-	connects   map[string]uint64
-	ready      bool
-	cpuVendor  string
-	persist    Persister
-	hooks      []func(event.Event)
-	suppressed uint64
-	sinkStats  func() []SinkStat
-	changed    chan struct{}
+	mu            sync.RWMutex
+	started       time.Time
+	hostname      string
+	vms           []identity.VM
+	programs      []Program
+	byPID         map[uint32]aggregate.Counters
+	detections    []event.Event
+	events        []event.Event
+	isolations    []Isolation
+	rec           *recorder.Recorder
+	seq           uint64
+	connects      map[string]uint64
+	ready         bool
+	config        ConfigInfo
+	rulesErr      string
+	kernelRelease func() string
+	history       []snapshot
+	clock         func() time.Time
+	enforcer      Enforcer
+	tapSource     func() []TapStat
+	cpuVendor     string
+	persist       Persister
+	hooks         []func(event.Event)
+	suppressed    uint64
+	sinkStats     func() []SinkStat
+	changed       chan struct{}
 }
 
 // MaxEvents bounds the in-memory event and detection lists.
@@ -116,6 +130,7 @@ func New(hostname string) *State {
 			{Name: "sched", Status: "detached", Detail: "not attached yet"},
 			{Name: "block", Status: "detached", Detail: "not attached yet"},
 			{Name: "net", Status: "detached", Detail: "not attached yet"},
+			{Name: "tap", Status: "detached", Detail: "not attached yet"},
 		},
 	}
 }
@@ -173,6 +188,7 @@ func (s *State) SetCounters(by map[uint32]aggregate.Counters) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.byPID = by
+	s.recordLocked(s.now())
 }
 
 func (s *State) AddEvent(e event.Event) {
@@ -326,29 +342,6 @@ func (s *State) Recorder(vm string, window time.Duration, now time.Time) []event
 	return s.rec.Window(vm, window, now)
 }
 
-func (s *State) Isolate(vm, actor string) Isolation {
-	rec := Isolation{
-		VM:          vm,
-		Enforcement: "not_attached",
-		Applied:     false,
-		Reason:      "TC/TCX tap enforcement is not in this build. No program was attached.",
-		Audit: Audit{
-			TS: time.Now().UTC(), Actor: actor, Action: "isolate", VM: vm, Result: "recorded_only",
-		},
-	}
-	s.mu.Lock()
-	s.isolations = append(s.isolations, rec)
-	if len(s.isolations) > MaxEvents {
-		s.isolations = append([]Isolation(nil), s.isolations[len(s.isolations)-MaxEvents:]...)
-	}
-	p := s.persist
-	s.mu.Unlock()
-	if p != nil {
-		p.Isolation(rec)
-	}
-	return rec
-}
-
 // Isolations is the audit trail of isolate requests, oldest first.
 func (s *State) Isolations() []Isolation {
 	s.mu.RLock()
@@ -365,13 +358,25 @@ func (s *State) Status() Status {
 			att++
 		}
 	}
+	summary := "observe: host traces only, guest tap attribution not attached"
+	for _, p := range s.programs {
+		if p.Name == "tap" && p.Status == "attached" {
+			summary = "observe: host traces, and guest traffic on the VM taps (" + p.Detail + ")"
+		}
+	}
 	return Status{
 		Version: version.Version, Product: version.Product, Tagline: version.Tagline,
 		Mode: "observe", Datapath: "tracepoint-kprobe", Healthy: true,
 		VMs: len(s.vms), ProgramsAttached: att, ProgramsTotal: len(s.programs),
 		Detections: len(s.detections),
-		Summary:    "observe: host traces only, guest tap attribution not attached",
+		Summary:    summary,
 	}
+}
+
+func (s *State) cpuVendorLocked() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cpuVendor
 }
 
 // SetCPUVendor records the host CPU vendor_id ("GenuineIntel", "AuthenticAMD").
@@ -454,12 +459,35 @@ func (s *State) FindVM(name string) (identity.VM, bool) {
 	return identity.VM{}, false
 }
 
+// Explain looks at the last DefaultExplainWindow.
 func (s *State) Explain(name string, now time.Time) Explain {
+	return s.ExplainOver(name, now, DefaultExplainWindow)
+}
+
+// ExplainOver builds the verdict from what happened over roughly the last window.
+// A zero window, or too little history so far, uses the counters since the daemon
+// attached, and the result says which it used.
+func (s *State) ExplainOver(name string, now time.Time, window time.Duration) Explain {
 	vm, _ := s.FindVM(name)
+	// What is present, and whether each program is measuring at all, is a lifetime
+	// fact: a quiet minute must not read as a detached program.
 	kvm := s.KVM(name)
 	sched := s.Sched(name)
 	block := s.Block(name)
 	net := s.Net(name)
+	threads := s.SchedThreads(name)
+
+	// What the verdict weighs is the window.
+	dkvm, dsched, dblock, dnet, dthreads := kvm, sched, block, net, threads
+	basis, over := Basis, "lifetime"
+	if per, span, ok := s.windowedInputs(vm, now, window); ok && vm.Name != "" {
+		rows := windowRows(vm, per, s.cpuVendorLocked())
+		dkvm, dsched, dblock, dnet, dthreads = rows.kvm, rows.sched, rows.block, rows.net, rows.threads
+		carryMeasured(dkvm, dsched, dblock, kvm, sched, block)
+		over = span.Round(time.Second).String()
+		basis = "Over the last " + over + ". Latencies come from log2 buckets, so each can read up to 2x high. They are the QEMU process's, not the guest's."
+	}
+
 	var evidence []string
 	if vm.Name != "" {
 		evidence = append(evidence, "Identity comes from the QEMU command line, not from inside the guest.")
@@ -476,25 +504,72 @@ func (s *State) Explain(name string, now time.Time) Explain {
 	}
 	if len(block) > 0 && block[0].Measured {
 		evidence = append(evidence, "Block latency histogram is present for the QEMU iothread, not the guest filesystem.")
-		if block[0].ReadP99Ns >= aggregate.SlowBlockNS || block[0].WriteP99Ns >= aggregate.SlowBlockNS {
+		if len(dblock) > 0 && (dblock[0].ReadP99Ns >= aggregate.SlowBlockNS || dblock[0].WriteP99Ns >= aggregate.SlowBlockNS) {
 			evidence = append(evidence, "Block p99 is at least 10ms on the QEMU iothread.")
 		}
 	}
-	if len(sched) > 0 && sched[0].Measured && sched[0].WakeupCount > 0 && sched[0].WakeupDelayNs/sched[0].WakeupCount >= aggregate.SlowWakeupNS {
+	if len(dsched) > 0 && dsched[0].Measured && dsched[0].WakeupCount > 0 && dsched[0].WakeupDelayNs/dsched[0].WakeupCount >= aggregate.SlowWakeupNS {
 		evidence = append(evidence, "Mean wakeup delay is at least 20ms.")
 	}
 	if len(net) > 0 && (net[0].Connects > 0 || net[0].Retransmits > 0) {
 		evidence = append(evidence, "TCP connects are from the QEMU process. They are not guest flows.")
 	}
+	missing := []string{"CPU steal", "in-guest process identity"}
+	tapAttached := false
+	for _, p := range s.Programs() {
+		if p.Name == "tap" && p.Status == "attached" {
+			tapAttached = true
+		}
+	}
+	if !tapAttached {
+		missing = append([]string{"guest tap attribution (TCX on the VM tap is not attached)"}, missing...)
+	}
 	return Explain{
-		VM: vm, Question: "why is this VM slow?",
+		VM: vm, Question: "why is this VM slow?", Window: over,
+		Findings: diagnose(vm.Name != "", dkvm, dsched, dthreads, dblock, dnet),
+		Basis:    basis,
 		Evidence: evidence,
-		Missing: []string{
-			"guest tap attribution (TC/TCX on the VM tap is not attached)",
-			"CPU steal",
-			"in-guest process identity",
-		},
-		Events: s.Recorder(name, 60*time.Second, now),
+		Missing:  missing,
+		Events:   s.Recorder(name, 60*time.Second, now),
+	}
+}
+
+type windowedRows struct {
+	kvm     []aggregate.KVMRow
+	sched   []aggregate.SchedRow
+	block   []aggregate.BlockRow
+	net     []aggregate.NetRow
+	threads []aggregate.ThreadRow
+}
+
+// windowRows turns per-thread window counters into the same rows the API serves,
+// by treating the window as if it were the whole history.
+func windowRows(vm identity.VM, per map[uint32]aggregate.Counters, vendor string) windowedRows {
+	syn := vm
+	rows := windowedRows{
+		kvm:     aggregate.KVM([]identity.VM{syn}, per, vm.Name),
+		sched:   aggregate.Sched([]identity.VM{syn}, per, vm.Name),
+		block:   aggregate.Block([]identity.VM{syn}, per, vm.Name),
+		net:     aggregate.Net([]identity.VM{syn}, per, vm.Name),
+		threads: aggregate.SchedThreads([]identity.VM{syn}, per, vm.Name),
+	}
+	aggregate.NameReasons(rows.kvm, vendor)
+	return rows
+}
+
+// carryMeasured copies each program's Measured flag from the lifetime rows. A
+// window with no activity has empty counters, which says nothing about whether
+// the program is attached.
+func carryMeasured(dkvm []aggregate.KVMRow, dsched []aggregate.SchedRow, dblock []aggregate.BlockRow,
+	kvm []aggregate.KVMRow, sched []aggregate.SchedRow, block []aggregate.BlockRow) {
+	if len(dkvm) > 0 && len(kvm) > 0 {
+		dkvm[0].Measured = kvm[0].Measured
+	}
+	if len(dsched) > 0 && len(sched) > 0 {
+		dsched[0].Measured = sched[0].Measured
+	}
+	if len(dblock) > 0 && len(block) > 0 {
+		dblock[0].Measured = block[0].Measured
 	}
 }
 

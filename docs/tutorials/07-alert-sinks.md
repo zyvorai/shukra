@@ -17,7 +17,7 @@ Each sink has its own queue of 256 and its own goroutine, so a stuck webhook can
 | `-syslog` | One JSON line to the local syslog daemon, facility `daemon`, tag `shukra`. `critical` is crit, `high` err, `medium` warning, `low` notice |
 | `-alert-file` | One JSON line appended to the file, mode `0600`. It rolls to `.1` at 16 MiB |
 
-The payload is the event shape from the API. `rule` is the rule name, so a receiver can route on it without parsing `message`. `guest_attributed` is `false`.
+The payload is the event shape from the API. `rule` is the rule name, so a receiver can route on it without parsing `message`. `guest_attributed` is `true` only for a detection on traffic seen on a VM tap, and `attribution` says which.
 
 ## Webhook signature
 

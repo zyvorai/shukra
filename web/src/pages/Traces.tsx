@@ -1,7 +1,7 @@
 import HostBanner from '../components/HostBanner';
 import LatencyHist from '../components/LatencyHist';
 import { fmtBytes, fmtNs } from '../hist';
-import { useAPI } from '../useAPI';
+import { LIVE_MS, useAPI } from '../useAPI';
 
 type Row = Record<string, unknown>;
 
@@ -27,7 +27,7 @@ function reasons(v: unknown) {
 }
 
 export function KVM() {
-  const { data, err } = useAPI<{ rows: Row[] }>('/api/v1/trace/kvm');
+  const { data, err } = useAPI<{ rows: Row[] }>('/api/v1/trace/kvm', { refreshMs: LIVE_MS });
   return (
     <div>
       <Trace
@@ -46,7 +46,7 @@ export function KVM() {
 }
 
 export function Sched() {
-  const { data, err } = useAPI<{ rows: Row[]; threads?: Row[] }>('/api/v1/trace/sched?threads=1');
+  const { data, err } = useAPI<{ rows: Row[]; threads?: Row[] }>('/api/v1/trace/sched?threads=1', { refreshMs: LIVE_MS });
   return (
     <div>
       <Trace
@@ -74,7 +74,7 @@ export function Sched() {
 }
 
 export function Block() {
-  const { data, err } = useAPI<{ rows: Row[] }>('/api/v1/trace/block');
+  const { data, err } = useAPI<{ rows: Row[] }>('/api/v1/trace/block', { refreshMs: LIVE_MS });
   return (
     <Trace
       title="Block latency"
@@ -92,17 +92,28 @@ export function Block() {
 }
 
 export function Programs() {
-  const { data, err } = useAPI<{ programs: Row[] }>('/api/v1/programs');
+  const { data, err } = useAPI<{ programs: Row[] }>('/api/v1/programs', { refreshMs: LIVE_MS });
   return <Trace title="Programs" err={err} rows={data?.programs} cols={['name', 'status', 'detail']} />;
 }
 
 export function Connections() {
-  const { data, err } = useAPI<{ events: Row[] }>('/api/v1/events');
-  const rows = (data?.events || []).filter((e) => e.kind === 'tcp_connect' || e.kind === 'tcp_retransmit');
+  const { data, err } = useAPI<{ events: Row[] }>('/api/v1/events', { refreshMs: LIVE_MS });
+  const all = data?.events || [];
+  const host = all.filter((e) => e.kind === 'tcp_connect' || e.kind === 'tcp_retransmit');
+  const guest = all.filter((e) => e.kind === 'guest_connect' || e.kind === 'guest_flow');
   return (
     <div>
       <HostBanner />
-      <Trace title="Host connections" err={err} rows={rows} cols={['ts', 'kind', 'dst', 'dport', 'attribution', 'guest_attributed']} />
+      <Trace title="Host connections" err={err} rows={host} cols={['ts', 'kind', 'dst', 'dport', 'attribution', 'guest_attributed']} />
+      {guest.length > 0 && (
+        <Trace
+          title="Guest connections and UDP flows (seen on the VM tap)"
+          err=""
+          rows={guest}
+          cols={['ts', 'vm', 'proto', 'src', 'dst', 'dport', 'blocked', 'attribution', 'guest_attributed']}
+          format={{ vm: (v) => String((v as { name?: string } | undefined)?.name ?? '—'), blocked: (v) => (v ? 'dropped' : '—') }}
+        />
+      )}
     </div>
   );
 }

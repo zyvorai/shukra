@@ -10,4 +10,4 @@ Short paths through Shukra. Each one assumes you have read the boundary: this re
 6. [Detection rules](06-watchlist.md) — destinations, ports, exec allow-list, per-VM thresholds, and suppression.
 7. [Alert sinks](07-alert-sinks.md) — webhook (signed), syslog and file delivery.
 
-Deeper reference, not a walkthrough: [shukractl](../shukractl.md), [attribution](../attribution.md), [tap/TCX roadmap](../roadmap-taptrace.md).
+Deeper reference, not a walkthrough: [shukractl](../shukractl.md), [attribution](../attribution.md), [guest traffic and isolation](../tap.md).

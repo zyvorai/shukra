@@ -30,10 +30,13 @@ The same file holds the other rule types below. It is read strictly: an unknown 
 ```yaml
 suppress: 5m           # default; 0s alerts every time
 
-ports:                 # any connect to this destination port
+ports:                 # a connect (or, with proto, a UDP flow) to this destination port
   - port: 25
     name: smtp-egress
     severity: medium
+  - port: 53
+    name: dns-out
+    proto: udp         # tcp (the default), udp or any
 
 exec_allow:            # may start under QEMU without an alert; lowercase prefix
   - node_exporter
@@ -54,6 +57,9 @@ thresholds:            # per VM, over a window
 |---|---|
 | `block_read_p99_ms`, `block_write_p99_ms` | p99 of the requests that finished in the window |
 | `wakeup_delay_ms` | mean scheduler wakeup delay in the window |
+| `kvm_exit_latency_p99_ms` | p99 host time handling a KVM exit in the window. Halts are excluded, since they are guest idle |
+| `runqueue_delay_p99_ms` | p99 wait for a host CPU after a wakeup, across the VM's threads |
+| `block_read_bytes_per_sec`, `block_write_bytes_per_sec`, `block_iops` | Throughput and request rate on the QEMU I/O thread |
 | `kvm_exits_per_sec` | KVM exits per second |
 | `tcp_retransmits_per_sec` | retransmits per second |
 
@@ -86,10 +92,10 @@ shukractl security <vm>
 shukractl watch --json
 ```
 
-Or open Detections in the console. The event kind is `detection` and `rule` names the rule that fired. The message is the rule name plus the destination. `guest_attributed` is still false. The flight recorder keeps the same event, so `shukractl recorder <vm> --window 60s` shows it if it happened inside the window.
+Or open Detections in the console. The event kind is `detection` and `rule` names the rule that fired. The message is the rule name plus the destination. `guest_attributed` is false for a host connect. A rule that fires on a guest connect seen on the VM tap is `guest_attributed: true` with `attribution: "guest-tap"`, and it is a separate alert from a host connect to the same address. The flight recorder keeps the same event, so `shukractl recorder <vm> --window 60s` shows it if it happened inside the window.
 
 A connect that matches nothing is a normal `tcp_connect` event, not a detection.
 
 ## What you should not add
 
-Do not put "block this CIDR" in the YAML and expect it to happen. Enforcement is the isolate path, and [isolate does not attach](04-shukractl.md). Detection stays a notice until a later slice programs the tap, and even then the allow list for management access has to be explicit. See [roadmap-taptrace.md](../roadmap-taptrace.md).
+Do not put "block this CIDR" in the YAML and expect it to happen. A detection only notices. Enforcement is the separate, deliberate `isolate` step, which drops a whole VM's tap traffic except an explicit management allow list. See [Guest traffic and isolation](../tap.md).

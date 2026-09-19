@@ -1,4 +1,4 @@
-import { useAPI } from '../useAPI';
+import { LIVE_MS, useAPI } from '../useAPI';
 
 type VM = {
   name: string;
@@ -20,7 +20,7 @@ function roleLine(info?: { role: string }[]) {
 }
 
 export default function VMs() {
-  const { data, err } = useAPI<{ vms: VM[] }>('/api/v1/vms');
+  const { data, err } = useAPI<{ vms: VM[] }>('/api/v1/vms', { refreshMs: LIVE_MS });
   const vms = data?.vms || [];
   if (err) return <p className="warning">{err}</p>;
   if (data && vms.length === 0) return <p className="empty-state">No qemu-system process in the proc scan.</p>;

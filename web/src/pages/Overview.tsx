@@ -1,5 +1,5 @@
 import { fixtureMode } from '../fixtures';
-import { useAPI } from '../useAPI';
+import { LIVE_MS, useAPI } from '../useAPI';
 
 type Status = {
   vms: number;
@@ -11,7 +11,7 @@ type Status = {
 };
 
 export default function Overview() {
-  const { data, err } = useAPI<Status>('/api/v1/status');
+  const { data, err } = useAPI<Status>('/api/v1/status', { refreshMs: LIVE_MS });
   return (
     <div className="grid">
       {fixtureMode && <p className="warning span3">Fixture data. shukrad is not attached. Counters on the other pages are sample rows, not a live hypervisor.</p>}

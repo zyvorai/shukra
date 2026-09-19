@@ -42,13 +42,13 @@ func TestParseFullDocument(t *testing.T) {
 	if r, ok := c.Watch.Match(parseIP("185.1.1.1")); !ok || r.Severity != "high" {
 		t.Fatalf("watch %+v %v", r, ok)
 	}
-	if r, ok := c.MatchPort(25); !ok || r.Name != "smtp" || r.Severity != "medium" {
+	if r, ok := c.MatchPort(25, "tcp"); !ok || r.Name != "smtp" || r.Severity != "medium" {
 		t.Fatalf("port %+v", r)
 	}
-	if r, ok := c.MatchPort(6667); !ok || r.Name != "port-6667" || r.Severity != "high" {
+	if r, ok := c.MatchPort(6667, "tcp"); !ok || r.Name != "port-6667" || r.Severity != "high" {
 		t.Fatalf("default port rule %+v", r)
 	}
-	if _, ok := c.MatchPort(80); ok {
+	if _, ok := c.MatchPort(80, "tcp"); ok {
 		t.Fatal("port 80 matched")
 	}
 	if !c.AllowsExec("backup-agent-2") || !c.AllowsExec("NODE_EXPORTER") || c.AllowsExec("nc") {
@@ -153,7 +153,43 @@ func TestShippedExampleParses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("with examples enabled: %v\n%s", err, strings.Join(on, "\n"))
 	}
-	if len(full.Ports) != 1 || len(full.Thresholds) != 1 || len(full.ExecAllow) != 1 || full.Suppress != DefaultSuppress {
+	if len(full.Ports) != 2 || full.Ports[1].Proto != "udp" || len(full.Thresholds) != 1 || len(full.ExecAllow) != 1 || full.Suppress != DefaultSuppress {
 		t.Fatalf("%+v", full)
+	}
+}
+
+func TestPortRulesMatchByProtocol(t *testing.T) {
+	c, err := Parse([]byte(`
+ports:
+  - {port: 25, name: smtp}
+  - {port: 53, name: dns-udp, proto: udp}
+  - {port: 123, name: ntp-any, proto: any}
+  - {port: 443, name: https, proto: tcp}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range []struct {
+		port  uint16
+		proto string
+		want  string
+	}{
+		{25, "tcp", "smtp"}, {25, "udp", ""}, // no proto means TCP, as it always did
+		{25, "", "smtp"}, // an event with no protocol is a host connect, which is TCP
+		{53, "udp", "dns-udp"}, {53, "tcp", ""},
+		{123, "udp", "ntp-any"}, {123, "tcp", "ntp-any"},
+		{443, "tcp", "https"}, {443, "udp", ""},
+		{9999, "udp", ""},
+	} {
+		r, ok := c.MatchPort(x.port, x.proto)
+		if (x.want == "") == ok || (ok && r.Name != x.want) {
+			t.Errorf("%d/%s: got %q ok=%v, want %q", x.port, x.proto, r.Name, ok, x.want)
+		}
+	}
+	if c.Ports[0].Proto != "tcp" {
+		t.Fatalf("the default proto is %q", c.Ports[0].Proto)
+	}
+	if _, err := Parse([]byte("ports:\n  - {port: 53, proto: icmp}\n")); err == nil {
+		t.Fatal("an unknown proto was accepted")
 	}
 }

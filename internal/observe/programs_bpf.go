@@ -33,6 +33,9 @@ func programs() []Program {
 		}
 	})
 	out := append([]Program(nil), loaded...)
+	// The tap program is attached per VM interface, so its state changes as VMs come and go.
+	tapStatus, tapDetail := TapProgram()
+	out = append(out, Program{Name: "tap", Status: tapStatus, Detail: tapDetail})
 	if n := lostSamples(); n > 0 {
 		suffix := fmt.Sprintf("lost=%d", n)
 		for i := range out {

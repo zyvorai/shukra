@@ -378,3 +378,77 @@ func Net(vms []identity.VM, byPID map[uint32]Counters, vm string) []NetRow {
 	}
 	return out
 }
+
+// Delta is what accumulated between base and cur: the counters over a window. A
+// counter that went backwards (a thread that exited and a new one took its id, or
+// an entry that was evicted and re-created) has been reset, so what cur holds is
+// what accumulated since the reset, and that is used as-is instead of a negative
+// or enormous difference.
+func Delta(cur, base Counters) Counters {
+	d := Counters{
+		Entries: sub(cur.Entries, base.Entries), MMIO: sub(cur.MMIO, base.MMIO), PIO: sub(cur.PIO, base.PIO),
+		OnCPUNs: sub(cur.OnCPUNs, base.OnCPUNs), WakeupDelayNs: sub(cur.WakeupDelayNs, base.WakeupDelayNs),
+		WakeupCount:     sub(cur.WakeupCount, base.WakeupCount),
+		BlockIssues:     sub(cur.BlockIssues, base.BlockIssues),
+		BlockReadOps:    sub(cur.BlockReadOps, base.BlockReadOps),
+		BlockWriteOps:   sub(cur.BlockWriteOps, base.BlockWriteOps),
+		BlockReadBytes:  sub(cur.BlockReadBytes, base.BlockReadBytes),
+		BlockWriteBytes: sub(cur.BlockWriteBytes, base.BlockWriteBytes),
+		Connects:        sub(cur.Connects, base.Connects), Retransmits: sub(cur.Retransmits, base.Retransmits),
+		// A maximum is not a rate: it cannot be subtracted, and the window's own
+		// maximum is not known. Report the lifetime one rather than a wrong number.
+		BlockReadMax: cur.BlockReadMax, BlockWriteMax: cur.BlockWriteMax,
+	}
+	d.Exits = subMap(cur.Exits, base.Exits)
+	d.ExitNs = subMap(cur.ExitNs, base.ExitNs)
+	d.KVMLat = subHist(cur.KVMLat, base.KVMLat)
+	d.SchedHist = subHist(cur.SchedHist, base.SchedHist)
+	d.BlockRead = subHist(cur.BlockRead, base.BlockRead)
+	d.BlockWrite = subHist(cur.BlockWrite, base.BlockWrite)
+	return d
+}
+
+func sub(cur, base uint64) uint64 {
+	if cur < base {
+		return cur
+	}
+	return cur - base
+}
+
+func subMap(cur, base map[uint32]uint64) map[uint32]uint64 {
+	if cur == nil {
+		return nil
+	}
+	out := make(map[uint32]uint64, len(cur))
+	for k, v := range cur {
+		out[k] = sub(v, base[k])
+	}
+	return out
+}
+
+func subHist(cur, base []uint64) []uint64 {
+	if cur == nil {
+		return nil
+	}
+	out := make([]uint64, len(cur))
+	for i, v := range cur {
+		var b uint64
+		if i < len(base) {
+			b = base[i]
+		}
+		out[i] = sub(v, b)
+	}
+	return out
+}
+
+// Clone copies a Counters so a later change to the original cannot alter it.
+func (c Counters) Clone() Counters {
+	out := c
+	out.Exits = subMap(c.Exits, nil)
+	out.ExitNs = subMap(c.ExitNs, nil)
+	out.KVMLat = append([]uint64(nil), c.KVMLat...)
+	out.SchedHist = append([]uint64(nil), c.SchedHist...)
+	out.BlockRead = append([]uint64(nil), c.BlockRead...)
+	out.BlockWrite = append([]uint64(nil), c.BlockWrite...)
+	return out
+}

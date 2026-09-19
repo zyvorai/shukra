@@ -18,9 +18,9 @@ What it does:
 2. Builds the console with `npm ci` if npm is present.
 3. Runs `make generate` when clang and `/sys/kernel/btf/vmlinux` exist, then `go build -tags shukrabpf`. If generate fails, it still builds a detached daemon and says so.
 4. Installs `/usr/local/bin/shukrad` and `/usr/local/bin/shukractl`.
-5. Copies `configs/detections.example.yaml` to `/etc/shukra/detections.yaml`.
-6. Writes `~/.shukra/env` and `~/.shukra/api-key` for the SSH user.
-7. Installs `shukra.service` (with `-data-dir /var/lib/shukra` and `ExecReload`), enables it, and restarts it. Detections, isolation requests and the flight recorder now survive that restart.
+5. Installs `configs/detections.example.yaml` as `/etc/shukra/detections.yaml` only if there is none. Your edited rules are kept, and the current sample is always written beside them as `detections.example.yaml`.
+6. Writes the API key to `/etc/shukra/env` (root only, `0600`) for the service, and `~/.shukra/env` and `~/.shukra/api-key` for the SSH user. The key is not in the unit file, because `systemctl show` prints a unit's `Environment=` to every local user.
+7. Installs `shukra.service` from `deploy/shukra.service` (with `-data-dir /var/lib/shukra` and `ExecReload`), enables it, and restarts it. Detections, isolation requests and the flight recorder now survive that restart.
 8. Runs `shukractl status`, `programs`, `vms`, `trace list`, and `GET /api/v1/status`.
 
 The unit listens on `0.0.0.0:30970`. The token defaults to `shukra` unless you export `SHUKRA_API_KEY` before deploying. Set a real token on any host that is not a lab:
@@ -30,6 +30,61 @@ SHUKRA_API_KEY="$(openssl rand -hex 16)" ./scripts/deploy-remote.sh 10.0.1.5 sus
 ```
 
 Passwordless `sudo` is required for install, the unit file, and `systemctl`.
+
+## What the service is allowed to do
+
+The unit runs as root but with only six capabilities, each there for a reason that was checked by removing it:
+
+| Capability | Why |
+|---|---|
+| `CAP_BPF`, `CAP_PERFMON`, `CAP_SYS_RESOURCE` | load programs, attach tracepoints and kprobes, read maps |
+| `CAP_NET_ADMIN` | load and attach the TCX tap program. Without it the tap program fails to load with `operation not permitted` |
+| `CAP_SYS_PTRACE`, `CAP_DAC_READ_SEARCH` | read a VM's tap names from the tun file descriptors of a QEMU that runs as another user. libvirt passes taps as fds, so the names are not on the command line. Without either, those VMs have no known tap |
+
+`CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH` are broad. They are needed only to read `/proc/<pid>/fd` and `fdinfo` of processes owned by another user, and the daemon never calls `ptrace`. If you run no libvirt VMs and want them off, remove those two from both capability lines in the unit and QEMU processes started with `ifname=` on their command line will still be found. On a kernel older than 5.8 the deploy drops the capability lines entirely, because `CAP_BPF` does not exist there, and the rest of the hardening stays. The filesystem is read-only to the service except `/var/lib/shukra`, and it cannot gain privileges, load kernel modules, or open sockets other than IP, Unix and netlink. On a 6.8 kernel this was checked by running the real unit: all programs attached and counted, a libvirt-style VM's tap was found and instrumented, a write to `/etc` from inside the service failed, and `systemd-analyze security` scored the earlier three-capability set 4.3 (OK).
+
+## Encrypt the API
+
+The unit listens on plain HTTP, so the bearer key crosses the network in the clear. Turn on TLS by adding arguments to `/etc/shukra/env`:
+
+```bash
+echo 'SHUKRA_EXTRA_ARGS=-tls-cert /etc/shukra/tls.crt -tls-key /etc/shukra/tls.key' | sudo tee -a /etc/shukra/env
+sudo systemctl restart shukra
+```
+
+`systemctl reload shukra` re-reads the certificate as well as the detection rules, so a renewed certificate needs no restart. A bad file on reload is logged and the working certificate stays in use. The floor is TLS 1.2. Point the CLI at a private CA with `SHUKRA_CA_FILE=/path/ca.pem` and `SHUKRA_URL=https://...`. The daemon warns at start when it serves plain HTTP on a non-loopback address.
+
+## A key that can only read
+
+Set `SHUKRA_READONLY_KEY` in `/etc/shukra/env` and give that key to a Prometheus scrape or a dashboard. It can call every `GET`, including `/metrics` and the event stream, and gets `403` on `POST /api/v1/isolate`. It must differ from `SHUKRA_API_KEY`, and the daemon refuses to start otherwise.
+
+## Deploy without a compiler on the host
+
+`shukrad` carries its eBPF programs compiled in, so a host that only runs it needs kernel BTF (`/sys/kernel/btf/vmlinux`), not go, clang or bpftool. Build on a machine of the same architecture and ship the result:
+
+```bash
+make dist                      # dist/shukra-<version>-linux-<arch>.tar.gz and a .deb
+./scripts/deploy-remote.sh 10.0.1.5 sus --prebuilt dist/shukra-v1.2.3-linux-amd64.tar.gz
+```
+
+The tarball holds `bin/`, `deploy/`, `configs/` and the console, and `deploy/install.sh` installs it. That is the same routine the source deploy and the `.deb` run, so all three lay down the same files. `make dist` needs Linux with clang, `llvm-strip`, `bpftool` and BTF, because `bpf/vmlinux.h` comes from the build machine's kernel. Build each architecture on that architecture. CO-RE then lets the binary run on other kernels of the same architecture.
+
+On Debian or Ubuntu the `.deb` does the whole install:
+
+```bash
+sudo dpkg -i shukra_1.2.3_amd64.deb
+sudo grep SHUKRA_API_KEY /etc/shukra/env      # a random key was generated on first install
+```
+
+It installs `/usr/bin/shukrad` and `/usr/bin/shukractl`, the unit, and the sample rules, and starts the service. Upgrading keeps your rules and key, `dpkg -r` keeps `/etc/shukra`, and `dpkg -P` removes it and `/var/lib/shukra`. The unit listens on `0.0.0.0:30970` like the source deploy. To bind only locally, put `SHUKRA_EXTRA_ARGS=-listen 127.0.0.1:30970` in `/etc/shukra/env`; a later `-listen` wins. No `.rpm` is built yet.
+
+Pushing a tag such as `v1.2.3` runs `.github/workflows/release.yml`, which builds both packages for amd64 and arm64 and attaches them, with checksums, to a GitHub release. That workflow has not run yet, so treat its first run as a test.
+
+`shukrad -version` and `shukractl version` print the stamped version. A source deploy builds on the host and reports the git describe, or `0.1.0` when the host has no `.git`.
+
+## Upgrading a host deployed by an older script
+
+The first deploy with this script moves the API key out of the unit file into `/etc/shukra/env` and keeps the same key, so consoles and scripts that use it keep working. It keeps an edited `/etc/shukra/detections.yaml`. If you export `SHUKRA_API_KEY` the key is replaced; if you do not, the current one is kept, and a host with none gets a random one, which is printed once.
 
 ## Dry run and re-check
 

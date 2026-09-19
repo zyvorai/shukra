@@ -1,17 +1,25 @@
 #!/usr/bin/env bash
-# Shukra — remote deploy (SSH + rsync + host build)
+# Shukra — remote deploy (SSH + rsync + host build, or a prebuilt release)
 #
 # Shukra attaches eBPF on the hypervisor. It is not a cluster chart.
-# This script follows Netra's deploy-remote entrypoint (HOST USER, rsync,
-# remote build, operator CLI on PATH, env file, then a live check).
 #
 # Usage:
 #   ./scripts/deploy-remote.sh user@10.0.1.5
 #   ./scripts/deploy-remote.sh 80.79.5.173 sus
 #   ./scripts/deploy-remote.sh 80.79.5.173 sus --verify-only
+#   ./scripts/deploy-remote.sh 80.79.5.173 sus --prebuilt dist/shukra-v1.2.3-linux-amd64.tar.gz
 #
-# SHUKRA_REMOTE_SUBDIR overrides the checkout under $HOME
-# (default: .deployments/shukra).
+# Without --prebuilt the tree is rsynced to the host and built there (go, and
+# clang plus kernel BTF for the BPF programs). With --prebuilt nothing is compiled
+# on the host: the tarball from `make dist` carries the binaries, and the host
+# needs only kernel BTF.
+#
+# SHUKRA_API_KEY        the admin key to install. Unset keeps the key already on
+#                       the host, and a fresh host gets a random one.
+# SHUKRA_REMOTE_SUBDIR  checkout under $HOME (default: .deployments/shukra)
+# SHUKRA_SSH_OPTS       extra ssh/scp options, for example "-F ~/.lima/bpf/ssh.config"
+# SHUKRA_ALLOW_DETACHED=1  install a daemon with no BPF programs when they fail to build on a
+#                       host that has clang and BTF. Without it that is an error and nothing is installed.
 # UI/API: :30970
 set -euo pipefail
 
@@ -20,12 +28,15 @@ ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 DRY_RUN=false
 VERIFY_ONLY=false
+PREBUILT=""
 TARGET=""
-SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30)
+# shellcheck disable=SC2206
+EXTRA_SSH=(${SHUKRA_SSH_OPTS:-})
+SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 ${EXTRA_SSH[@]+"${EXTRA_SSH[@]}"})
 POSITIONAL=()
 
 usage() {
-  sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 }
 
@@ -34,6 +45,9 @@ while [[ $# -gt 0 ]]; do
     -h|--help) usage ;;
     --dry-run) DRY_RUN=true; shift ;;
     --verify-only) VERIFY_ONLY=true; shift ;;
+    --prebuilt)
+      [[ $# -ge 2 ]] || { echo "--prebuilt needs a tarball" >&2; exit 2; }
+      PREBUILT="$2"; shift 2 ;;
     -*)
       echo "unknown flag: $1" >&2
       exit 2
@@ -64,8 +78,10 @@ if [[ -z "${TARGET}" ]]; then
   echo "usage: $0 user@host   or   $0 HOST USER" >&2
   exit 2
 fi
-
-API_KEY_LOCAL="${SHUKRA_API_KEY:-shukra}"
+if [[ -n "${PREBUILT}" && ! -f "${PREBUILT}" ]]; then
+  echo "prebuilt tarball not found: ${PREBUILT}" >&2
+  exit 2
+fi
 
 ssh_host() { ssh "${SSH_OPTS[@]}" "$TARGET" "$@"; }
 REMOTE_HOME="$(ssh_host 'printf %s "$HOME"')"
@@ -73,47 +89,119 @@ REMOTE_DIR="${REMOTE_HOME}/${SHUKRA_REMOTE_SUBDIR:-.deployments/shukra}"
 
 log() { printf '[shukra-deploy] %s\n' "$*"; }
 
+# The key the service actually uses is whatever is in /etc/shukra/env, so the
+# checks read it from there instead of assuming the one on this command line.
+read_key='API_KEY="$(sudo sed -n "s/^SHUKRA_API_KEY=//p" /etc/shukra/env | head -1)"'
+
 if $VERIFY_ONLY; then
   ssh_host "bash -s" <<EOF
 set -euo pipefail
+${read_key}
 export SHUKRA_URL="http://127.0.0.1:30970"
-export SHUKRA_API_KEY="${API_KEY_LOCAL}"
+export SHUKRA_API_KEY="\$API_KEY"
 export SHUKRA_CLI_NO_BANNER=1
 export SHUKRA_CLI_COLOR=false
 export SHUKRA_SKIP_DOTENV=1
 systemctl is-active shukra
+shukractl version
 shukractl status
 shukractl programs
 shukractl vms
 shukractl trace list
-curl -sf -H "Authorization: Bearer ${API_KEY_LOCAL}" "\$SHUKRA_URL/api/v1/status"
+curl -sf -H "Authorization: Bearer \$API_KEY" "\$SHUKRA_URL/api/v1/status"
 echo
 EOF
   exit 0
 fi
 
-log "sync → ${TARGET}:${REMOTE_DIR}"
-if ! $DRY_RUN; then
-  ssh_host "mkdir -p ${REMOTE_DIR}"
-  rsync -az --delete \
-    --exclude '.git' --exclude 'bin' --exclude 'web/node_modules' --exclude 'web/dist' \
-    --exclude 'bpf/*.o' --exclude 'bpf/vmlinux.h' --exclude '.DS_Store' --exclude '.cursor' \
-    "${ROOT}/" "${TARGET}:${REMOTE_DIR}/"
+# Everything after the tree is on the host. The install itself is deploy/install.sh,
+# the same routine the release tarball and the .deb use.
+common_tail=$(cat <<EOF
+${read_key}
+mkdir -p "\$HOME/.shukra"
+printf '%s\n' "\$API_KEY" > "\$HOME/.shukra/api-key"
+cat > "\$HOME/.shukra/env" <<ENVEOF
+# Written by deploy-remote.sh — sourced automatically by shukractl.
+SHUKRA_URL=http://127.0.0.1:30970
+SHUKRA_API_KEY=\${API_KEY}
+ENVEOF
+chmod 600 "\$HOME/.shukra/"* || true
+
+export SHUKRA_URL="http://127.0.0.1:30970"
+export SHUKRA_API_KEY="\$API_KEY"
+export SHUKRA_CLI_NO_BANNER=1
+export SHUKRA_CLI_COLOR=false
+export SHUKRA_SKIP_DOTENV=1
+
+echo "---- shukractl version ----"
+shukractl version
+echo "---- shukractl status ----"
+shukractl status
+echo "---- shukractl programs ----"
+shukractl programs
+echo "---- shukractl vms ----"
+shukractl vms
+echo "---- shukractl trace list ----"
+shukractl trace list
+echo "---- shukractl doctor (what needs attention; informational) ----"
+shukractl doctor || true
+curl -sf -H "Authorization: Bearer \$API_KEY" "\$SHUKRA_URL/api/v1/status"
+echo
+HOST_IP="\$(hostname -I | awk '{print \$1}')"
+echo "SHUKRA_URL=http://\${HOST_IP}:30970"
+echo "Shukra ready"
+EOF
+)
+
+key_env=""
+if [[ -n "${SHUKRA_API_KEY:-}" ]]; then
+  key_env="export SHUKRA_API_KEY='${SHUKRA_API_KEY}'"
+fi
+allow_env=""
+if [[ "${SHUKRA_ALLOW_DETACHED:-}" == "1" ]]; then
+  allow_env="export SHUKRA_ALLOW_DETACHED=1"
 fi
 
-remote_script=$(cat <<EOF
+if [[ -n "${PREBUILT}" ]]; then
+  remote_script=$(cat <<EOF
+set -euo pipefail
+cd ${REMOTE_DIR}/release
+tar -xzf $(basename "${PREBUILT}") --strip-components=1
+${key_env}
+echo "Installing the prebuilt release (nothing is compiled on this host)"
+./deploy/install.sh
+${common_tail}
+EOF
+)
+  log "prebuilt ${PREBUILT} → ${TARGET}:${REMOTE_DIR}/release"
+  if ! $DRY_RUN; then
+    ssh_host "rm -rf ${REMOTE_DIR}/release && mkdir -p ${REMOTE_DIR}/release"
+    scp "${SSH_OPTS[@]}" "${PREBUILT}" "${TARGET}:${REMOTE_DIR}/release/"
+  fi
+else
+  log "sync → ${TARGET}:${REMOTE_DIR}"
+  if ! $DRY_RUN; then
+    ssh_host "mkdir -p ${REMOTE_DIR}"
+    rsync -az --delete -e "ssh ${SSH_OPTS[*]}" \
+      --exclude '.git' --exclude 'bin' --exclude 'dist' --exclude 'web/node_modules' --exclude 'web/dist' \
+      --exclude 'bpf/*.o' --exclude 'bpf/vmlinux.h' --exclude '.DS_Store' --exclude '.cursor' \
+      "${ROOT}/" "${TARGET}:${REMOTE_DIR}/"
+  fi
+  remote_script=$(cat <<EOF
 set -euo pipefail
 cd ${REMOTE_DIR}
 export PATH="/usr/local/go/bin:/usr/local/bin:\$HOME/go/bin:/usr/bin:\$PATH"
 export GOTOOLCHAIN=auto
-API_KEY="${API_KEY_LOCAL}"
+${allow_env}
 
 if ! command -v go >/dev/null 2>&1; then
   echo "go is not installed on the host" >&2
   exit 1
 fi
 
-echo "Building Shukra with \$(go version)"
+VERSION="\$(git describe --tags --always --dirty 2>/dev/null || echo 0.1.0)"
+LDFLAGS="-X github.com/zyvorai/shukra/internal/version.Version=\${VERSION}"
+echo "Building Shukra \${VERSION} with \$(go version)"
 if command -v npm >/dev/null 2>&1; then
   if [[ -f web/package-lock.json ]]; then
     npm --prefix web ci
@@ -129,8 +217,16 @@ BPF_TAG=""
 if command -v clang >/dev/null 2>&1 && [[ -r /sys/kernel/btf/vmlinux ]]; then
   if make generate && compgen -G "internal/bpfgen/*_bpfel.go" >/dev/null; then
     BPF_TAG="-tags shukrabpf"
+  elif [[ "\${SHUKRA_ALLOW_DETACHED:-}" == "1" ]]; then
+    echo "CO-RE objects were not generated; building without them (SHUKRA_ALLOW_DETACHED=1)" >&2
   else
-    echo "CO-RE objects were not generated; building without them" >&2
+    # This host says it can build them, so a failure is a real problem. Installing a
+    # daemon that reports every program detached over the one that is running would
+    # turn a build error into an outage of observability. Stop before installing.
+    echo "ERROR: clang and kernel BTF are present but the CO-RE objects did not build." >&2
+    echo "Nothing was installed and the running service was not touched." >&2
+    echo "Fix the build, or set SHUKRA_ALLOW_DETACHED=1 to install a detached daemon anyway." >&2
+    exit 1
   fi
 else
   echo "clang or BTF missing; programs will report detached" >&2
@@ -138,92 +234,15 @@ fi
 
 mkdir -p bin
 # shellcheck disable=SC2086
-CGO_ENABLED=0 go build \${BPF_TAG} -o bin/shukrad ./cmd/shukrad
-CGO_ENABLED=0 go build -o bin/shukractl ./cmd/shukractl
+CGO_ENABLED=0 go build \${BPF_TAG} -ldflags "\${LDFLAGS}" -o bin/shukrad ./cmd/shukrad
+CGO_ENABLED=0 go build -ldflags "\${LDFLAGS}" -o bin/shukractl ./cmd/shukractl
 
-install_bin() {
-  local src="\$1" dest="\$2"
-  if install -m 755 "\$src" "\$dest" 2>/dev/null; then
-    return 0
-  fi
-  sudo install -d /usr/local/bin
-  sudo install -m 755 "\$src" "\$dest"
-}
-install_bin bin/shukrad /usr/local/bin/shukrad
-install_bin bin/shukractl /usr/local/bin/shukractl
-
-sudo mkdir -p /etc/shukra
-sudo cp -f configs/detections.example.yaml /etc/shukra/detections.yaml
-
-mkdir -p "\$HOME/.shukra"
-printf '%s\n' "\$API_KEY" > "\$HOME/.shukra/api-key"
-cat > "\$HOME/.shukra/env" <<ENVEOF
-# Written by deploy-remote.sh — sourced automatically by shukractl.
-SHUKRA_URL=http://127.0.0.1:30970
-SHUKRA_API_KEY=\${API_KEY}
-ENVEOF
-chmod 600 "\$HOME/.shukra/"* || true
-
-sudo tee /etc/systemd/system/shukra.service >/dev/null <<UNIT
-[Unit]
-Description=Shukra eBPF runtime intelligence for KVM
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=${REMOTE_DIR}
-Environment=SHUKRA_API_KEY=\${API_KEY}
-ExecStart=/usr/local/bin/shukrad -listen 0.0.0.0:30970 -web ${REMOTE_DIR}/web/dist -watchlist /etc/shukra/detections.yaml -data-dir /var/lib/shukra
-ExecReload=/bin/kill -HUP \$MAINPID
-StateDirectory=shukra
-StateDirectoryMode=0700
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-retry() {
-  local i
-  for i in 1 2 3 4 5; do
-    if "\$@"; then
-      return 0
-    fi
-    echo "retry \$i: \$*" >&2
-    sleep 2
-  done
-  return 1
-}
-retry sudo systemctl daemon-reload
-retry sudo systemctl enable shukra
-retry sudo systemctl restart shukra
-sleep 1
-sudo systemctl is-active shukra
-
-export SHUKRA_URL="http://127.0.0.1:30970"
-export SHUKRA_API_KEY="\$API_KEY"
-export SHUKRA_CLI_NO_BANNER=1
-export SHUKRA_CLI_COLOR=false
-export SHUKRA_SKIP_DOTENV=1
-
-echo "---- shukractl status ----"
-shukractl status
-echo "---- shukractl programs ----"
-shukractl programs
-echo "---- shukractl vms ----"
-shukractl vms
-echo "---- shukractl trace list ----"
-shukractl trace list
-curl -sf -H "Authorization: Bearer \$API_KEY" "\$SHUKRA_URL/api/v1/status"
-echo
-HOST_IP="\$(hostname -I | awk '{print \$1}')"
-echo "API_KEY=\$API_KEY"
-echo "SHUKRA_URL=http://\${HOST_IP}:30970"
-echo "Shukra ready"
+${key_env}
+./deploy/install.sh
+${common_tail}
 EOF
 )
+fi
 
 if $DRY_RUN; then
   log "dry-run remote script:"
@@ -232,4 +251,4 @@ if $DRY_RUN; then
 fi
 
 ssh_host 'bash -s' <<<"$remote_script"
-log "done — open http://<host>:30970  (token: ${API_KEY_LOCAL})"
+log "done — open http://<host>:30970"
