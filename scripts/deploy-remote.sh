@@ -127,10 +127,10 @@ fi
 
 BPF_TAG=""
 if command -v clang >/dev/null 2>&1 && [[ -r /sys/kernel/btf/vmlinux ]]; then
-  if make generate; then
+  if make generate && compgen -G "internal/bpfgen/*_bpfel.go" >/dev/null; then
     BPF_TAG="-tags shukrabpf"
   else
-    echo "make generate failed; building without CO-RE objects" >&2
+    echo "CO-RE objects were not generated; building without them" >&2
   fi
 else
   echo "clang or BTF missing; programs will report detached" >&2

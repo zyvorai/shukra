@@ -8,7 +8,12 @@ deps:
 generate:
 	@if ! command -v clang >/dev/null 2>&1; then echo "clang not found; skipping generate"; exit 0; fi
 	@if [ ! -r /sys/kernel/btf/vmlinux ]; then echo "no kernel BTF; skipping generate"; exit 0; fi
-	@if command -v bpftool >/dev/null 2>&1; then bpftool btf dump file /sys/kernel/btf/vmlinux format c > bpf/vmlinux.h; fi
+	@if ! command -v bpftool >/dev/null 2>&1; then echo "bpftool not found; skipping generate"; exit 0; fi
+	@if ! bpftool btf dump file /sys/kernel/btf/vmlinux format c > bpf/vmlinux.h; then \
+		echo "bpftool cannot dump this kernel's BTF; skipping generate"; \
+		rm -f bpf/vmlinux.h; \
+		exit 0; \
+	fi
 	go generate ./bpf/
 
 build:
