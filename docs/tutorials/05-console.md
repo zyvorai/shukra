@@ -20,7 +20,8 @@ A wrong token does not open a fixture. Fixture data exists only when you start V
 | Scheduler | On-CPU time, run-queue delay, and a per-thread table to tell a slow vCPU from a slow iothread |
 | Block | Requests, bytes, worst case, p50 and p99, from a log2 histogram (percentiles are computed in userspace) |
 | Programs | Attached or detached, and the hook detail |
-| Host connections | TCP connects and sampled retransmits |
+| Host connections | The QEMU process's TCP connects and sampled retransmits, and, when the tap program is attached, the guest's own connections, connections made to it, UDP flows, and a per-tap table of what became of every connection |
+| Drops | What the kernel dropped on each VM tap, by reason, and how much of it was Shukra. Says "not measuring" where the drops program is off, and not a zero |
 | Detections | Rule hits: watchlist, port, exec and threshold detections |
 | Isolate | The recorded decision |
 
@@ -30,7 +31,7 @@ Hash routes keep you on one origin. The mega-nav is the same set of pages.
 
 ## The banner on Host connections
 
-That page keeps a banner: the host connections are QEMU-process connections, not the guest, and `guest_attributed` is false. It is not a warning you dismiss. When the tap program is attached, a second table lists the guest's own connects seen on its tap, with the guest's source address and whether isolation dropped them. Only that table is the guest. If a host connect looks like "the VM talked to the internet," re-read the banner and [attribution](../attribution.md).
+That page keeps a banner: the host connections are QEMU-process connections, not the guest, and `guest_attributed` is false. It is not a warning you dismiss. When the tap program is attached, more tables follow: the guest's own connects, connections made to the guest and UDP flows seen on its tap (each row's `kind` says which, and inbound rows show the peer as the source), and a per-tap table of what became of every connection: attempts, accepted, refused, never answered, blocked, and the handshake time.
 
 ## Isolate
 

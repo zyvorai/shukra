@@ -1,8 +1,14 @@
 # Detection rules
 
-The destination watchlist is a userspace check on `tcp_v4_connect`. When the destination matches, Shukra writes a `detection` event. It does not drop the packet, and it does not move the match into BPF.
+Rules are a userspace check on connects. When one matches, Shukra writes a `detection` event. It does not drop the packet, and it does not move the match into BPF. A rule can match three kinds of connect:
 
-The connect is still the QEMU process. A hit means that process opened a socket to an address you listed. It does not mean a process inside the guest did. Say that when you page someone.
+| Seen as | Where it comes from | `guest_attributed` |
+|---|---|---|
+| A host connect | `tcp_v4_connect` and `tcp_v6_connect`: a socket the **QEMU process** opened | `false` |
+| A guest connect or UDP flow | The tap program, on the VM's own tap: what the **guest** sent | `true` |
+| A connection made **to** the guest | The tap program: a `guest_inbound` event, matched on the peer and the guest port | `true` |
+
+A detection keeps the attribution of the event that caused it. A hit on a **host** connect means the QEMU process opened a socket to an address you listed, and does not mean a process inside the guest did: say that when you page someone. A hit on a **guest** event means that VM's guest sent (or received) that traffic, seen on its tap, though still not which process inside it. Only a VM whose tap Shukra can attach to has guest events; `shukractl doctor` names the ones that do not.
 
 ## File
 
@@ -20,6 +26,8 @@ destinations:
 | `cidr` | CIDR, or a single IP (treated as `/32` or `/128`) |
 | `name` | Shown on the detection |
 | `severity` | Optional. Default `high` |
+
+For a `destinations` rule, the address that matters is where the VM connected to, or, for a connection made **to** the VM, the peer that connected in, so a watched network reaching into a VM fires too and the message says "connected in from". `ports` rules take `proto` (`tcp` by default, `udp` or `any`) and `dir` (`out` by default, `in` for a connection made to the VM and matched on the port it reached, or `any`), so a rule written before either existed means what it always did.
 
 `configs/detections.example.yaml` is the sample. An empty file is an empty list, not an error. A bad CIDR refuses to start the daemon.
 

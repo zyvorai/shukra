@@ -46,11 +46,15 @@ shukractl trace kvm --vm osboxes-debian
 shukractl trace sched --vm osboxes-debian --json
 shukractl trace block --vm osboxes-debian
 shukractl trace net --vm osboxes-debian
+shukractl trace tap --vm osboxes-debian      # the guest's own traffic and what became of its connections
+shukractl trace drops --vm osboxes-debian    # what the kernel dropped on its tap, and whether it was Shukra
 ```
 
 `trace kvm` is exit, entry, MMIO, and PIO counters for that QEMU process. It is not a per-exit log.
 
 `trace net` is `tcp_v4_connect` and `tcp_v6_connect` counted exactly, and a 1-in-64 sample of retransmits. The socket owner is QEMU. Do not brief it as guest egress. The JSON says `guest_attributed: false` and `attribution: "qemu-process"` when the PID joined a VM. The guest's own traffic is `trace tap`, seen on the VM's tap.
+
+`trace tap` is the guest's traffic from its own tap: packets and bytes each way, what isolation dropped, and what became of every TCP connection, both ways (accepted, refused, never answered, blocked, retransmits, and the handshake time). `trace drops` is what the kernel dropped on the tap by its own reason, with Shukra's isolation subtracted. Both are `guest_attributed: true`. See [guest traffic and isolation](../tap.md) and [where packets die](../drops.md), and the [walkthrough](08-lost-traffic.md).
 
 A VM name that does not match is an empty result, not a guessed one.
 
@@ -74,7 +78,7 @@ shukractl explain osboxes-debian
 shukractl recorder osboxes-debian --window 60s
 ```
 
-`explain` answers from evidence on hand. The missing list is part of the answer: guest tap, CPU steal, in-guest process. If those lines are present, Shukra is telling you it cannot see them.
+`explain` answers from evidence on hand. The causes it can give are `host_cpu_contention`, `storage_latency`, `kvm_exit_handling`, `tcp_retransmits`, and, from the guest's tap, `guest_traffic_dropped` (something other than Shukra is dropping its packets), `guest_not_reading_nic` and `guest_connects_failing`; otherwise `no_host_cause`, which says the cause may be inside the guest. The missing list is part of the answer: CPU steal, in-guest process, and guest tap attribution when the tap program is off. If those lines are present, Shukra is telling you it cannot see them.
 
 `recorder` replays the bounded per-VM ring, default cap 4096, default window 60s. With `-data-dir` the ring is saved every minute and on clean shutdown and reloaded at start; without it the ring starts empty after a restart. Kinds you will actually see: `exec`, `tcp_connect`, `tcp_retransmit`, `block_slow` (at least 10ms), `sched_delay` (at least 20ms), `detection`, and process exit. Counters do not each become an event.
 
@@ -85,14 +89,16 @@ shukractl watch --json --once
 
 `watch` streams discrete events. `--once` prints what is buffered and returns.
 
-## Security, without enforcement
+## Security and isolation
 
 ```bash
 shukractl security osboxes-debian
 shukractl isolate osboxes-debian
+shukractl release osboxes-debian
+shukractl rules check /etc/shukra/detections.yaml   # validate a rules file offline
 ```
 
-`security` is the destination watchlist. A hit means the QEMU process connected to a CIDR in the YAML. See [the watchlist tutorial](06-watchlist.md).
+`security` is the rule hits for one VM, and whether isolate can be enforced. A hit means the QEMU process, or, with the tap program, the guest itself, connected to a CIDR in the YAML, or someone connected in. See [the watchlist tutorial](06-watchlist.md).
 
 `isolate` is a POST that does something. With the tap program attached and a management allow list configured (`shukrad -isolate-allow ...`), it drops the VM's tap traffic except ARP, IPv6 neighbour discovery and that list, and prints `applied true` with the taps it changed. `release` lifts it. Without an allow list it is refused and prints the reason, and `applied` stays `false`. `applied` is the daemon's word, set only after the kernel took the change, so a runbook can trust it. Isolation is pinned in the kernel: it survives a daemon crash or restart, and `shukrad -detach-all` lifts it when the daemon is down. See [Guest traffic and isolation](../tap.md).
 

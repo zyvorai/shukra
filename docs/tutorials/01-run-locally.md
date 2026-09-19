@@ -37,6 +37,10 @@ Flags:
 | `-data-dir` | empty | Keep detections, isolations and the recorder across restarts |
 | `-webhook-url`, `-syslog`, `-alert-file` | off | [Alert sinks](07-alert-sinks.md) |
 | `-no-auth` | off | Serve without a bearer key. Otherwise `SHUKRA_API_KEY`, or the dev token with a warning |
+| `-tls-cert`, `-tls-key` | off | Serve HTTPS. `SIGHUP` reloads the certificate |
+| `-isolate-allow` | empty | Comma-separated CIDRs an isolated VM can still reach. Without it, isolate is refused. See [guest traffic](../tap.md) |
+| `-detach-all` | off | Remove every pinned tap program and its isolation, then exit. Works while the daemon is stopped |
+| `-version` | off | Print the version and exit |
 
 ## Ask the CLI
 
@@ -50,7 +54,7 @@ export SHUKRA_API_KEY=shukra   # or the token you set
 ./bin/shukractl vms
 ```
 
-`programs` should list `kvm`, `sched`, `block`, and `net`, each `detached`, with no invented numbers. `vms` is empty unless a `qemu-system` process is actually running on this machine.
+`programs` should list `kvm`, `sched`, `block`, `net`, `drops` and `tap`, each `detached` with the reason beside it and no invented numbers. `vms` is empty unless a `qemu-system` process is actually running on this machine.
 
 The same token signs you into the console at `http://127.0.0.1:30970`.
 
@@ -71,5 +75,7 @@ Open `http://127.0.0.1:5173` and sign in with `shukra`. The pages are a fixture.
 make test
 npm --prefix web test
 ```
+
+The Go tests run anywhere. How the kernel-level tests work, and which of them must never run on a live hypervisor, is in [testing](../testing.md).
 
 Next: [attach the traces](02-attach-traces.md) on Linux, or [deploy](03-deploy.md) straight to a hypervisor.

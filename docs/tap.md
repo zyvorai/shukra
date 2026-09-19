@@ -2,6 +2,8 @@
 
 Every other program in Shukra sees the QEMU process. This one sees the guest. It attaches TCX to the host side of each VM's tap interface, so a frame it counts really is the guest's, and events from it are the only ones Shukra marks `guest_attributed: true`.
 
+It does four things: it **counts** the guest's traffic, **records** what the guest connects to and what connects to it, **follows** each TCP handshake to see what became of it, and can **isolate** the VM. A fifth question, *who dropped the packet*, is answered by its sibling program and has its own guide: [where packets die](drops.md). To use the two together to find lost traffic, see the [walkthrough](tutorials/08-lost-traffic.md).
+
 ## What it needs
 
 - Linux 6.6 or newer, for TCX. Older kernels report the tap program as detached with `TCX needs Linux 6.6 or newer`. There is no TC fallback yet.
@@ -67,7 +69,7 @@ shukrad -detach-all -data-dir /var/lib/shukra
 
 It removes every pinned link and map, so every VM is open again, and with `-data-dir` it also records a release for each isolated VM, so the next start does not isolate them again. Without `-data-dir` it says that a restart will re-apply them. The `.deb` runs this on removal, since removing the package removes the thing that could release an isolation.
 
-Pinning needs a bpf filesystem at `/sys/fs/bpf` (present on any systemd host). Without one the daemon runs unpinned, logs that, and reports `durable: false`; then isolation lasts only while the daemon runs and the isolate response says so. If a new build changes the map layout, the old pins cannot be reused: the daemon replaces them, logs it, and re-applies the recorded isolations, so the cost is a brief gap on upgrade.
+Pinning needs a bpf filesystem at `/sys/fs/bpf` (present on any systemd host). Without one the daemon runs unpinned, logs that, and reports `durable: false`; then isolation lasts only while the daemon runs and the isolate response says so. A new map is a new pin, so a build that only adds maps (as the handshake counters did) keeps every existing map and link and isolation is untouched. If a build changes an existing map's layout, the old pins cannot be reused: the daemon replaces them, logs it, and re-applies the recorded isolations, so the cost is a brief gap on upgrade.
 
 ### What isolation does not cover
 
@@ -84,29 +86,15 @@ Pinning needs a bpf filesystem at `/sys/fs/bpf` (present on any systemd host). W
 
 ## When guests cannot reach each other
 
-Shukra's program can only drop a frame on a tap that is **isolated**, and it counts every frame it drops (`dropped` in `trace tap`). So if traffic is being lost and `dropped` is 0, something else is dropping it. **`shukractl trace drops` says so directly**: for each tap it gives what the kernel dropped by reason, how many of those were Shukra's, and how many were not (`other`). `shukractl doctor` warns (`vm-drops-not-shukra`) when another program is dropping a VM's traffic, and (`vm-nic-not-consumed`) when a guest is not reading its NIC; `explain` gives the same as a cause; and a `guest_drops_per_sec` rule can alert on it.
+Shukra's program can only drop a frame on a tap that is **isolated**, and it counts every frame it drops (`dropped` in `trace tap`). So if a VM's traffic is being lost and `dropped` is 0, something else is dropping it, and the `drops` program says what: [where packets die](drops.md). The connection counters above say whether the connection got an answer at all. Together they separate a refusing destination, a dropping host and a guest that is not reading its NIC, and the [walkthrough](tutorials/08-lost-traffic.md) shows how.
 
-Where the `drops` program is not attached (an older kernel, or a build without BPF), the kernel will still say where. Trace the packet drops by hand while the traffic runs:
-
-```bash
-sudo bpftrace -e 'tracepoint:skb:kfree_skb /args->protocol == 0x800/ {
-  $skb = (struct sk_buff *)args->skbaddr;
-  $dev = $skb->dev->name;
-  @[args->reason, ksym(args->location), $dev] = count(); }'
-```
-
-The reason is a number; the names are in `/sys/kernel/tracing/events/skb/kfree_skb/format`. A `TC_INGRESS` drop on a guest's tap means a tc or TCX program attached to that tap returned "drop". `bpftool net show dev <tap>` lists the programs there, and only the tap program's own drops are counted by Shukra. `NETFILTER_DROP` points at iptables or nftables instead, and `iptables -L -v -n -x` shows which rule's counter moves.
-
-On a real host the drops program pinned this down: the test guests' taps showed `TC_INGRESS` drops, freed in `__netif_receive_skb_core`, with Shukra's own count at 0, and `bpftool net show dev <tap>` listed fluxvm's `fluxvm_egress` program at `clsact/ingress`. And the guests that never read their NIC showed `FULL_RING`, freed in `tun_net_xmit`.
-
-Three things a real host showed, all about fluxvm and none about Shukra:
-
-- **Two guests with the same MAC.** fluxvm gives a tap guest QEMU's default MAC unless the spec has `mac`, so a second guest on the same bridge takes the first one's frames. Set a unique `mac` on each.
-- **A dataplane policy.** With `[sandbox.dataplane]` in `/etc/fluxvm.toml`, fluxvm attaches its own eBPF program to each guest tap. `allow_cidrs` and `allow_ports` must both match, so a guest could reach private addresses only on ports 80, 443 and 53, and no public address at all: another guest on port 9000 was dropped at the sender's tap. `POST /v1/vms/<id>/network/policy` sets a policy for one VM, and an empty `allow_ports` means no port restriction.
-- **Another namespace.** With `"netns": true` (fluxvm's default) the tap is not in the namespace Shukra runs in. `shukractl doctor` names such a VM.
+Three things a real host showed, all about fluxvm and none about Shukra, are in that guide: two guests with the same MAC, a dataplane policy that allows only some CIDRs and ports, and a tap in another network namespace.
 
 ## How it was checked
 
-`scripts/test-tap.sh` builds a real network path with no KVM: a network namespace stands in for the guest, a veth pair's host end stands in for the tap, and a fake QEMU process names that interface. It checks refusal without an allow list; guest events and detections attributed to the VM; the tap counters; that an allowed address stays reachable and a non-allowed one is dropped, over IPv4, IPv6 and ping, with the same address reachable again after release; the blocked-connect event; re-application after a daemon restart; no re-isolation of a released VM; and detaching when the VM goes. It also proves enforcement outlives the daemon: a `kill -9` leaves the VM cut off, a restart adopts the links without adding a second pair, a graceful stop detaches a non-isolated tap and leaves an isolated one, and `-detach-all` reopens the VM and records the release. It runs on Linux 6.6 or newer as root and is part of CI.
+The full account is in [testing](testing.md). For the tap program:
 
-`scripts/test-live-guest.sh` is the real-guest counterpart. It boots two small Ubuntu cloud images with [fluxvm](https://github.com/zyvorai/fluxvm) on a host bridge, the guest under test and a peer, has the guest send a TCP SYN, twenty UDP datagrams on one flow and three multicast datagrams every 75 seconds, and has it connect to a listener on the peer, then checks a running daemon: the tap is found and attached while the VM runs, the events are guest-attributed with the guest's own address, twenty datagrams are one event per cycle, multicast makes none, the from-guest and to-guest packet counts match the kernel's `rx_packets` and `tx_packets` over a full cycle, the peer receives the guest's message and the guest gets the answer (read from each guest's console), shukra records that connect on the sender's tap with nothing dropped on either tap, and deleting the VMs detaches both taps. Both guests get their own `mac`, since fluxvm otherwise gives every tap guest the same one. On a host whose fluxvm has a `[sandbox.dataplane]`, the two test guests, and only those, are given a per-VM policy (private CIDRs, no port restriction) so they can reach each other; the token is read from the config and never printed. It needs a host with fluxvm and libvirt's default bridge, so it is not part of the ordinary CI. `.github/workflows/guest.yml` runs it weekly and by hand on a runner with KVM (`make test-live-guest` locally).
+- **`scripts/test-tap.sh`** builds a real network path with no KVM (a namespace for the guest, a veth for the tap, a fake QEMU naming it) and runs on a real kernel in CI. It checks refusal without an allow list; guest events and detections attributed to the VM; the counters; that an allowed address stays reachable and a non-allowed one is dropped over IPv4, IPv6 and ping; that isolation survives a `kill -9`, a restart and a graceful stop and is lifted by `-detach-all`; a real `tun` tap; UDP flows and their rules; drops from a real `tc` filter, told apart from Shukra's own; and **every TCP handshake outcome both ways with exact counts**: on GitHub's kernel, 17 outbound attempts came out as 5 accepted, 6 refused, 4 never answered and 2 blocked with 1 retransmit, and 7 inbound as 3 accepted, 2 refused and 2 ignored, and the identity attempts = accepted + refused + never answered + blocked held.
+- **`scripts/test-live-guest.sh`** boots two real KVM guests and checks the same things end to end on a hypervisor: the taps are found and attached as hot-plugs, events are attributed with the guest's own address, packet counts equal the kernel's `rx_packets` and `tx_packets`, the guests reach each other, an accepted and a refused connection are seen from both taps, and deleting the VMs detaches everything.
+
+The rig must never run on a hypervisor already running Shukra: it shares the pin directory and its cleanup detaches every tap.
