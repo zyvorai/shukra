@@ -1,6 +1,10 @@
-.PHONY: deps generate build test install web
+.PHONY: deps generate build test install web dist
 
 PREFIX ?= /usr/local
+
+# Stamped into both binaries. A tag gives v1.2.3; otherwise the short commit.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.1.0)
+LDFLAGS := -X github.com/zyvorai/shukra/internal/version.Version=$(VERSION)
 
 deps:
 	go mod download
@@ -20,8 +24,14 @@ generate:
 
 build:
 	mkdir -p bin
-	go build -o bin/shukrad ./cmd/shukrad
-	go build -o bin/shukractl ./cmd/shukractl
+	go build -ldflags "$(LDFLAGS)" -o bin/shukrad ./cmd/shukrad
+	go build -ldflags "$(LDFLAGS)" -o bin/shukractl ./cmd/shukractl
+
+# A release tarball and a .deb for this machine's architecture, in dist/. Needs
+# Linux with clang, bpftool and kernel BTF, since the CO-RE objects are compiled
+# in and the result then needs only kernel BTF to run.
+dist:
+	VERSION=$(VERSION) ./scripts/package.sh
 
 test:
 	go test ./...

@@ -11,3 +11,4 @@ internal/bpfgen/*.o
 .env
 .env.*
 .DS_Store
+dist/

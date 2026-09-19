@@ -399,3 +399,14 @@ func TestCLITrustsAPrivateCAOnlyWhenTold(t *testing.T) {
 		t.Fatal("a broken CA file fell back to trusting everything")
 	}
 }
+
+func TestVersionCommand(t *testing.T) {
+	var buf bytes.Buffer
+	if err := run([]string{"version"}, &buf); err != nil || !strings.HasPrefix(buf.String(), "shukractl ") {
+		t.Fatalf("%q %v", buf.String(), err)
+	}
+	buf.Reset()
+	if err := run([]string{"--version"}, &buf); err != nil || !strings.HasPrefix(buf.String(), "shukractl ") {
+		t.Fatalf("%q %v", buf.String(), err)
+	}
+}

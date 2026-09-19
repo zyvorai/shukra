@@ -50,6 +50,34 @@ sudo systemctl restart shukra
 
 Set `SHUKRA_READONLY_KEY` in `/etc/shukra/env` and give that key to a Prometheus scrape or a dashboard. It can call every `GET`, including `/metrics` and the event stream, and gets `403` on `POST /api/v1/isolate`. It must differ from `SHUKRA_API_KEY`, and the daemon refuses to start otherwise.
 
+## Deploy without a compiler on the host
+
+`shukrad` carries its eBPF programs compiled in, so a host that only runs it needs kernel BTF (`/sys/kernel/btf/vmlinux`), not go, clang or bpftool. Build on a machine of the same architecture and ship the result:
+
+```bash
+make dist                      # dist/shukra-<version>-linux-<arch>.tar.gz and a .deb
+./scripts/deploy-remote.sh 10.0.1.5 sus --prebuilt dist/shukra-v1.2.3-linux-amd64.tar.gz
+```
+
+The tarball holds `bin/`, `deploy/`, `configs/` and the console, and `deploy/install.sh` installs it. That is the same routine the source deploy and the `.deb` run, so all three lay down the same files. `make dist` needs Linux with clang, `llvm-strip`, `bpftool` and BTF, because `bpf/vmlinux.h` comes from the build machine's kernel. Build each architecture on that architecture. CO-RE then lets the binary run on other kernels of the same architecture.
+
+On Debian or Ubuntu the `.deb` does the whole install:
+
+```bash
+sudo dpkg -i shukra_1.2.3_amd64.deb
+sudo grep SHUKRA_API_KEY /etc/shukra/env      # a random key was generated on first install
+```
+
+It installs `/usr/bin/shukrad` and `/usr/bin/shukractl`, the unit, and the sample rules, and starts the service. Upgrading keeps your rules and key, `dpkg -r` keeps `/etc/shukra`, and `dpkg -P` removes it and `/var/lib/shukra`. The unit listens on `0.0.0.0:30970` like the source deploy. To bind only locally, put `SHUKRA_EXTRA_ARGS=-listen 127.0.0.1:30970` in `/etc/shukra/env`; a later `-listen` wins. No `.rpm` is built yet.
+
+Pushing a tag such as `v1.2.3` runs `.github/workflows/release.yml`, which builds both packages for amd64 and arm64 and attaches them, with checksums, to a GitHub release. That workflow has not run yet, so treat its first run as a test.
+
+`shukrad -version` and `shukractl version` print the stamped version. A source deploy builds on the host and reports the git describe, or `0.1.0` when the host has no `.git`.
+
+## Upgrading a host deployed by an older script
+
+The first deploy with this script moves the API key out of the unit file into `/etc/shukra/env` and keeps the same key, so consoles and scripts that use it keep working. It keeps an edited `/etc/shukra/detections.yaml`. If you export `SHUKRA_API_KEY` the key is replaced; if you do not, the current one is kept, and a host with none gets a random one, which is printed once.
+
 ## Dry run and re-check
 
 ```bash

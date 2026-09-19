@@ -150,6 +150,7 @@ Reference: [shukractl](docs/shukractl.md) · [Signals](docs/signals.md) · [Attr
 make test          # go test ./...
 make web           # npm ci, unit tests, production build
 make generate      # no-op without clang and /sys/kernel/btf/vmlinux
+make dist          # release tarball and .deb for this architecture (Linux)
 ```
 
 Default `go build` does not link CO-RE objects, so CI and macOS stay green. The Linux tag is `shukrabpf`. A missing KVM tracepoint detaches only the `kvm` program.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -35,7 +36,12 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "serve HTTPS with this certificate (PEM). Needs -tls-key. SIGHUP reloads it")
 	tlsKey := flag.String("tls-key", "", "private key for -tls-cert (PEM)")
 	noAuth := flag.Bool("no-auth", false, "serve the API without a bearer key")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Printf("%s %s\n", version.Product, version.Version)
+		return
+	}
 
 	key := os.Getenv("SHUKRA_API_KEY")
 	if key == "" && !*noAuth {

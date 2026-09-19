@@ -1,0 +1,89 @@
+name: Release
+
+# Pushing a tag such as v0.2.0 builds a tarball and a .deb for each architecture
+# and attaches them, with their checksums, to a GitHub release.
+#
+# The BPF objects are compiled against the kernel BTF of the machine doing the
+# build, so each architecture is built on a runner of that architecture. CO-RE then
+# lets the same binary run on other kernels of that architecture.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: BPF toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 llvm-18 libbpf-dev linux-tools-common linux-tools-generic
+          ver="$(uname -r)"
+          sudo apt-get install -y "linux-tools-${ver}" || true
+          clang_bin="$(command -v clang-18 || true)"
+          strip_bin="$(command -v llvm-strip-18 || true)"
+          if [ -z "$strip_bin" ] && [ -x /usr/lib/llvm-18/bin/llvm-strip ]; then
+            strip_bin=/usr/lib/llvm-18/bin/llvm-strip
+          fi
+          real="$(find /usr/lib/linux-tools /usr/lib/linux-tools-* -name bpftool \( -type f -o -type l \) 2>/dev/null | head -1)"
+          if [ -z "$real" ]; then
+            real="$(dpkg -L "linux-tools-${ver}" | grep '/bpftool$' | head -1 || true)"
+          fi
+          test -n "$clang_bin" && test -n "$strip_bin" && test -n "$real"
+          sudo ln -sfn "$clang_bin" /usr/local/bin/clang
+          sudo ln -sfn "$strip_bin" /usr/local/bin/llvm-strip
+          sudo ln -sfn "$real" /usr/local/bin/bpftool
+      - name: Test
+        run: |
+          go test -count=1 ./...
+          npm --prefix web ci && npm --prefix web test
+          scripts/test-install.sh
+      - name: Package
+        run: scripts/package.sh
+        env:
+          VERSION: ${{ github.ref_name }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shukra-${{ matrix.arch }}
+          path: dist/*.tar.gz*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shukra-deb-${{ matrix.arch }}
+          path: dist/*.deb*
+          if-no-files-found: error
+
+  release:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l artifacts
+          gh release create "${{ github.ref_name }}" artifacts/* \
+            --repo "${{ github.repository }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
