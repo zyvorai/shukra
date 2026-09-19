@@ -16,21 +16,23 @@ const (
 
 // Counters are scraped from maps, or supplied by tests. They are not guest metrics.
 type Counters struct {
-	Exits         map[uint32]uint64
-	Entries       uint64
-	MMIO          uint64
-	PIO           uint64
-	OnCPUNs       uint64
-	WakeupDelayNs uint64
-	WakeupCount   uint64
-	SchedHist     []uint64 // run-queue delay, log2 ns
-	BlockRead     []uint64
-	BlockWrite    []uint64
-	BlockReadMax  uint64
-	BlockWriteMax uint64
-	BlockIssues   uint64
-	Connects      uint64
-	Retransmits   uint64
+	Exits                           map[uint32]uint64
+	Entries                         uint64
+	MMIO                            uint64
+	PIO                             uint64
+	OnCPUNs                         uint64
+	WakeupDelayNs                   uint64
+	WakeupCount                     uint64
+	SchedHist                       []uint64 // run-queue delay, log2 ns
+	BlockRead                       []uint64
+	BlockWrite                      []uint64
+	BlockReadMax                    uint64
+	BlockWriteMax                   uint64
+	BlockReadOps, BlockWriteOps     uint64
+	BlockReadBytes, BlockWriteBytes uint64
+	BlockIssues                     uint64
+	Connects                        uint64
+	Retransmits                     uint64
 }
 
 type Reason struct {
@@ -70,7 +72,14 @@ type BlockRow struct {
 	WriteP99Ns uint64 `json:"writeP99Ns"`
 	ReadMaxNs  uint64 `json:"readMaxNs"`
 	WriteMaxNs uint64 `json:"writeMaxNs"`
-	Measured   bool   `json:"measured"`
+	// Completed requests and bytes on the QEMU iothread, not the guest filesystem.
+	ReadOps    uint64   `json:"readOps"`
+	WriteOps   uint64   `json:"writeOps"`
+	ReadBytes  uint64   `json:"readBytes"`
+	WriteBytes uint64   `json:"writeBytes"`
+	ReadHist   []uint64 `json:"readHist,omitempty"`
+	WriteHist  []uint64 `json:"writeHist,omitempty"`
+	Measured   bool     `json:"measured"`
 }
 
 type NetRow struct {
@@ -107,6 +116,10 @@ func add(dst, src *Counters) {
 		dst.BlockWriteMax = src.BlockWriteMax
 	}
 	dst.BlockIssues += src.BlockIssues
+	dst.BlockReadOps += src.BlockReadOps
+	dst.BlockWriteOps += src.BlockWriteOps
+	dst.BlockReadBytes += src.BlockReadBytes
+	dst.BlockWriteBytes += src.BlockWriteBytes
 	dst.Connects += src.Connects
 	dst.Retransmits += src.Retransmits
 }
@@ -292,6 +305,9 @@ func Block(vms []identity.VM, byPID map[uint32]Counters, vm string) []BlockRow {
 			ReadP50Ns: hist.Percentile(b.c.BlockRead, 50), ReadP99Ns: hist.Percentile(b.c.BlockRead, 99),
 			WriteP50Ns: hist.Percentile(b.c.BlockWrite, 50), WriteP99Ns: hist.Percentile(b.c.BlockWrite, 99),
 			ReadMaxNs: b.c.BlockReadMax, WriteMaxNs: b.c.BlockWriteMax,
+			ReadOps: b.c.BlockReadOps, WriteOps: b.c.BlockWriteOps,
+			ReadBytes: b.c.BlockReadBytes, WriteBytes: b.c.BlockWriteBytes,
+			ReadHist: b.c.BlockRead, WriteHist: b.c.BlockWrite,
 			Measured: b.c.BlockIssues > 0,
 		})
 	}

@@ -169,6 +169,23 @@ func readBlock(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {
 		}
 	}
 	readU32(maps["blk_issues"], func(pid uint32, v uint64) { slot(by, pid).BlockIssues += v })
+	if m := maps["blk_io"]; m != nil {
+		var key struct{ Pid, Write uint32 }
+		var val struct{ Ops, Bytes, MaxNs uint64 }
+		it := m.Iterate()
+		for it.Next(&key, &val) {
+			c := slot(by, key.Pid)
+			if key.Write != 0 {
+				c.BlockWriteOps += val.Ops
+				c.BlockWriteBytes += val.Bytes
+				c.BlockWriteMax = max(c.BlockWriteMax, val.MaxNs)
+			} else {
+				c.BlockReadOps += val.Ops
+				c.BlockReadBytes += val.Bytes
+				c.BlockReadMax = max(c.BlockReadMax, val.MaxNs)
+			}
+		}
+	}
 }
 
 func readRetrans(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {

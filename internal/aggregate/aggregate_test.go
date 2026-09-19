@@ -113,3 +113,30 @@ func TestSchedThreadsSeparatesVCPUFromIOThread(t *testing.T) {
 		}
 	}
 }
+
+func TestBlockOpsBytesMaxMergeAcrossThreads(t *testing.T) {
+	vms := []identity.VM{{Name: "db", PID: 1, Threads: []int{1, 2}}}
+	by := map[uint32]Counters{
+		1: {BlockIssues: 3, BlockReadOps: 2, BlockReadBytes: 8192, BlockReadMax: 1_500_000, BlockRead: hist64(20, 2),
+			BlockWriteOps: 1, BlockWriteBytes: 4096, BlockWriteMax: 900_000, BlockWrite: hist64(19, 1)},
+		2: {BlockIssues: 1, BlockReadOps: 1, BlockReadBytes: 512, BlockReadMax: 3_000_000, BlockRead: hist64(21, 1)},
+	}
+	rows := Block(vms, by, "db")
+	if len(rows) != 1 {
+		t.Fatalf("%+v", rows)
+	}
+	r := rows[0]
+	if r.ReadOps != 3 || r.ReadBytes != 8704 || r.WriteOps != 1 || r.WriteBytes != 4096 {
+		t.Fatalf("sums: %+v", r)
+	}
+	// The maximum is the largest across threads, never a sum.
+	if r.ReadMaxNs != 3_000_000 || r.WriteMaxNs != 900_000 {
+		t.Fatalf("max: read %d write %d", r.ReadMaxNs, r.WriteMaxNs)
+	}
+	if len(r.ReadHist) != 64 || r.ReadHist[20] != 2 || r.ReadHist[21] != 1 || r.WriteHist[19] != 1 {
+		t.Fatalf("hist: %v %v", r.ReadHist, r.WriteHist)
+	}
+	if !r.Measured || r.Issues != 4 {
+		t.Fatalf("%+v", r)
+	}
+}

@@ -45,19 +45,32 @@ struct {
 	__type(value, __u64);
 } blk_issues SEC(".maps");
 
+struct io_key {
+	__u32 pid;
+	__u32 write;
+};
+
+struct io_val {
+	__u64 ops;
+	__u64 bytes;
+	__u64 max_ns;
+};
+
+/* Completed requests, bytes and the slowest request, per issuing task and direction. */
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, 16384);
+	__type(key, struct io_key);
+	__type(value, struct io_val);
+} blk_io SEC(".maps");
+
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 20);
 } events SEC(".maps");
 
 static __always_inline void hist_add(__u32 pid, __u8 write, __u64 ns) {
-	__u8 bucket = 0;
-	__u64 v = ns;
-	while (v > 1 && bucket < 63) {
-		v >>= 1;
-		bucket++;
-	}
-	struct hist_key hk = {.pid = pid, .write = write, .bucket = bucket};
+	struct hist_key hk = {.pid = pid, .write = write, .bucket = (__u8)log2_bucket(ns)};
 	__u64 *c = bpf_map_lookup_elem(&blk_hist, &hk);
 	if (c) {
 		__sync_fetch_and_add(c, 1);
@@ -103,6 +116,20 @@ int shukra_rq_complete(struct trace_event_raw_block_rq_completion *ctx) {
 	__u8 write = st->write;
 	bpf_map_delete_elem(&blk_inflight, &key);
 	hist_add(pid, write, d);
+	struct io_key ik = {.pid = pid, .write = write};
+	struct io_val *iv = bpf_map_lookup_elem(&blk_io, &ik);
+	if (!iv) {
+		struct io_val zero = {};
+		bpf_map_update_elem(&blk_io, &ik, &zero, BPF_NOEXIST);
+		iv = bpf_map_lookup_elem(&blk_io, &ik);
+	}
+	if (iv) {
+		__sync_fetch_and_add(&iv->ops, 1);
+		__sync_fetch_and_add(&iv->bytes, (__u64)BPF_CORE_READ(ctx, nr_sector) * 512);
+		/* Not atomic: two CPUs racing here can drop a slightly smaller maximum. */
+		if (d > iv->max_ns)
+			iv->max_ns = d;
+	}
 	if (d >= BLOCK_SLOW_NS) {
 		struct ring_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
 		if (!e)
