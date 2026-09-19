@@ -28,7 +28,7 @@ func helpSections() []helpSection {
 		}},
 		{title: "🔍  Investigate", cmds: []helpCmd{
 			{"vms [--json]", "QEMU virtual machines from the host"},
-			{"explain <vm>", "Why this VM looks slow, from evidence on hand"},
+			{"explain <vm> [--window 5m|lifetime]", "Why this VM looks slow, from the last minute by default"},
 			{"recorder <vm> [--window 60s]", "Replay the flight recorder"},
 			{"watch [--json] [--once]", "Stream discrete events"},
 			{"export", "One JSON document: status, VMs, traces, events"},

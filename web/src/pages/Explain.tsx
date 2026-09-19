@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { useAPI } from '../useAPI';
+import { LIVE_MS, useAPI } from '../useAPI';
 
 type Finding = { cause: string; confidence: string; summary: string; evidence?: string[] };
 
 type ExplainBody = {
   question: string;
+  window?: string;
   findings?: Finding[];
   basis?: string;
   evidence: string[];
@@ -14,13 +15,22 @@ type ExplainBody = {
 
 export default function Explain() {
   const [vm, setVM] = useState('payment-prod-03');
-  const { data, err } = useAPI<ExplainBody>(`/api/v1/explain?vm=${encodeURIComponent(vm)}`);
+  const [window, setWindow] = useState('60s');
+  const { data, err } = useAPI<ExplainBody>(`/api/v1/explain?vm=${encodeURIComponent(vm)}&window=${window}`, { refreshMs: LIVE_MS });
   return (
     <div>
       <div className="toolbar">
         <label>
           VM
           <input value={vm} onChange={(e) => setVM(e.target.value)} aria-label="VM to explain" />
+        </label>
+        <label>
+          Look back
+          <select value={window} onChange={(e) => setWindow(e.target.value)} aria-label="How far back to look">
+            <option value="60s">last minute</option>
+            <option value="5m">last 5 minutes</option>
+            <option value="lifetime">since the daemon attached</option>
+          </select>
         </label>
       </div>
       {err && <p className="warning">{err}</p>}
@@ -29,6 +39,7 @@ export default function Explain() {
           <section className="card span2">
             <p className="eyebrow">FINDINGS</p>
             <h3>Where to look, best supported first</h3>
+            {data?.window && <p className="finding-basis">Looking at: {data.window === 'lifetime' ? 'everything since the daemon attached' : `the last ${data.window}`}</p>}
             <ol className="findings">
               {(data?.findings || []).map((f) => (
                 <li key={f.cause}>

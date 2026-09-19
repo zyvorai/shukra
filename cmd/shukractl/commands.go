@@ -48,7 +48,11 @@ func run(args []string, out io.Writer) error {
 		if len(args) < 2 {
 			return fmt.Errorf("explain <vm>")
 		}
-		return getBoard(out, "/api/v1/explain?vm="+args[1], has(args[2:], "--json"), formatExplain)
+		path := "/api/v1/explain?vm=" + args[1]
+		if w := flagValue(args[2:], "--window", ""); w != "" {
+			path += "&window=" + w
+		}
+		return getBoard(out, path, has(args[2:], "--json"), formatExplain)
 	case "recorder":
 		if len(args) < 2 {
 			return fmt.Errorf("recorder <vm> [--window 60s]")
@@ -420,7 +424,11 @@ func formatVMs(w io.Writer, m map[string]any) {
 }
 
 func formatExplain(w io.Writer, m map[string]any) {
-	fmt.Fprintf(w, "EXPLAIN  %s\n", str(m, "question"))
+	fmt.Fprintf(w, "EXPLAIN  %s", str(m, "question"))
+	if win := str(m, "window"); win != "" {
+		fmt.Fprintf(w, "  (window: %s)", win)
+	}
+	fmt.Fprintln(w)
 	if fs := list(m, "findings"); len(fs) > 0 {
 		fmt.Fprintln(w, "findings (best supported first)")
 		for _, f := range fs {

@@ -66,6 +66,9 @@ shukractl doctor --json
 
 ## Explain and the flight recorder
 
+`explain <vm>` weighs the last minute by default, not the whole time the daemon has been attached. A disk that was slow an hour ago and is fine now would otherwise hold a lifetime p99 high for good. `--window 5m` looks further back (up to 5 minutes) and `--window lifetime` uses everything. The daemon keeps a small snapshot every 10 seconds for this, so right after a start there is nothing to compare against: below 20 seconds of history it falls back to lifetime and the output says `window: lifetime`, and when less history exists than you asked for it reports the span it really covered. Whether a program is measuring at all is always judged over its lifetime, so a quiet minute is never mistaken for a detached program. The maximum latency is not a rate and cannot be windowed, so it stays lifetime.
+
+
 ```bash
 shukractl explain osboxes-debian
 shukractl recorder osboxes-debian --window 60s

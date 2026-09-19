@@ -428,6 +428,34 @@ func TestAnEmptyReadOnlyKeyNeverMatches(t *testing.T) {
 	}
 }
 
+func TestExplainWindowParameter(t *testing.T) {
+	h := New(state.New("node-07"), "k")
+	for _, c := range []struct {
+		q    string
+		want int
+		win  string
+	}{
+		{"", 200, "lifetime"}, // no history yet, so the default window falls back
+		{"&window=lifetime", 200, "lifetime"}, {"&window=0", 200, "lifetime"},
+		{"&window=5m", 200, "lifetime"}, {"&window=90s", 200, "lifetime"},
+		{"&window=9s", 400, ""}, {"&window=6m", 400, ""}, {"&window=banana", 400, ""}, {"&window=-1m", 400, ""},
+	} {
+		rec := get(h, "/api/v1/explain?vm=x"+c.q, "k")
+		if rec.Code != c.want {
+			t.Errorf("%q: %d, want %d", c.q, rec.Code, c.want)
+			continue
+		}
+		if c.want == 200 {
+			var body struct {
+				Window string `json:"window"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Window != c.win {
+				t.Errorf("%q: window %q (%v), want %q", c.q, body.Window, err, c.win)
+			}
+		}
+	}
+}
+
 func TestDoctorEndpointReportsTheWorstFindingAndIsReadableWithTheReadOnlyKey(t *testing.T) {
 	// Distinctive values, so that finding one in the output could only mean a leak.
 	const admin, readOnly = "adm-7f3a91c2e5", "ro-4b8d60aa19"

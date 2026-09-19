@@ -206,3 +206,71 @@ func TestExitNamesOnlyWhereTheNumberingIsKnown(t *testing.T) {
 		t.Fatalf("names survived a vendor change: %+v", rows)
 	}
 }
+
+func TestDeltaIsWhatAccumulatedInTheWindow(t *testing.T) {
+	base := Counters{
+		OnCPUNs: 100, WakeupCount: 10, WakeupDelayNs: 1000, Connects: 5, Retransmits: 2,
+		BlockWriteBytes: 4096, BlockWriteOps: 4,
+		Exits: map[uint32]uint64{12: 100, 48: 3}, ExitNs: map[uint32]uint64{12: 900},
+		BlockWrite: hist64(20, 4), KVMLat: hist64(10, 8),
+	}
+	cur := Counters{
+		OnCPUNs: 250, WakeupCount: 30, WakeupDelayNs: 5000, Connects: 9, Retransmits: 2,
+		BlockWriteBytes: 12288, BlockWriteOps: 7,
+		Exits:      map[uint32]uint64{12: 160, 48: 3, 30: 7}, // reason 30 first appears in the window
+		ExitNs:     map[uint32]uint64{12: 1500, 30: 70},
+		BlockWrite: hist64(20, 4), KVMLat: hist64(10, 8),
+		BlockWriteMax: 5_000_000,
+	}
+	cur.BlockWrite[24] = 3 // three slow writes in the window, on top of four old fast ones
+	d := Delta(cur, base)
+	if d.OnCPUNs != 150 || d.WakeupCount != 20 || d.WakeupDelayNs != 4000 || d.Connects != 4 || d.Retransmits != 0 {
+		t.Fatalf("%+v", d)
+	}
+	if d.BlockWriteBytes != 8192 || d.BlockWriteOps != 3 {
+		t.Fatalf("%+v", d)
+	}
+	if d.Exits[12] != 60 || d.Exits[48] != 0 || d.Exits[30] != 7 || d.ExitNs[12] != 600 || d.ExitNs[30] != 70 {
+		t.Fatalf("exits %v ns %v", d.Exits, d.ExitNs)
+	}
+	// The old fast writes drop out; only the window's slow ones are left.
+	if d.BlockWrite[20] != 0 || d.BlockWrite[24] != 3 {
+		t.Fatalf("write hist %v", d.BlockWrite)
+	}
+	if d.KVMLat[10] != 0 {
+		t.Fatalf("an unchanged histogram is not empty: %v", d.KVMLat)
+	}
+	if d.BlockWriteMax != 5_000_000 {
+		t.Fatalf("a maximum cannot be subtracted; the lifetime one is kept: %d", d.BlockWriteMax)
+	}
+	// It must not change either input.
+	if base.Exits[12] != 100 || cur.Exits[12] != 160 {
+		t.Fatal("Delta modified an input")
+	}
+}
+
+func TestDeltaTreatsABackwardsCounterAsAResetNotANegativeNumber(t *testing.T) {
+	base := Counters{OnCPUNs: 1_000_000, Exits: map[uint32]uint64{12: 500}, BlockRead: hist64(20, 90)}
+	cur := Counters{OnCPUNs: 40, Exits: map[uint32]uint64{12: 7}, BlockRead: hist64(20, 3)} // the thread restarted
+	d := Delta(cur, base)
+	if d.OnCPUNs != 40 || d.Exits[12] != 7 || d.BlockRead[20] != 3 {
+		t.Fatalf("a reset produced %+v", d)
+	}
+}
+
+func TestDeltaAgainstNothingIsEverythingAndCloneIsIndependent(t *testing.T) {
+	cur := Counters{OnCPUNs: 9, Exits: map[uint32]uint64{1: 2}, SchedHist: hist64(5, 2)}
+	d := Delta(cur, Counters{})
+	if d.OnCPUNs != 9 || d.Exits[1] != 2 || d.SchedHist[5] != 2 {
+		t.Fatalf("%+v", d)
+	}
+	c := cur.Clone()
+	cur.Exits[1] = 99
+	cur.SchedHist[5] = 99
+	if c.Exits[1] != 2 || c.SchedHist[5] != 2 {
+		t.Fatal("Clone shares memory with the original")
+	}
+	if Delta(Counters{}, Counters{OnCPUNs: 5}).Exits != nil {
+		t.Fatal("a nil map should stay nil")
+	}
+}

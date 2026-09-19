@@ -137,7 +137,12 @@ func routes(st *state.State) *http.ServeMux {
 		})
 	})
 	mux.HandleFunc("GET /api/v1/explain", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, st.Explain(r.URL.Query().Get("vm"), time.Now().UTC()))
+		window, err := parseExplainWindow(r.URL.Query().Get("window"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, st.ExplainOver(r.URL.Query().Get("vm"), time.Now().UTC(), window))
 	})
 	mux.HandleFunc("GET /api/v1/export", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, st.Export())
@@ -178,6 +183,23 @@ func routes(st *state.State) *http.ServeMux {
 		})
 	})
 	return mux
+}
+
+// parseExplainWindow reads ?window=. Nothing means the default window, "0" or
+// "lifetime" means everything since the daemon attached, and anything else is a
+// duration between 10 seconds and the longest window history is kept for.
+func parseExplainWindow(raw string) (time.Duration, error) {
+	switch raw {
+	case "":
+		return state.DefaultExplainWindow, nil
+	case "0", "lifetime":
+		return 0, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 10*time.Second || d > state.MaxExplainWindow {
+		return 0, fmt.Errorf("window must be a duration from 10s to %s, or 0 for lifetime", state.MaxExplainWindow)
+	}
+	return d, nil
 }
 
 func parseSince(raw string) (uint64, error) {

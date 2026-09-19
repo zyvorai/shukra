@@ -59,7 +59,10 @@ type Explain struct {
 	VM       identity.VM `json:"vm"`
 	Question string      `json:"question"`
 	// Findings are the host-side causes the counters support, best supported first.
-	Findings []Finding     `json:"findings"`
+	Findings []Finding `json:"findings"`
+	// Window is how far back the findings look: a duration, or "lifetime" when
+	// there was not enough history yet or none was asked for.
+	Window   string        `json:"window"`
 	Basis    string        `json:"basis"`
 	Evidence []string      `json:"evidence"`
 	Missing  []string      `json:"missing"`
@@ -99,6 +102,8 @@ type State struct {
 	config        ConfigInfo
 	rulesErr      string
 	kernelRelease func() string
+	history       []snapshot
+	clock         func() time.Time
 	enforcer      Enforcer
 	tapSource     func() []TapStat
 	cpuVendor     string
@@ -183,6 +188,7 @@ func (s *State) SetCounters(by map[uint32]aggregate.Counters) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.byPID = by
+	s.recordLocked(s.now())
 }
 
 func (s *State) AddEvent(e event.Event) {
@@ -367,6 +373,12 @@ func (s *State) Status() Status {
 	}
 }
 
+func (s *State) cpuVendorLocked() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cpuVendor
+}
+
 // SetCPUVendor records the host CPU vendor_id ("GenuineIntel", "AuthenticAMD").
 // KVM exit reasons are only named where the numbering for that vendor is known.
 func (s *State) SetCPUVendor(v string) {
@@ -447,12 +459,35 @@ func (s *State) FindVM(name string) (identity.VM, bool) {
 	return identity.VM{}, false
 }
 
+// Explain looks at the last DefaultExplainWindow.
 func (s *State) Explain(name string, now time.Time) Explain {
+	return s.ExplainOver(name, now, DefaultExplainWindow)
+}
+
+// ExplainOver builds the verdict from what happened over roughly the last window.
+// A zero window, or too little history so far, uses the counters since the daemon
+// attached, and the result says which it used.
+func (s *State) ExplainOver(name string, now time.Time, window time.Duration) Explain {
 	vm, _ := s.FindVM(name)
+	// What is present, and whether each program is measuring at all, is a lifetime
+	// fact: a quiet minute must not read as a detached program.
 	kvm := s.KVM(name)
 	sched := s.Sched(name)
 	block := s.Block(name)
 	net := s.Net(name)
+	threads := s.SchedThreads(name)
+
+	// What the verdict weighs is the window.
+	dkvm, dsched, dblock, dnet, dthreads := kvm, sched, block, net, threads
+	basis, over := Basis, "lifetime"
+	if per, span, ok := s.windowedInputs(vm, now, window); ok && vm.Name != "" {
+		rows := windowRows(vm, per, s.cpuVendorLocked())
+		dkvm, dsched, dblock, dnet, dthreads = rows.kvm, rows.sched, rows.block, rows.net, rows.threads
+		carryMeasured(dkvm, dsched, dblock, kvm, sched, block)
+		over = span.Round(time.Second).String()
+		basis = "Over the last " + over + ". Latencies come from log2 buckets, so each can read up to 2x high. They are the QEMU process's, not the guest's."
+	}
+
 	var evidence []string
 	if vm.Name != "" {
 		evidence = append(evidence, "Identity comes from the QEMU command line, not from inside the guest.")
@@ -469,11 +504,11 @@ func (s *State) Explain(name string, now time.Time) Explain {
 	}
 	if len(block) > 0 && block[0].Measured {
 		evidence = append(evidence, "Block latency histogram is present for the QEMU iothread, not the guest filesystem.")
-		if block[0].ReadP99Ns >= aggregate.SlowBlockNS || block[0].WriteP99Ns >= aggregate.SlowBlockNS {
+		if len(dblock) > 0 && (dblock[0].ReadP99Ns >= aggregate.SlowBlockNS || dblock[0].WriteP99Ns >= aggregate.SlowBlockNS) {
 			evidence = append(evidence, "Block p99 is at least 10ms on the QEMU iothread.")
 		}
 	}
-	if len(sched) > 0 && sched[0].Measured && sched[0].WakeupCount > 0 && sched[0].WakeupDelayNs/sched[0].WakeupCount >= aggregate.SlowWakeupNS {
+	if len(dsched) > 0 && dsched[0].Measured && dsched[0].WakeupCount > 0 && dsched[0].WakeupDelayNs/dsched[0].WakeupCount >= aggregate.SlowWakeupNS {
 		evidence = append(evidence, "Mean wakeup delay is at least 20ms.")
 	}
 	if len(net) > 0 && (net[0].Connects > 0 || net[0].Retransmits > 0) {
@@ -490,12 +525,51 @@ func (s *State) Explain(name string, now time.Time) Explain {
 		missing = append([]string{"guest tap attribution (TCX on the VM tap is not attached)"}, missing...)
 	}
 	return Explain{
-		VM: vm, Question: "why is this VM slow?",
-		Findings: diagnose(vm.Name != "", kvm, sched, s.SchedThreads(name), block, net),
-		Basis:    Basis,
+		VM: vm, Question: "why is this VM slow?", Window: over,
+		Findings: diagnose(vm.Name != "", dkvm, dsched, dthreads, dblock, dnet),
+		Basis:    basis,
 		Evidence: evidence,
 		Missing:  missing,
 		Events:   s.Recorder(name, 60*time.Second, now),
+	}
+}
+
+type windowedRows struct {
+	kvm     []aggregate.KVMRow
+	sched   []aggregate.SchedRow
+	block   []aggregate.BlockRow
+	net     []aggregate.NetRow
+	threads []aggregate.ThreadRow
+}
+
+// windowRows turns per-thread window counters into the same rows the API serves,
+// by treating the window as if it were the whole history.
+func windowRows(vm identity.VM, per map[uint32]aggregate.Counters, vendor string) windowedRows {
+	syn := vm
+	rows := windowedRows{
+		kvm:     aggregate.KVM([]identity.VM{syn}, per, vm.Name),
+		sched:   aggregate.Sched([]identity.VM{syn}, per, vm.Name),
+		block:   aggregate.Block([]identity.VM{syn}, per, vm.Name),
+		net:     aggregate.Net([]identity.VM{syn}, per, vm.Name),
+		threads: aggregate.SchedThreads([]identity.VM{syn}, per, vm.Name),
+	}
+	aggregate.NameReasons(rows.kvm, vendor)
+	return rows
+}
+
+// carryMeasured copies each program's Measured flag from the lifetime rows. A
+// window with no activity has empty counters, which says nothing about whether
+// the program is attached.
+func carryMeasured(dkvm []aggregate.KVMRow, dsched []aggregate.SchedRow, dblock []aggregate.BlockRow,
+	kvm []aggregate.KVMRow, sched []aggregate.SchedRow, block []aggregate.BlockRow) {
+	if len(dkvm) > 0 && len(kvm) > 0 {
+		dkvm[0].Measured = kvm[0].Measured
+	}
+	if len(dsched) > 0 && len(sched) > 0 {
+		dsched[0].Measured = sched[0].Measured
+	}
+	if len(dblock) > 0 && len(block) > 0 {
+		dblock[0].Measured = block[0].Measured
 	}
 }
 

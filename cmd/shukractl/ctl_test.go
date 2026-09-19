@@ -344,6 +344,27 @@ func (s *safeWriter) Write(p []byte) (int, error) {
 	return s.w.Write(p)
 }
 
+func TestExplainPassesTheWindowAndShowsWhichOneWasUsed(t *testing.T) {
+	var query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"question":"why is this VM slow?","window":"1m0s","findings":[],"evidence":[],"missing":[]}`))
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+	var buf bytes.Buffer
+	if err := run([]string{"explain", "db", "--window", "5m"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if query != "vm=db&window=5m" || !strings.Contains(buf.String(), "(window: 1m0s)") {
+		t.Fatalf("query %q output %q", query, buf.String())
+	}
+	if err := run([]string{"explain", "db"}, &bytes.Buffer{}); err != nil || query != "vm=db" {
+		t.Fatalf("no --window must not send one: %q %v", query, err)
+	}
+}
+
 func TestExplainPrintsRankedFindingsBeforeEvidence(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

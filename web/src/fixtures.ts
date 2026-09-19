@@ -76,6 +76,7 @@ export function fixtureResponse(path: string, init?: RequestInit): unknown {
     return {
       vm: fixture.vms.find((v) => v.name === vm) || { name: vm || '', runtime: '' },
       question: 'why is this VM slow?',
+      window: '1m0s',
       basis: 'Latencies are since the daemon attached, from log2 buckets, so each can read up to 2x high. They are the QEMU process\'s, not the guest\'s.',
       findings: [
         { cause: 'storage_latency', confidence: 'high', summary: 'Block requests from QEMU take long. Look at the backing device, its queue depth and other writers.', evidence: ['Block write p99 is up to 33.6 ms (slowest 28 ms) across 940 requests.'] },
