@@ -170,7 +170,7 @@ Default `go build` does not link CO-RE objects, so CI and macOS stay green. The 
 | Workflow | Runs | What it proves |
 |---|---|---|
 | `CI` | every push and pull request | Go and console tests, the programs loaded into the runner's kernel, the tap rig, the installer |
-| `Live guest (fluxvm)` | weekly, by hand, and on changes to the tap code, identity code or the test | A real KVM guest booted by fluxvm on a runner with `/dev/kvm`: the tap is attached as a hot-plug, guest events are attributed, packet counts equal the kernel's, and the tap comes off when the VM is deleted. It fails, rather than skips, on a runner with no KVM |
+| `Live guest (fluxvm)` | weekly, by hand, and on changes to the tap code, identity code or the test | Two real KVM guests booted by fluxvm on a runner with `/dev/kvm`: the taps are attached as hot-plugs, guest events are attributed, one guest reaches the other, packet counts equal the kernel's, and the taps come off when the VMs are deleted. It fails, rather than skips, on a runner with no KVM |
 | `Release` | a `v*` tag | The tarball and `.deb` for each architecture |
 
 ```bash
