@@ -15,10 +15,34 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: BPF toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm linux-tools-common linux-tools-generic
+          ver="$(uname -r)"
+          sudo apt-get install -y "linux-tools-${ver}" || true
+          if ! command -v llvm-strip >/dev/null 2>&1; then
+            strip="$(ls /usr/bin/llvm-strip-* 2>/dev/null | head -1)"
+            test -n "$strip"
+            sudo ln -sfn "$strip" /usr/local/bin/llvm-strip
+          fi
+          real="$(find /usr/lib/linux-tools -type f -name bpftool | head -1)"
+          test -n "$real"
+          sudo ln -sfn "$real" /usr/local/bin/bpftool
+          clang --version
+          llvm-strip --version
+          bpftool version
+      - name: Generate CO-RE objects
+        run: |
+          make generate
+          shopt -s nullglob
+          files=(internal/bpfgen/*_bpfel.go)
+          test "${#files[@]}" -gt 0
+          ls "${files[@]}"
       - name: Go tests
         run: go test -count=1 ./...
-      - name: Generate CO-RE objects when clang and BTF exist
-        run: make generate
+      - name: Go tests with shukrabpf
+        run: make test-bpf
       - name: Console tests
         run: npm --prefix web ci && npm --prefix web test
       - name: Console build

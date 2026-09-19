@@ -26,6 +26,11 @@ build:
 test:
 	go test ./...
 
+# Compiles the loader. Requires `make generate` on Linux; on Darwin the linux
+# build tag keeps these files out, so this target is for CI and a hypervisor.
+test-bpf:
+	go test -count=1 -tags shukrabpf ./...
+
 web:
 	npm --prefix web ci
 	npm --prefix web test
