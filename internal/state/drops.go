@@ -4,6 +4,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/zyvorai/shukra/internal/aggregate"
 	"github.com/zyvorai/shukra/internal/identity"
 )
 
@@ -235,16 +236,36 @@ func subOrAll(cur, old uint64) uint64 {
 	return cur - old
 }
 
-// ForeignDrops is, per VM, how many packets the kernel dropped on its taps that Shukra did not.
-// The threshold rule guest_drops_per_sec reads it.
-func (s *State) ForeignDrops() map[string]uint64 {
-	vms, taps, drops, ok := s.dropInputs()
-	if !ok || !s.dropsAttached() {
-		return nil
+// TapTotals is, per VM, the cumulative counters the threshold rules read that come from its taps:
+// the packets the kernel dropped on them that Shukra did not, and what became of its TCP connections.
+// A measurement that is not on is not reported as zero: its OK flag stays false.
+func (s *State) TapTotals() map[string]aggregate.TapTotals {
+	out := map[string]aggregate.TapTotals{}
+	vms, taps, drops, dropsOn := s.dropInputs()
+	dropsOn = dropsOn && s.dropsAttached()
+	if dropsOn {
+		for _, t := range joinTaps(vms, snapsFrom(taps, drops), "") {
+			v := out[t.VM]
+			v.ForeignDrops += t.OtherDrops
+			v.DropsOK = true
+			out[t.VM] = v
+		}
 	}
-	out := map[string]uint64{}
-	for _, t := range joinTaps(vms, snapsFrom(taps, drops), "") {
-		out[t.VM] += t.OtherDrops
+	if s.tapAttached() {
+		for _, t := range s.Taps("") {
+			v := out[t.VM]
+			v.OutRefused += t.OutRefused
+			v.OutTimeout += t.OutTimeout
+			v.InSyn += t.InSyn
+			v.OutcomesOK = true
+			out[t.VM] = v
+		}
 	}
 	return out
+}
+
+func (s *State) tapAttached() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.programAttachedLocked("tap")
 }

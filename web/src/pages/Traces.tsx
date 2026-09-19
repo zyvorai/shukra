@@ -125,20 +125,30 @@ export function Programs() {
 
 export function Connections() {
   const { data, err } = useAPI<{ events: Row[] }>('/api/v1/events', { refreshMs: LIVE_MS });
+  const tap = useAPI<{ rows: Row[] }>('/api/v1/trace/tap', { refreshMs: LIVE_MS });
   const all = data?.events || [];
   const host = all.filter((e) => e.kind === 'tcp_connect' || e.kind === 'tcp_retransmit');
-  const guest = all.filter((e) => e.kind === 'guest_connect' || e.kind === 'guest_flow');
+  const guest = all.filter((e) => e.kind === 'guest_connect' || e.kind === 'guest_flow' || e.kind === 'guest_inbound');
   return (
     <div>
       <HostBanner />
       <Trace title="Host connections" err={err} rows={host} cols={['ts', 'kind', 'dst', 'dport', 'attribution', 'guest_attributed']} />
       {guest.length > 0 && (
         <Trace
-          title="Guest connections and UDP flows (seen on the VM tap)"
+          title="Guest connections, connections into the guest, and UDP flows (seen on the VM tap)"
           err=""
           rows={guest}
-          cols={['ts', 'vm', 'proto', 'src', 'dst', 'dport', 'blocked', 'attribution', 'guest_attributed']}
+          cols={['ts', 'vm', 'kind', 'proto', 'src', 'dst', 'dport', 'blocked', 'attribution', 'guest_attributed']}
           format={{ vm: (v) => String((v as { name?: string } | undefined)?.name ?? '—'), blocked: (v) => (v ? 'dropped' : '—') }}
+        />
+      )}
+      {tap.data && tap.data.rows.length > 0 && (
+        <Trace
+          title="Guest TCP connections: what became of them (per tap)"
+          err={tap.err}
+          rows={tap.data.rows}
+          cols={['vm', 'tap', 'outSyn', 'outAccepted', 'outRefused', 'outTimedOut', 'outBlocked', 'handshakeP50Ns', 'handshakeP99Ns', 'inSyn', 'inAccepted', 'inRefused', 'inIgnored']}
+          format={{ handshakeP50Ns: ns, handshakeP99Ns: ns }}
         />
       )}
     </div>

@@ -223,14 +223,14 @@ func TestGuestDropsPerSecReadsOnlyWhatShukraDidNotDrop(t *testing.T) {
 	var e Evaluator
 	r := []Threshold{{Name: "guest-drops", Metric: MetricGuestDropsPerSec, Op: ">", Value: 5, Window: 10 * time.Second, Severity: "high"}}
 	vms := map[string]aggregate.Counters{"db": {}}
-	e.SetForeignDrops(map[string]uint64{"db": 100})
+	e.SetTapTotals(map[string]aggregate.TapTotals{"db": {ForeignDrops: 100, DropsOK: true}})
 	e.Evaluate(t0, vms, r)
-	e.SetForeignDrops(map[string]uint64{"db": 200}) // 100 more in 10 s: 10 a second
+	e.SetTapTotals(map[string]aggregate.TapTotals{"db": {ForeignDrops: 200, DropsOK: true}}) // 100 more in 10 s: 10 a second
 	f := e.Evaluate(t0.Add(10*time.Second), vms, r)
 	if len(f) != 1 || f[0].VM != "db" || f[0].Value != 10 {
 		t.Fatalf("%+v", f)
 	}
-	e.SetForeignDrops(map[string]uint64{"db": 210}) // 1 a second: under the threshold
+	e.SetTapTotals(map[string]aggregate.TapTotals{"db": {ForeignDrops: 210, DropsOK: true}}) // 1 a second: under the threshold
 	if f = e.Evaluate(t0.Add(20*time.Second), vms, r); len(f) != 0 {
 		t.Fatalf("%+v", f)
 	}
@@ -246,7 +246,7 @@ func TestGuestDropsSaysNothingWhileTheDropsProgramIsNotMeasuring(t *testing.T) {
 		t.Fatalf("a rule fired with no measurement: %+v", f)
 	}
 	// Measuring only now: the base was not measured, so there is no window to compare.
-	e.SetForeignDrops(map[string]uint64{"db": 500})
+	e.SetTapTotals(map[string]aggregate.TapTotals{"db": {ForeignDrops: 500, DropsOK: true}})
 	if f := e.Evaluate(t0.Add(20*time.Second), vms, r); len(f) != 0 {
 		t.Fatalf("compared a measurement with a non-measurement: %+v", f)
 	}
@@ -256,5 +256,53 @@ func TestTheGuestDropsMetricIsAcceptedInARuleFile(t *testing.T) {
 	c, err := Parse([]byte("thresholds:\n  - {name: d, metric: guest_drops_per_sec, value: 5}\n"))
 	if err != nil || len(c.Thresholds) != 1 {
 		t.Fatalf("%v %+v", err, c)
+	}
+}
+
+func TestTheConnectionOutcomeMetricsEachReadTheirOwnCounter(t *testing.T) {
+	for _, c := range []struct {
+		metric string
+		totals func(n uint64) aggregate.TapTotals
+	}{
+		{MetricConnectRefusedPerSec, func(n uint64) aggregate.TapTotals {
+			return aggregate.TapTotals{OutRefused: n, OutTimeout: 1000, InSyn: 1000, OutcomesOK: true} // the others must not count
+		}},
+		{MetricConnectTimeoutsPerSec, func(n uint64) aggregate.TapTotals {
+			return aggregate.TapTotals{OutTimeout: n, OutRefused: 1000, InSyn: 1000, OutcomesOK: true}
+		}},
+		{MetricInboundPerSec, func(n uint64) aggregate.TapTotals {
+			return aggregate.TapTotals{InSyn: n, OutRefused: 1000, OutTimeout: 1000, OutcomesOK: true}
+		}},
+	} {
+		var e Evaluator
+		r := []Threshold{{Name: "r", Metric: c.metric, Op: ">", Value: 5, Window: 10 * time.Second, Severity: "medium"}}
+		vms := map[string]aggregate.Counters{"db": {}}
+		e.SetTapTotals(map[string]aggregate.TapTotals{"db": c.totals(100)})
+		e.Evaluate(t0, vms, r)
+		e.SetTapTotals(map[string]aggregate.TapTotals{"db": c.totals(200)}) // 100 more in 10 s
+		f := e.Evaluate(t0.Add(10*time.Second), vms, r)
+		if len(f) != 1 || f[0].Value != 10 {
+			t.Errorf("%s: %+v", c.metric, f)
+		}
+	}
+}
+
+func TestTheConnectionMetricsSayNothingWhileTheTapProgramIsNotMeasuring(t *testing.T) {
+	for _, metric := range []string{MetricConnectRefusedPerSec, MetricConnectTimeoutsPerSec, MetricInboundPerSec} {
+		var e Evaluator
+		r := []Threshold{{Name: "r", Metric: metric, Op: ">=", Value: 0, Window: 10 * time.Second, Severity: "medium"}}
+		vms := map[string]aggregate.Counters{"db": {}}
+		// Not measuring at either end.
+		e.SetTapTotals(map[string]aggregate.TapTotals{"db": {OutRefused: 5, OutTimeout: 5, InSyn: 5}})
+		e.Evaluate(t0, vms, r)
+		e.SetTapTotals(map[string]aggregate.TapTotals{"db": {OutRefused: 500, OutTimeout: 500, InSyn: 500}})
+		if f := e.Evaluate(t0.Add(10*time.Second), vms, r); len(f) != 0 {
+			t.Errorf("%s fired with no measurement: %+v", metric, f)
+		}
+		// Measuring only now: the base was not, so there is no window to compare.
+		e.SetTapTotals(map[string]aggregate.TapTotals{"db": {OutRefused: 900, OutTimeout: 900, InSyn: 900, OutcomesOK: true}})
+		if f := e.Evaluate(t0.Add(20*time.Second), vms, r); len(f) != 0 {
+			t.Errorf("%s compared a measurement with a non-measurement: %+v", metric, f)
+		}
 	}
 }

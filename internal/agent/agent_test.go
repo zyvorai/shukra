@@ -637,3 +637,69 @@ func TestATCPAlertForAWatchedAddressDoesNotHideAUDPFlowToIt(t *testing.T) {
 		t.Fatalf("%d detections, %d suppressed", len(st.Detections("db")), st.Suppressed())
 	}
 }
+
+func guestInbound(ag *Agent, iface, peer, guest string, dport uint16, blocked bool) {
+	ag.Ingest(event.Event{Kind: event.KindGuestInbound, Proto: "tcp", TS: time.Now().UTC(), Iface: iface, Src: peer, Dst: guest, DPort: dport, Blocked: blocked})
+}
+
+func TestAnInboundConnectIsAttributedToTheVMAndKeepsThePeerAsSource(t *testing.T) {
+	ag, st := newTapAgent(t, "")
+	guestInbound(ag, "tapdb", "198.51.100.7", "10.0.0.5", 22, false)
+	got := kinds(st, event.KindGuestInbound)
+	if len(got) != 1 {
+		t.Fatalf("%+v", got)
+	}
+	e := got[0]
+	if e.VM.Name != "db" || !e.GuestAttributed || e.Attribution != event.AttributionGuestTap || e.Src != "198.51.100.7" || e.Dst != "10.0.0.5" || e.DPort != 22 {
+		t.Fatalf("%+v", e)
+	}
+	guestInbound(ag, "tapstray", "198.51.100.7", "10.0.0.9", 22, false)
+	stray := kinds(st, event.KindGuestInbound)
+	if len(stray) != 2 || stray[1].VM.Name != "" || stray[1].GuestAttributed {
+		t.Fatalf("a tap no VM owns must not be named: %+v", stray)
+	}
+}
+
+func TestInboundRulesWatchThePeerAndTheGuestPortButOutboundRulesStayOutbound(t *testing.T) {
+	ag, st := newTapAgent(t, `
+destinations:
+  - {cidr: 198.51.100.0/24, name: bad-net}
+ports:
+  - {port: 22, name: ssh-in, dir: in}
+  - {port: 25, name: smtp-out}
+`)
+	guestInbound(ag, "tapdb", "198.51.100.7", "10.0.0.5", 22, false)
+	guestInbound(ag, "tapdb", "203.0.113.4", "10.0.0.5", 25, false) // port 25 INTO the guest: the smtp rule is for the guest sending
+	rules := map[string]event.Event{}
+	for _, d := range st.Detections("db") {
+		rules[d.Rule] = d
+		if !d.GuestAttributed || d.Attribution != event.AttributionGuestTap || d.Iface != "tapdb" {
+			t.Fatalf("a detection on guest traffic lost its attribution: %+v", d)
+		}
+	}
+	if _, ok := rules["bad-net"]; !ok || !strings.Contains(rules["bad-net"].Message, "connected in from 198.51.100.7") {
+		t.Fatalf("a watched network connecting in must fire, naming the peer: %v", rules)
+	}
+	if _, ok := rules["ssh-in"]; !ok || !strings.Contains(rules["ssh-in"].Message, "port 22 connected in from 198.51.100.7") {
+		t.Fatalf("%v", rules)
+	}
+	if _, ok := rules["smtp-out"]; ok {
+		t.Fatalf("an outbound rule fired on a connect INTO the guest: %v", rules)
+	}
+	if len(st.Detections("db")) != 2 {
+		t.Fatalf("%d detections", len(st.Detections("db")))
+	}
+}
+
+func TestAConnectInAndAConnectOutToTheSameAddressAreSeparateAlerts(t *testing.T) {
+	ag, st := newTapAgent(t, "suppress: 5m\ndestinations:\n  - {cidr: 203.0.113.0/24, name: bad-net}\n")
+	ag.Ingest(event.Event{Kind: event.KindGuestConnect, Proto: "tcp", TS: time.Now().UTC(), Iface: "tapdb", Src: "10.0.0.5", Dst: "203.0.113.9", DPort: 443})
+	guestInbound(ag, "tapdb", "203.0.113.9", "10.0.0.5", 22, false)
+	if len(st.Detections("db")) != 2 {
+		t.Fatalf("talking to a watched address and being talked to by it are different facts: %d detections", len(st.Detections("db")))
+	}
+	guestInbound(ag, "tapdb", "203.0.113.9", "10.0.0.5", 22, false) // the same again
+	if len(st.Detections("db")) != 2 || st.Suppressed() != 1 {
+		t.Fatalf("%d detections, %d suppressed", len(st.Detections("db")), st.Suppressed())
+	}
+}

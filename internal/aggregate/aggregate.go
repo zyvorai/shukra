@@ -452,3 +452,15 @@ func (c Counters) Clone() Counters {
 	out.BlockWrite = append([]uint64(nil), c.BlockWrite...)
 	return out
 }
+
+// TapTotals are one VM's cumulative counters that come from its taps, not from the per-thread maps: what
+// the threshold rules read for guest traffic. A field is only meaningful while its OK flag is set: a
+// program that is not measuring has no zero to report.
+type TapTotals struct {
+	ForeignDrops uint64 // packets the kernel dropped on the taps that Shukra did not (excluding a full queue)
+	DropsOK      bool
+	OutRefused   uint64 // the guest's connections that were refused
+	OutTimeout   uint64 // the guest's connections that were never answered
+	InSyn        uint64 // connections attempted to the guest
+	OutcomesOK   bool
+}

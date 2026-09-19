@@ -129,6 +129,11 @@ for i in range(20):
     except Exception as e:
         say("client: try %d failed: %s" % (i, e))
         time.sleep(3)
+# and a closed port on the peer: the peer's kernel answers RST, which is a refused connection
+try:
+    socket.create_connection(("@PEER@", 9001), 3)
+except Exception:
+    pass
 '''.replace("@PEER@", peer)
 server = common + '''import os, subprocess
 dev = [x for x in os.listdir("/sys/class/net") if x.startswith("en")][0]
@@ -302,6 +307,15 @@ NPEER=$(val peer)
 check "shukra saw that connect as a guest_connect on the sender's tap, tcp, guest-attributed, naming the sender" "[ '$NPEER' -ge 1 ] && [ \"\$(val peerattr)\" = 1 ]"
 check "the peer's tap carried its reply (from-guest packets, none dropped)" "[ \"\$(tap_row_of $TAPB | cut -d, -f1 | tr -d '[] ')\" -ge 1 ] && [ \"\$(tap_row_of $TAPB | cut -d, -f3 | tr -d ' ')\" = 0 ]"
 check "and nothing was dropped on the sender's tap either" "[ \"\$(tap_row | cut -d, -f3 | tr -d ' ')\" = 0 ]"
+
+# What became of the TCP connections, as the two taps saw them. The guest connected to the peer's open port
+# (accepted) and to a closed one (refused); the peer's tap sees the same two connections coming in.
+outc() { api "$URL/api/v1/trace/tap" | J "[r['$2'] for r in d['rows'] if r['tap']=='$1'][0]"; }
+check "the guest's connection to the peer was accepted, and its connection to a closed peer port was refused" "[ \"\$(outc $TAP outAccepted)\" -ge 1 ] && [ \"\$(outc $TAP outRefused)\" -ge 1 ]"
+check "the peer's tap saw the same two connections from its side, coming in: one accepted, one refused" "[ \"\$(outc $TAPB inAccepted)\" -ge 1 ] && [ \"\$(outc $TAPB inRefused)\" -ge 1 ]"
+check "every accepted connection is in the handshake histogram, and none took as long as five seconds" "api $URL/api/v1/trace/tap | J \"[(sum(r['handshakeHist']), r['outAccepted'], r['handshakeP99Ns']) for r in d['rows'] if r['tap']=='$TAP'][0]\" | awk -F'[(), ]+' '\$2==\$3 && \$2>0 && \$4<5000000000{f=1} END{exit !f}'"
+check "the guest's attempts are all accounted for (accepted + refused + never answered + blocked), give or take those still waiting" "[ \$(( \$(outc $TAP outSyn) - \$(outc $TAP outAccepted) - \$(outc $TAP outRefused) - \$(outc $TAP outTimedOut) - \$(outc $TAP outBlocked) )) -le 6 ]"
+echo "  the guest's connections: $(api "$URL/api/v1/trace/tap" | J "[(r['outSyn'],r['outAccepted'],r['outRefused'],r['outTimedOut'],r['outBlocked'],r['handshakeP50Ns']) for r in d['rows'] if r['tap']=='$TAP']")  (attempts, accepted, refused, never answered, blocked, handshake p50 ns)"
 
 # The drops program counts what the kernel dropped on the taps. Whether anything else dropped traffic
 # depends on the host (fluxvm's dataplane, when it has one, legitimately drops the guest's traffic to a

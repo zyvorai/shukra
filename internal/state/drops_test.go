@@ -86,8 +86,8 @@ func TestNothingIsSaidAboutDropsWhileTheProgramIsNotMeasuring(t *testing.T) {
 	if taps, over := w.DropTapsOver("", w.now, time.Minute); taps != nil || over != "" {
 		t.Fatalf("%+v %q", taps, over)
 	}
-	if w.ForeignDrops() != nil {
-		t.Fatal("foreign drops with no program")
+	if v := w.TapTotals()["db"]; v.DropsOK || v.ForeignDrops != 0 {
+		t.Fatalf("foreign drops reported with no program measuring: %+v", v)
 	}
 }
 

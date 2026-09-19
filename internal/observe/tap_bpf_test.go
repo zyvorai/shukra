@@ -20,6 +20,23 @@ func tapSample(family byte) []byte {
 	return b
 }
 
+func TestDecodeTapInboundConnect(t *testing.T) {
+	// A SYN sent TO the guest: dir is 1, src is the peer that connected, dst is the guest, dport the guest's port.
+	b := tapSample(2)
+	b[19] = 1
+	binary.LittleEndian.PutUint16(b[12:14], 22)
+	copy(b[24:28], net.ParseIP("198.51.100.7").To4())
+	copy(b[40:44], net.ParseIP("10.99.0.2").To4())
+	e, ok := decodeTap(b, nameOf)
+	if !ok || e.Kind != event.KindGuestInbound || e.Proto != "tcp" || e.Src != "198.51.100.7" || e.Dst != "10.99.0.2" || e.DPort != 22 {
+		t.Fatalf("%+v %v", e, ok)
+	}
+	b[19] = 0 // the guest's own connect is still a connect
+	if e, ok = decodeTap(b, nameOf); !ok || e.Kind != event.KindGuestConnect {
+		t.Fatalf("%+v %v", e, ok)
+	}
+}
+
 func nameOf(idx uint32) string {
 	if idx == 7 {
 		return "tapdb"

@@ -24,9 +24,10 @@ const (
 )
 
 type snapshot struct {
-	at      time.Time
-	threads map[string]map[uint32]aggregate.Counters // VM name -> tid -> counters
-	drops   map[string]dropSnap                      // tap name -> what the kernel dropped on it, when the drops program was measuring
+	at       time.Time
+	threads  map[string]map[uint32]aggregate.Counters // VM name -> tid -> counters
+	drops    map[string]dropSnap                      // tap name -> what the kernel dropped on it, when the drops program was measuring
+	outcomes map[string]Outcomes                      // tap name -> what became of its TCP handshakes, when the tap program was on
 }
 
 func (s *State) now() time.Time {
@@ -57,6 +58,12 @@ func (s *State) recordLocked(now time.Time) {
 			taps = s.tapSource()
 		}
 		snap.drops = snapsFrom(taps, s.dropSource())
+	}
+	if s.tapSource != nil && s.programAttachedLocked("tap") {
+		snap.outcomes = map[string]Outcomes{}
+		for _, t := range s.tapSource() {
+			snap.outcomes[t.Name] = t.Outcomes
+		}
 	}
 	s.history = append(s.history, snap)
 	cut := 0

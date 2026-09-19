@@ -153,7 +153,7 @@ func TestShippedExampleParses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("with examples enabled: %v\n%s", err, strings.Join(on, "\n"))
 	}
-	if len(full.Ports) != 2 || full.Ports[1].Proto != "udp" || len(full.Thresholds) != 1 || len(full.ExecAllow) != 1 || full.Suppress != DefaultSuppress {
+	if len(full.Ports) != 3 || full.Ports[1].Proto != "udp" || full.Ports[2].Dir != "in" || len(full.Thresholds) != 1 || len(full.ExecAllow) != 1 || full.Suppress != DefaultSuppress {
 		t.Fatalf("%+v", full)
 	}
 }
@@ -191,5 +191,41 @@ ports:
 	}
 	if _, err := Parse([]byte("ports:\n  - {port: 53, proto: icmp}\n")); err == nil {
 		t.Fatal("an unknown proto was accepted")
+	}
+}
+
+func TestPortRulesMatchByDirectionAndDefaultToOut(t *testing.T) {
+	c, err := Parse([]byte(`
+ports:
+  - {port: 25, name: smtp-out}
+  - {port: 22, name: ssh-in, dir: in}
+  - {port: 3389, name: rdp-any, dir: any}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Ports[0].Dir != "out" {
+		t.Fatalf("a rule with no dir must mean out, as it always did: %q", c.Ports[0].Dir)
+	}
+	for _, x := range []struct {
+		port      uint16
+		dir, want string
+	}{
+		{25, "out", "smtp-out"}, {25, "in", ""}, // a connect INTO the guest on 25 is not the guest sending mail
+		{22, "in", "ssh-in"}, {22, "out", ""},
+		{3389, "out", "rdp-any"}, {3389, "in", "rdp-any"},
+		{25, "", "smtp-out"}, // no direction is out
+	} {
+		r, ok := c.MatchPortDir(x.port, "tcp", x.dir)
+		if (x.want == "") == ok || (ok && r.Name != x.want) {
+			t.Errorf("%d %q: got %q ok=%v, want %q", x.port, x.dir, r.Name, ok, x.want)
+		}
+	}
+	// MatchPort is the outbound question.
+	if _, ok := c.MatchPort(22, "tcp"); ok {
+		t.Fatal("an inbound-only rule matched an outbound connect")
+	}
+	if _, err := Parse([]byte("ports:\n  - {port: 22, dir: sideways}\n")); err == nil || !strings.Contains(err.Error(), "dir") {
+		t.Fatalf("a bad dir was accepted: %v", err)
 	}
 }

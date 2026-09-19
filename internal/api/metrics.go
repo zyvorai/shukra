@@ -152,6 +152,36 @@ func writeMetrics(w io.Writer, st *state.State) {
 		for _, t := range taps {
 			fmt.Fprintf(w, "shukra_tap_dropped_packets_total{%s,tap=%q} %d\n", lbl(t.VM), t.Tap, t.DroppedPkts)
 		}
+		// What became of the TCP handshakes. direction=out is the guest's own connections, in is made to it.
+		counter("shukra_tap_connect_attempts_total", "New TCP connection attempts seen on a VM tap. A repeat of the same SYN is a retransmit, not a new attempt.")
+		for _, t := range taps {
+			fmt.Fprintf(w, "shukra_tap_connect_attempts_total{%s,tap=%q,direction=\"out\"} %d\nshukra_tap_connect_attempts_total{%s,tap=%q,direction=\"in\"} %d\n",
+				lbl(t.VM), t.Tap, t.OutSyn, lbl(t.VM), t.Tap, t.InSyn)
+		}
+		counter("shukra_tap_connect_outcomes_total", "What became of them: accepted (SYN-ACK), refused (RST), timed_out or ignored (never answered), or blocked (dropped by isolation).")
+		for _, t := range taps {
+			for _, o := range []struct {
+				dir, result string
+				n           uint64
+			}{
+				{"out", "accepted", t.OutOK}, {"out", "refused", t.OutRefused}, {"out", "timed_out", t.OutTimeout}, {"out", "blocked", t.OutBlocked},
+				{"in", "accepted", t.InOK}, {"in", "refused", t.InRefused}, {"in", "ignored", t.InIgnored}, {"in", "blocked", t.InBlocked},
+			} {
+				fmt.Fprintf(w, "shukra_tap_connect_outcomes_total{%s,tap=%q,direction=%q,result=%q} %d\n", lbl(t.VM), t.Tap, o.dir, o.result, o.n)
+			}
+		}
+		counter("shukra_tap_connect_retransmits_total", "SYNs repeated on a connection that had not been answered yet.")
+		for _, t := range taps {
+			fmt.Fprintf(w, "shukra_tap_connect_retransmits_total{%s,tap=%q,direction=\"out\"} %d\nshukra_tap_connect_retransmits_total{%s,tap=%q,direction=\"in\"} %d\n",
+				lbl(t.VM), t.Tap, t.OutRetrans, lbl(t.VM), t.Tap, t.InRetrans)
+		}
+		var hs []histSeries
+		for _, t := range taps {
+			if len(t.HandshakeHist) > 0 {
+				hs = append(hs, histSeries{lbl(t.VM) + fmt.Sprintf(",tap=%q", t.Tap), t.HandshakeHist})
+			}
+		}
+		writeHistograms(w, "shukra_tap_handshake_seconds", "How long the guest's outbound TCP connections took to be answered, SYN to SYN-ACK, seen on the tap.", hs)
 		gauge("shukra_tap_isolated", "1 while the VM tap is isolated.")
 		for _, t := range taps {
 			v := 0

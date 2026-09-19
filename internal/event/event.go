@@ -17,6 +17,8 @@ const (
 	KindVMStop        Kind = "vm_stop"
 	KindGuestConnect  Kind = "guest_connect"
 	KindGuestFlow     Kind = "guest_flow"
+	// KindGuestInbound is a TCP SYN sent TO a guest: someone connecting in. Src is the peer, Dst the guest.
+	KindGuestInbound Kind = "guest_inbound"
 )
 
 const (
