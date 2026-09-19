@@ -128,7 +128,7 @@ func joinTaps(vms []identity.VM, snaps map[string]dropSnap, only string) []DropT
 			continue
 		}
 		var total, tc uint64
-		var reasons []DropReason
+		reasons := []DropReason{} // [] and not null, so a client can loop over a tap with no drops
 		for r, n := range sn.reasons {
 			if n == 0 {
 				continue

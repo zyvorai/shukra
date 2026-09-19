@@ -542,6 +542,21 @@ func TestDropsEndpointServesTheRowsAndTheSummaryForOwnedTapsOnly(t *testing.T) {
 	}
 }
 
+func TestATapWithNoDropsHasAnEmptyReasonListNotNull(t *testing.T) {
+	st := withDrops(true)
+	st.SetDropSource(func() []state.DropStat { return nil }) // measuring, and nothing has been dropped
+	rec := get(New(st, "k"), "/api/v1/trace/drops", "k")
+	var body struct {
+		Taps []map[string]json.RawMessage `json:"taps"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Taps) != 1 || string(body.Taps[0]["reasons"]) != "[]" {
+		t.Fatalf("reasons must be [] so a client can loop over it: %s", rec.Body.String())
+	}
+}
+
 func TestDropsEndpointSaysNotMeasuringAndInventsNothing(t *testing.T) {
 	rec := get(New(withDrops(false), "k"), "/api/v1/trace/drops", "k")
 	var body struct {
