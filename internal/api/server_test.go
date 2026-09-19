@@ -427,3 +427,33 @@ func TestAnEmptyReadOnlyKeyNeverMatches(t *testing.T) {
 		t.Fatalf("no key at all: %d", rec.Code)
 	}
 }
+
+func TestDoctorEndpointReportsTheWorstFindingAndIsReadableWithTheReadOnlyKey(t *testing.T) {
+	// Distinctive values, so that finding one in the output could only mean a leak.
+	const admin, readOnly = "adm-7f3a91c2e5", "ro-4b8d60aa19"
+	st := state.New("node-07")
+	st.SetConfig(state.ConfigInfo{Listen: "0.0.0.0:30970", DevKey: true, KeyLen: len(admin), ReadOnlyKey: true})
+	h := NewWithKeys(st, Keys{Admin: admin, ReadOnly: readOnly})
+	rec := get(h, "/api/v1/doctor", readOnly)
+	if rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Worst  string        `json:"worst"`
+		Checks []state.Check `json:"checks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Worst != "fail" || len(body.Checks) == 0 || body.Checks[0].Status != "fail" {
+		t.Fatalf("%+v", body)
+	}
+	for _, k := range []string{admin, readOnly} {
+		if strings.Contains(rec.Body.String(), k) {
+			t.Fatalf("the audit output contains a key: %s", k)
+		}
+	}
+	if get(h, "/api/v1/doctor", "").Code != http.StatusUnauthorized {
+		t.Fatal("doctor is open without a key")
+	}
+}

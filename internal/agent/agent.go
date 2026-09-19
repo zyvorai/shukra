@@ -55,6 +55,12 @@ func (a *Agent) Reload() error {
 	if a.watchPath == "" {
 		return nil
 	}
+	err := a.reload()
+	a.State.SetRulesStatus(err)
+	return err
+}
+
+func (a *Agent) reload() error {
 	b, err := os.ReadFile(a.watchPath)
 	if err != nil {
 		return err

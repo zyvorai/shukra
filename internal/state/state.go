@@ -83,27 +83,30 @@ type Status struct {
 
 // State is safe for the HTTP server and the agent to share.
 type State struct {
-	mu         sync.RWMutex
-	started    time.Time
-	hostname   string
-	vms        []identity.VM
-	programs   []Program
-	byPID      map[uint32]aggregate.Counters
-	detections []event.Event
-	events     []event.Event
-	isolations []Isolation
-	rec        *recorder.Recorder
-	seq        uint64
-	connects   map[string]uint64
-	ready      bool
-	enforcer   Enforcer
-	tapSource  func() []TapStat
-	cpuVendor  string
-	persist    Persister
-	hooks      []func(event.Event)
-	suppressed uint64
-	sinkStats  func() []SinkStat
-	changed    chan struct{}
+	mu            sync.RWMutex
+	started       time.Time
+	hostname      string
+	vms           []identity.VM
+	programs      []Program
+	byPID         map[uint32]aggregate.Counters
+	detections    []event.Event
+	events        []event.Event
+	isolations    []Isolation
+	rec           *recorder.Recorder
+	seq           uint64
+	connects      map[string]uint64
+	ready         bool
+	config        ConfigInfo
+	rulesErr      string
+	kernelRelease func() string
+	enforcer      Enforcer
+	tapSource     func() []TapStat
+	cpuVendor     string
+	persist       Persister
+	hooks         []func(event.Event)
+	suppressed    uint64
+	sinkStats     func() []SinkStat
+	changed       chan struct{}
 }
 
 // MaxEvents bounds the in-memory event and detection lists.

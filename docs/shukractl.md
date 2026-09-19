@@ -12,7 +12,7 @@ shukractl trace kvm --vm payment-prod-03
 shukractl isolate payment-prod-03
 ```
 
-`isolate <vm>` asks the daemon to drop the VM's tap traffic except the management allow list, and prints what actually happened: `applied` is true only after the kernel took the change. `release <vm>` lifts it. `trace tap` shows the guest's traffic per tap. `rules check <file>` validates a detection file offline.
+`isolate <vm>` asks the daemon to drop the VM's tap traffic except the management allow list, and prints what actually happened: `applied` is true only after the kernel took the change. `release <vm>` lifts it. `trace tap` shows the guest's traffic per tap. `rules check <file>` validates a detection file offline. `doctor` audits the running daemon and exits non-zero on a failure (`--strict` also on a warning).
 
 ## Environment
 

@@ -501,3 +501,64 @@ func TestTraceTapAndSecurityShowTheGuestTrafficAndTheAllowList(t *testing.T) {
 		}
 	}
 }
+
+func doctorServer(t *testing.T, worst string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"worst":"` + worst + `","checks":[
+			{"id":"auth","status":"fail","title":"The API key is the well-known dev key","detail":"It is public knowledge.","fix":"Set a real key."},
+			{"id":"transport","status":"warn","title":"The API is plain HTTP on a non-loopback address","fix":"Add -tls-cert."},
+			{"id":"alerts","status":"info","title":"No alert sink is configured"},
+			{"id":"persistence","status":"ok","title":"State is kept in /var/lib/shukra"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("SHUKRA_URL", srv.URL)
+}
+
+func TestDoctorPrintsWhatNeedsAttentionAndHowToFixIt(t *testing.T) {
+	doctorServer(t, "fail")
+	var buf bytes.Buffer
+	err := run([]string{"doctor"}, &buf)
+	if err == nil {
+		t.Fatal("a failing audit must exit non-zero, so a deploy can gate on it")
+	}
+	out := buf.String()
+	for _, want := range []string{"[FAIL] The API key is the well-known dev key", "fix: Set a real key.", "[warn] The API is plain HTTP", "[info] No alert sink", "1 checks passed, 3 need attention (worst: fail)"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "State is kept") {
+		t.Fatalf("a passing check was printed:\n%s", out)
+	}
+}
+
+func TestDoctorExitStatusFollowsTheWorstFinding(t *testing.T) {
+	for _, c := range []struct {
+		worst  string
+		args   []string
+		wantOK bool
+	}{
+		{"ok", nil, true}, {"info", nil, true}, {"warn", nil, true}, {"warn", []string{"--strict"}, false},
+		{"fail", nil, false}, {"fail", []string{"--strict"}, false}, {"info", []string{"--strict"}, true},
+	} {
+		doctorServer(t, c.worst)
+		err := run(append([]string{"doctor"}, c.args...), &bytes.Buffer{})
+		if (err == nil) != c.wantOK {
+			t.Errorf("worst=%s args=%v: err=%v, want ok=%v", c.worst, c.args, err, c.wantOK)
+		}
+	}
+}
+
+func TestDoctorJSONIsThePlainReport(t *testing.T) {
+	doctorServer(t, "warn")
+	var buf bytes.Buffer
+	if err := run([]string{"doctor", "--json"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &m); err != nil || m["worst"] != "warn" {
+		t.Fatalf("%v %s", err, buf.String())
+	}
+}

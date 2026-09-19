@@ -83,6 +83,16 @@ func routes(st *state.State) *http.ServeMux {
 		}
 		stream(w, r, st, r.URL.Query().Get("vm"), since)
 	})
+	mux.HandleFunc("GET /api/v1/doctor", func(w http.ResponseWriter, r *http.Request) {
+		checks := st.Doctor()
+		worst := "ok"
+		for _, c := range checks {
+			if c.Status == "fail" || (c.Status == "warn" && worst != "fail") || (c.Status == "info" && worst == "ok") {
+				worst = c.Status
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"worst": worst, "checks": checks})
+	})
 	mux.HandleFunc("GET /api/v1/isolations", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"isolations": st.Isolations()})
 	})

@@ -54,6 +54,16 @@ shukractl trace net --vm osboxes-debian
 
 A VM name that does not match is an empty result, not a guessed one.
 
+## Doctor
+
+```bash
+shukractl doctor            # what needs attention, worst first, each with a fix
+shukractl doctor --strict   # exit non-zero on a warning too, to gate a deploy
+shukractl doctor --json
+```
+
+`doctor` only reads. It reports how the API is exposed (the well-known dev key, plain HTTP on a non-loopback address, no key at all), whether the kernel supports every program, which programs are detached and why, VMs whose tap it cannot find and so cannot see or isolate, whether isolate is enabled and survives the daemon, whether state is kept across a restart, where alerts go, and whether the last detection-file reload failed and left old rules in force. Only findings that need attention are printed, worst first, each with what to change; a clean daemon prints one line. The deploy script runs it at the end. The same audit is `GET /api/v1/doctor`, readable with the read-only key, and it never contains a key.
+
 ## Explain and the flight recorder
 
 ```bash

@@ -141,6 +141,18 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	var sinkNames []string
+	for _, k := range sinks {
+		sinkNames = append(sinkNames, k.Name())
+	}
+	var allowNames []string
+	for _, p := range allow {
+		allowNames = append(allowNames, p.String())
+	}
+	st.SetConfig(state.ConfigInfo{
+		Listen: *listen, TLS: certs != nil, NoAuth: *noAuth, DevKey: !*noAuth && key == "shukra", KeyLen: len(key),
+		ReadOnlyKey: readOnlyKey != "", DataDir: *dataDir, Sinks: sinkNames, IsolateAllow: allowNames, RulesFile: *watch,
+	})
 	ag.Refresh()
 
 	hup := make(chan os.Signal, 1)

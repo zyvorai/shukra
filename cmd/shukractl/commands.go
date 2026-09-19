@@ -76,6 +76,8 @@ func run(args []string, out io.Writer) error {
 		return actCmd("release", args[1], has(args[2:], "--json"), out)
 	case "rules":
 		return rulesCmd(args[1:], out)
+	case "doctor":
+		return doctorCmd(args[1:], out)
 	case "install-cli":
 		return installCLI(args[1:], out)
 	default:

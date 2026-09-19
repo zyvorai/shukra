@@ -75,6 +75,7 @@ shukractl status
 shukractl vms
 shukractl trace kvm --vm osboxes-debian
 shukractl explain osboxes-debian
+shukractl doctor
 shukractl recorder osboxes-debian --window 60s
 shukractl watch --json
 ```

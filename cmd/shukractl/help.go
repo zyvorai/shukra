@@ -18,6 +18,7 @@ func helpSections() []helpSection {
 	return []helpSection{
 		{title: "🖥  Hypervisor", cmds: []helpCmd{
 			{"status [--json] [--wait]", "Daemon board: mode, programs, VMs, detections"},
+			{"doctor [--json] [--strict]", "Audit the daemon: exposure, what is attached, what it cannot see"},
 			{"programs", "Which observation programs are attached"},
 			{"install-cli [--prefix DIR]", "Copy this binary onto PATH"},
 		}},

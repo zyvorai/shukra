@@ -143,6 +143,8 @@ echo "---- shukractl vms ----"
 shukractl vms
 echo "---- shukractl trace list ----"
 shukractl trace list
+echo "---- shukractl doctor (what needs attention; informational) ----"
+shukractl doctor || true
 curl -sf -H "Authorization: Bearer \$API_KEY" "\$SHUKRA_URL/api/v1/status"
 echo
 HOST_IP="\$(hostname -I | awk '{print \$1}')"
