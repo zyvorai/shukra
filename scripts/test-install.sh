@@ -8,6 +8,9 @@ T="$(mktemp -d)"
 trap 'rm -rf "${T}"' EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
+# File mode, on Linux (GNU stat) and macOS (BSD stat). Try GNU first: on Linux,
+# `stat -f` is "filesystem status" and succeeds with unrelated output.
+perm() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 pass() { echo "ok:   $*"; }
 
 # A release-shaped tree. The binaries only need to answer -version.
@@ -33,7 +36,7 @@ key="$(sed -n 's/^SHUKRA_API_KEY=//p' "${ETC}/env")"
 [[ ${#key} -ge 32 ]] || fail "generated key is too short: '${key}'"
 [[ "${key}" != "shukra" ]] || fail "the dev key was installed"
 grep -q "${key}" <<<"${out}" || fail "the generated key was not shown to the installer"
-[[ "$(stat -f %Lp "${ETC}/env" 2>/dev/null || stat -c %a "${ETC}/env")" == "600" ]] || fail "env file is not 0600"
+[[ "$(perm "${ETC}/env")" == "600" ]] || fail "env file is not 0600"
 pass "first install generates a private random key and shows it once"
 
 # 2. The unit is rendered: no placeholders left, the right paths, no key in it.
