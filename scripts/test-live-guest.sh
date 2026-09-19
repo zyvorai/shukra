@@ -225,11 +225,19 @@ check "shukra still traces the KVM exits of this VM" "api $URL/api/v1/trace/kvm 
 
 echo "== 6. delete the VM: the tap program comes off"
 sudo "$FLUXCTL" delete "$ID" >/dev/null 2>&1; ID=""
-for _ in $(seq 1 30); do [ "$(shukra_taps)" = "$TAPS0" ] && break; sleep 2; done
+# The tap device goes with the VM at once, but shukra notices on its next scan, which is when
+# it drops the VM from its list and removes the pins of a tap that no longer exists. So wait
+# for all three, and print what was seen if that never happens.
+vm_gone() { api "$URL/api/v1/vms" | J "len([v for v in d['vms'] if v['pid']==$QPID])" | grep -qx 0; }
+pins()    { sudo ls /sys/fs/bpf/shukra/tap 2>/dev/null | wc -l; }
+for _ in $(seq 1 30); do
+  [ "$(shukra_taps)" = "$TAPS0" ] && vm_gone && [ "$(pins)" = "$PINS0" ] && break; sleep 2
+done
+echo "  after delete: $(shukra_taps) taps traced, $(shukra_progs) TCX programs, $(pins) pins (baseline $TAPS0, $PROGS0, $PINS0), VM listed: $(vm_gone && echo no || echo YES)"
 check "the tap is no longer traced" "[ \"\$(shukra_taps)\" = $TAPS0 ]"
 check "the TCX programs are gone again ($PROGS0, as before)" "[ \"\$(shukra_progs)\" = $PROGS0 ]"
-check "the VM is gone from shukra" "api $URL/api/v1/vms | J \"[v for v in d['vms'] if v['pid']==$QPID]\" | grep -q '\\[\\]'"
-check "the pinned links are back to what they were ($PINS0)" "[ \"\$(sudo ls /sys/fs/bpf/shukra/tap 2>/dev/null | wc -l)\" = $PINS0 ]"
+check "the VM is gone from shukra" "vm_gone"
+check "the pinned links are back to what they were ($PINS0)" "[ \"\$(pins)\" = $PINS0 ]"
 
 echo; echo "passed $PASS, failed $FAILN"
 [ $FAILN -eq 0 ]
