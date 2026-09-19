@@ -27,7 +27,7 @@ if [ -z "$BIN" ]; then
 fi
 BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
 cleanup() {
-  sudo pkill -f "$BIN -listen" 2>/dev/null; sudo pkill -f "qemu-system-x86_64 .*taptest" 2>/dev/null; kill "$HTTP_PID" 2>/dev/null
+  sudo pkill -f "$BIN -listen" 2>/dev/null; sudo pkill -f "qemu-system-x86_64 .*(taptest|tunvm)" 2>/dev/null; sudo pkill -f "$D/holder.py" 2>/dev/null; sudo ip link del tapx 2>/dev/null; kill "$HTTP_PID" 2>/dev/null
   sudo ip netns del g1 2>/dev/null; sudo ip link del vethh 2>/dev/null; sudo rm -rf $D
 }
 trap cleanup EXIT
@@ -127,6 +127,45 @@ check "the non-allowed address is reachable again" "[ \"\$(code4 10.99.0.3)\" = 
 stopd
 start -isolate-allow 10.99.0.1/32,fd99::1/128
 check "a released VM is not re-isolated by a restart" "[ \"\$(code4 10.99.0.3)\" = 200 ]"
+
+echo "== 7. a real tun/tap: the host's own frames are not the guest's, and the guest's are"
+# A veth's peer sits in a namespace. A tap is what QEMU really holds, and the kernel
+# loops host-sent multicast back in through the device's ingress hook, where it must
+# not be mistaken for a frame the guest sent.
+sudo ip tuntap add dev tapx mode tap
+sudo ip addr add 10.97.0.1/24 dev tapx; sudo ip -6 addr add fd97::1/64 dev tapx nodad; sudo ip link set tapx up
+cat > "$D/holder.py" <<'PY'
+import fcntl, os, struct, sys, time
+fd = os.open("/dev/net/tun", os.O_RDWR)
+fcntl.ioctl(fd, 0x400454ca, struct.pack("16sH", b"tapx", 0x0002 | 0x1000))   # IFF_TAP | IFF_NO_PI
+os.set_blocking(fd, False)
+frame = bytes.fromhex("ffffffffffff" "020000000001" "0806") + bytes(28)     # a broadcast ARP-shaped frame, 42 bytes
+sent = False
+while True:
+    try: os.read(fd, 2048)
+    except BlockingIOError: pass
+    if not sent and os.path.exists(sys.argv[1]):
+        for _ in range(3): os.write(fd, frame)                              # the guest sends three frames
+        sent = True
+    time.sleep(0.05)
+PY
+sudo python3 "$D/holder.py" "$D/send-now" >/dev/null 2>&1 &
+HOLDER=$!
+bash -c "exec -a /usr/bin/qemu-system-x86_64 bash $D/loop.sh -name tunvm -uuid 7777 -netdev tap,id=n1,ifname=tapx,script=no" >/dev/null 2>&1 &
+sleep 5
+tapx() { api "$U/api/v1/trace/tap" | J "[r for r in d['rows'] if r['vm']=='tunvm'][0]['$1']"; }
+check "the tap of a second VM is found and instrumented" "api $U/api/v1/vms | J \"[v['taps'] for v in d['vms'] if v['name']=='tunvm'][0]\" | grep -q tapx"
+# Host-originated traffic on the tap: an ARP for a neighbour that does not exist, and
+# IPv6 multicast, which the kernel loops back through ingress.
+ping -c2 -W1 10.97.0.9 >/dev/null 2>&1
+ping -6 -c2 -W1 -I tapx ff02::1 >/dev/null 2>&1
+sleep 3
+check "frames the host sent to the guest are counted as to_guest" "[ \"\$(tapx toGuestPackets)\" -gt 0 ]"
+check "the host's own looped-back multicast is NOT counted as from the guest" "[ \"\$(tapx fromGuestPackets)\" = 0 ]"
+touch "$D/send-now"; sleep 3
+check "the three frames the guest really wrote are counted as from_guest" "[ \"\$(tapx fromGuestPackets)\" = 3 ]"
+check "and their bytes: 3 x 42" "[ \"\$(tapx fromGuestBytes)\" = 126 ]"
+sudo kill $HOLDER 2>/dev/null; sudo pkill -f "qemu-system-x86_64 .*tunvm"; sudo ip link del tapx 2>/dev/null
 
 echo "== 6. the tap program comes off when the VM goes"
 sudo pkill -f "qemu-system-x86_64 .*taptest"; sleep 6

@@ -13,8 +13,17 @@
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
-#define TCX_PASS 0
+/* TCX verdicts. TCX_NEXT hands the packet to the next program on the hook. TCX_PASS
+   would accept it and stop the chain, skipping every program attached after this
+   one: another tool's policy or monitoring on the same tap. An observer must not do
+   that, so this program only ever returns NEXT or DROP. */
+#define TCX_NEXT -1
 #define TCX_DROP 2
+
+/* pkt_type of a frame the host sent and the kernel looped back in. Multicast the
+   host transmits is delivered again through the device's ingress hook, where it
+   would otherwise be counted as a frame the guest sent. */
+#define PACKET_LOOPBACK 5
 
 #define ETH_P_IP 0x0800
 #define ETH_P_ARP 0x0806
@@ -183,11 +192,15 @@ static __always_inline int allowed6(const __u8 *addr) {
 }
 
 static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
+	/* Not a frame from the guest: the host's own, looped back. Leave it alone. */
+	if (from_guest && skb->pkt_type == PACKET_LOOPBACK)
+		return TCX_NEXT;
+
 	void *data = (void *)(long)skb->data;
 	void *end = (void *)(long)skb->data_end;
 	struct ethhdr *eth = data;
 	if ((void *)(eth + 1) > end)
-		return TCX_PASS;
+		return TCX_NEXT;
 
 	__u32 ifindex = skb->ifindex;
 	__u16 proto = __builtin_bswap16(eth->h_proto);
@@ -272,7 +285,7 @@ account:;
 			s->to_bytes += len;
 		}
 	}
-	return drop ? TCX_DROP : TCX_PASS;
+	return drop ? TCX_DROP : TCX_NEXT;
 }
 
 SEC("tcx/ingress")

@@ -7,13 +7,13 @@ Every other program in Shukra sees the QEMU process. This one sees the guest. It
 - Linux 6.6 or newer, for TCX. Older kernels report the tap program as detached with `TCX needs Linux 6.6 or newer`. There is no TC fallback yet.
 - A VM with a tap interface. The daemon finds a VM's taps two ways and merges them: `ifname=tap0` on the QEMU command line, and the `iff:` line in `/proc/<pid>/fdinfo/<fd>` of each `/dev/net/tun` fd the process holds. The second is how libvirt VMs are found, since libvirt hands QEMU its `vnet0` as a file descriptor (`-netdev tap,fd=37`). Reading another user's fds needs the daemon to have `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`, which the shipped unit grants. If it cannot read them, that VM has no known tap and nothing is attached or isolated for it: a name is never guessed. A VM on user-mode networking has no tap either.
 
-The daemon attaches the program to each VM's tap as the VM appears and takes it off when the VM goes. `shukractl programs` shows `tap  attached  N taps` once at least one is on.
+The daemon attaches the program to each VM's tap as the VM appears and takes it off when the VM goes. It shares the hook politely: it returns `TCX_NEXT`, never `TCX_PASS`, so any other program attached to the same tap (Cilium, or another tool) still runs after it. `TCX_PASS` would have accepted the packet and skipped them. `shukractl programs` shows `tap  attached  N taps` once at least one is on.
 
 ## What it records
 
 Directions are named from the guest's side. Frames the guest sends are `from_guest` (TCX ingress on the tap), and frames sent to it are `to_guest`.
 
-- **Counters** per tap: packets and bytes each way, and packets and bytes dropped by isolation. `shukractl trace tap`, `GET /api/v1/trace/tap`, and `shukra_tap_*` on `/metrics`.
+- **Counters** per tap: packets and bytes each way, and packets and bytes dropped by isolation. Frames the host itself sent and the kernel looped back in (multicast) are not counted as the guest's. `shukractl trace tap`, `GET /api/v1/trace/tap`, and `shukra_tap_*` on `/metrics`.
 - **`guest_connect` events**: one per TCP SYN the guest sends (IPv4 and IPv6), with the guest's own source address, the destination and port, and the tap. A connect isolation dropped has `blocked: true`. At most 200 per tap per second, so a guest that floods SYNs cannot flood the event ring. The counters still see every packet.
 
 The detection rules apply to these events exactly as they do to host connects: a `destinations` or `ports` rule that fires on a `guest_connect` produces a detection that is itself `guest_attributed: true` with `attribution: "guest-tap"`. A host connect and a guest connect to the same address are separate alerts, so one never hides the other.
