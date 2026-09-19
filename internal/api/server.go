@@ -17,7 +17,20 @@ import (
 // request is refused. Use NewNoAuth to serve without a key on purpose.
 // Isolate records a decision and does not attach a program.
 func New(st *state.State, apiKey string) http.Handler {
-	return auth(apiKey, routes(st))
+	return NewWithKeys(st, Keys{Admin: apiKey})
+}
+
+// Keys are the bearer keys the API accepts. Admin may do everything. ReadOnly may
+// only read, so a monitoring scrape can hold a key that cannot call isolate.
+// An empty key never matches.
+type Keys struct {
+	Admin    string
+	ReadOnly string
+}
+
+// NewWithKeys serves the API with an admin key and, optionally, a read-only key.
+func NewWithKeys(st *state.State, k Keys) http.Handler {
+	return auth(k, routes(st))
 }
 
 // NewNoAuth serves the API with no bearer check. Only /healthz and /readyz are
@@ -189,7 +202,7 @@ func stream(w http.ResponseWriter, r *http.Request, st *state.State, vm string, 
 	}
 }
 
-func auth(apiKey string, next http.Handler) http.Handler {
+func auth(k Keys, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/assets/"),
@@ -199,14 +212,30 @@ func auth(apiKey string, next http.Handler) http.Handler {
 		}
 		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		got = strings.TrimSpace(got)
-		if apiKey == "" || subtle.ConstantTimeCompare([]byte(got), []byte(apiKey)) != 1 {
+		// Both keys are always compared so the time taken does not say which one matched.
+		admin := keyMatches(got, k.Admin)
+		readOnly := keyMatches(got, k.ReadOnly)
+		if !admin && !readOnly {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
 			return
 		}
+		if !admin && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"this key is read-only"}`))
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func keyMatches(got, want string) bool {
+	if want == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

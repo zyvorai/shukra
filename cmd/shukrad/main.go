@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -31,6 +32,8 @@ func main() {
 	webhookURL := flag.String("webhook-url", "", "POST each detection as JSON to this URL (secret: SHUKRA_WEBHOOK_SECRET)")
 	syslogOn := flag.Bool("syslog", false, "write each detection to the local syslog daemon")
 	alertFile := flag.String("alert-file", "", "append each detection as a JSON line to this file")
+	tlsCert := flag.String("tls-cert", "", "serve HTTPS with this certificate (PEM). Needs -tls-key. SIGHUP reloads it")
+	tlsKey := flag.String("tls-key", "", "private key for -tls-cert (PEM)")
 	noAuth := flag.Bool("no-auth", false, "serve the API without a bearer key")
 	flag.Parse()
 
@@ -41,6 +44,19 @@ func main() {
 	}
 	if *noAuth {
 		log.Printf("WARNING: -no-auth: the API on %s is open to anyone who can reach it", *listen)
+	}
+	readOnlyKey := os.Getenv("SHUKRA_READONLY_KEY")
+	if readOnlyKey != "" && readOnlyKey == key {
+		log.Fatal("SHUKRA_READONLY_KEY must differ from SHUKRA_API_KEY, or the read-only key would be an admin key")
+	}
+	var certs *api.CertStore
+	if *tlsCert != "" || *tlsKey != "" {
+		var err error
+		if certs, err = api.NewCertStore(*tlsCert, *tlsKey); err != nil {
+			log.Fatalf("tls: %v", err)
+		}
+	} else if !isLoopback(*listen) {
+		log.Printf("WARNING: serving plain HTTP on %s: the bearer key crosses the network in the clear. Use -tls-cert and -tls-key, or listen on 127.0.0.1", *listen)
 	}
 	host, _ := os.Hostname()
 	st := state.New(host)
@@ -92,8 +108,17 @@ func main() {
 	signal.Notify(hup, syscall.SIGHUP)
 	go func() {
 		for range hup {
+			if certs != nil {
+				if err := certs.Reload(); err != nil {
+					log.Printf("tls certificate reload failed, keeping the current one: %v", err)
+				} else {
+					log.Printf("tls certificate reloaded")
+				}
+			}
 			if *watch == "" {
-				log.Printf("SIGHUP ignored: no -watchlist detection file is configured")
+				if certs == nil {
+					log.Printf("SIGHUP ignored: no -watchlist detection file is configured")
+				}
 				continue
 			}
 			if err := ag.Reload(); err != nil {
@@ -140,7 +165,7 @@ func main() {
 	if *noAuth {
 		apiHandler = api.NewNoAuth(st)
 	} else {
-		apiHandler = api.New(st, key)
+		apiHandler = api.NewWithKeys(st, api.Keys{Admin: key, ReadOnly: readOnlyKey})
 	}
 	mux := http.NewServeMux()
 	for _, p := range []string{"/api/", "/healthz", "/readyz", "/metrics"} {
@@ -151,15 +176,26 @@ func main() {
 	}
 
 	srv := &http.Server{Addr: *listen, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	scheme := "http"
+	if certs != nil {
+		srv.TLSConfig = certs.Config()
+		scheme = "https"
+	}
 	go func() {
 		<-ctx.Done()
 		sh, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(sh)
 	}()
-	log.Printf("%s %s listening on http://%s (%s)", version.Product, version.Version, *listen, version.Tagline)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+	log.Printf("%s %s listening on %s://%s (%s)", version.Product, version.Version, scheme, *listen, version.Tagline)
+	var serveErr error
+	if certs != nil {
+		serveErr = srv.ListenAndServeTLS("", "") // the certificate comes from TLSConfig
+	} else {
+		serveErr = srv.ListenAndServe()
+	}
+	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		log.Fatal(serveErr)
 	}
 	if alerts != nil {
 		alerts.Close(5 * time.Second)
@@ -169,6 +205,19 @@ func main() {
 			log.Printf("persist: closing %s: %v", *dataDir, err)
 		}
 	}
+}
+
+// isLoopback reports whether addr only accepts connections from this host.
+func isLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func spa(dir string) http.Handler {

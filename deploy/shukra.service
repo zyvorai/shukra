@@ -1,0 +1,43 @@
+[Unit]
+Description=Shukra eBPF runtime intelligence for KVM
+Documentation=https://github.com/zyvorai/shukra
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# SHUKRA_API_KEY, SHUKRA_READONLY_KEY, SHUKRA_WEBHOOK_SECRET and SHUKRA_EXTRA_ARGS
+# (for example "-tls-cert /etc/shukra/tls.crt -tls-key /etc/shukra/tls.key
+# -webhook-url https://...") live here, readable by root only. Keys are kept out of
+# this file because `systemctl show` prints a unit's Environment= to every user.
+EnvironmentFile=-/etc/shukra/env
+ExecStart=/usr/local/bin/shukrad -listen 0.0.0.0:30970 -web @WEB_DIR@ -watchlist /etc/shukra/detections.yaml -data-dir /var/lib/shukra $SHUKRA_EXTRA_ARGS
+ExecReload=/bin/kill -HUP $MAINPID
+StateDirectory=shukra
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=2
+
+# Least privilege. Attaching tracepoints and kprobes and reading BPF maps needs
+# only these three on Linux 5.8 or newer. deploy-remote.sh drops the two
+# capability lines on an older kernel, where CAP_BPF does not exist.
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE
+AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

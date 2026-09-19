@@ -66,6 +66,10 @@ if [[ -z "${TARGET}" ]]; then
 fi
 
 API_KEY_LOCAL="${SHUKRA_API_KEY:-shukra}"
+if [[ "${API_KEY_LOCAL}" == "shukra" ]]; then
+  echo "[shukra-deploy] WARNING: using the well-known dev key. The unit listens on 0.0.0.0:30970 over plain HTTP." >&2
+  echo "[shukra-deploy] Set one first:  SHUKRA_API_KEY=\"\$(openssl rand -hex 16)\" $0 ..." >&2
+fi
 
 ssh_host() { ssh "${SSH_OPTS[@]}" "$TARGET" "$@"; }
 REMOTE_HOME="$(ssh_host 'printf %s "$HOME"')"
@@ -153,7 +157,21 @@ install_bin bin/shukrad /usr/local/bin/shukrad
 install_bin bin/shukractl /usr/local/bin/shukractl
 
 sudo mkdir -p /etc/shukra
-sudo cp -f configs/detections.example.yaml /etc/shukra/detections.yaml
+# The detection rules are the operator's to edit. Install the sample only when
+# there is none, and always keep the current sample beside it for comparison.
+if [[ -e /etc/shukra/detections.yaml ]]; then
+  echo "keeping existing /etc/shukra/detections.yaml"
+else
+  sudo cp configs/detections.example.yaml /etc/shukra/detections.yaml
+fi
+sudo cp -f configs/detections.example.yaml /etc/shukra/detections.example.yaml
+
+# Keys go in a root-only file, not in the unit: systemctl show prints Environment=
+# to every local user. Extra lines an operator added (TLS, sinks) are kept.
+sudo touch /etc/shukra/env
+sudo chmod 600 /etc/shukra/env
+sudo sed -i '/^SHUKRA_API_KEY=/d' /etc/shukra/env
+printf 'SHUKRA_API_KEY=%s\n' "\$API_KEY" | sudo tee -a /etc/shukra/env >/dev/null
 
 mkdir -p "\$HOME/.shukra"
 printf '%s\n' "\$API_KEY" > "\$HOME/.shukra/api-key"
@@ -164,26 +182,15 @@ SHUKRA_API_KEY=\${API_KEY}
 ENVEOF
 chmod 600 "\$HOME/.shukra/"* || true
 
-sudo tee /etc/systemd/system/shukra.service >/dev/null <<UNIT
-[Unit]
-Description=Shukra eBPF runtime intelligence for KVM
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=${REMOTE_DIR}
-Environment=SHUKRA_API_KEY=\${API_KEY}
-ExecStart=/usr/local/bin/shukrad -listen 0.0.0.0:30970 -web ${REMOTE_DIR}/web/dist -watchlist /etc/shukra/detections.yaml -data-dir /var/lib/shukra
-ExecReload=/bin/kill -HUP \$MAINPID
-StateDirectory=shukra
-StateDirectoryMode=0700
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-UNIT
+# CAP_BPF and CAP_PERFMON exist from Linux 5.8. Before that the unit needs full
+# root, so the two capability lines come out and the rest of the hardening stays.
+unit="\$(sed "s#@WEB_DIR@#${REMOTE_DIR}/web/dist#" deploy/shukra.service)"
+kver="\$(uname -r | cut -d. -f1-2)"
+if [[ "\$(printf '%s\n5.8\n' "\$kver" | sort -V | head -1)" != "5.8" ]]; then
+  echo "kernel \$kver is older than 5.8: running with full root capabilities, other hardening kept" >&2
+  unit="\$(printf '%s\n' "\$unit" | grep -vE '^(CapabilityBoundingSet|AmbientCapabilities)=')"
+fi
+printf '%s\n' "\$unit" | sudo tee /etc/systemd/system/shukra.service >/dev/null
 
 retry() {
   local i

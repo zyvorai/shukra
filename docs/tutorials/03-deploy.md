@@ -18,9 +18,9 @@ What it does:
 2. Builds the console with `npm ci` if npm is present.
 3. Runs `make generate` when clang and `/sys/kernel/btf/vmlinux` exist, then `go build -tags shukrabpf`. If generate fails, it still builds a detached daemon and says so.
 4. Installs `/usr/local/bin/shukrad` and `/usr/local/bin/shukractl`.
-5. Copies `configs/detections.example.yaml` to `/etc/shukra/detections.yaml`.
-6. Writes `~/.shukra/env` and `~/.shukra/api-key` for the SSH user.
-7. Installs `shukra.service` (with `-data-dir /var/lib/shukra` and `ExecReload`), enables it, and restarts it. Detections, isolation requests and the flight recorder now survive that restart.
+5. Installs `configs/detections.example.yaml` as `/etc/shukra/detections.yaml` only if there is none. Your edited rules are kept, and the current sample is always written beside them as `detections.example.yaml`.
+6. Writes the API key to `/etc/shukra/env` (root only, `0600`) for the service, and `~/.shukra/env` and `~/.shukra/api-key` for the SSH user. The key is not in the unit file, because `systemctl show` prints a unit's `Environment=` to every local user.
+7. Installs `shukra.service` from `deploy/shukra.service` (with `-data-dir /var/lib/shukra` and `ExecReload`), enables it, and restarts it. Detections, isolation requests and the flight recorder now survive that restart.
 8. Runs `shukractl status`, `programs`, `vms`, `trace list`, and `GET /api/v1/status`.
 
 The unit listens on `0.0.0.0:30970`. The token defaults to `shukra` unless you export `SHUKRA_API_KEY` before deploying. Set a real token on any host that is not a lab:
@@ -30,6 +30,25 @@ SHUKRA_API_KEY="$(openssl rand -hex 16)" ./scripts/deploy-remote.sh 10.0.1.5 sus
 ```
 
 Passwordless `sudo` is required for install, the unit file, and `systemctl`.
+
+## What the service is allowed to do
+
+The unit runs as root but with only `CAP_BPF`, `CAP_PERFMON` and `CAP_SYS_RESOURCE`, which is all that attaching tracepoints and kprobes and reading BPF maps needs on Linux 5.8 or newer. On an older kernel the deploy drops those two lines, because `CAP_BPF` does not exist there, and the rest of the hardening stays. The filesystem is read-only to the service except `/var/lib/shukra`, and it cannot gain privileges, load kernel modules, or open sockets other than IP, Unix and netlink. On a 6.8 kernel this was checked by running the real unit: all four programs attached and counted, a write to `/etc` from inside the service failed, and `systemd-analyze security` scored it 4.3 (OK).
+
+## Encrypt the API
+
+The unit listens on plain HTTP, so the bearer key crosses the network in the clear. Turn on TLS by adding arguments to `/etc/shukra/env`:
+
+```bash
+echo 'SHUKRA_EXTRA_ARGS=-tls-cert /etc/shukra/tls.crt -tls-key /etc/shukra/tls.key' | sudo tee -a /etc/shukra/env
+sudo systemctl restart shukra
+```
+
+`systemctl reload shukra` re-reads the certificate as well as the detection rules, so a renewed certificate needs no restart. A bad file on reload is logged and the working certificate stays in use. The floor is TLS 1.2. Point the CLI at a private CA with `SHUKRA_CA_FILE=/path/ca.pem` and `SHUKRA_URL=https://...`. The daemon warns at start when it serves plain HTTP on a non-loopback address.
+
+## A key that can only read
+
+Set `SHUKRA_READONLY_KEY` in `/etc/shukra/env` and give that key to a Prometheus scrape or a dashboard. It can call every `GET`, including `/metrics` and the event stream, and gets `403` on `POST /api/v1/isolate`. It must differ from `SHUKRA_API_KEY`, and the daemon refuses to start otherwise.
 
 ## Dry run and re-check
 

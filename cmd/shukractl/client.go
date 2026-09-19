@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -73,10 +74,28 @@ func httpClient() *http.Client {
 	c := &http.Client{Timeout: 15 * time.Second}
 	v := strings.TrimSpace(os.Getenv("SHUKRA_TLS_INSECURE"))
 	insecure := strings.EqualFold(v, "true") || v == "1"
-	if insecure {
+	switch {
+	case insecure:
 		c.Transport = &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}}
+	case os.Getenv("SHUKRA_CA_FILE") != "":
+		// Trust a private CA without turning verification off.
+		if pool, err := caPool(os.Getenv("SHUKRA_CA_FILE")); err == nil {
+			c.Transport = &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}}
+		}
 	}
 	return c
+}
+
+func caPool(path string) (*x509.CertPool, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(b) {
+		return nil, fmt.Errorf("%s has no PEM certificate", path)
+	}
+	return pool, nil
 }
 
 func do(method, path string, body []byte) ([]byte, int, error) {

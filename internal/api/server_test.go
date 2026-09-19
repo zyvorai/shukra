@@ -377,3 +377,53 @@ func TestMetricsDoNotNameKVMReasonsOnOtherVendors(t *testing.T) {
 		}
 	}
 }
+
+func TestReadOnlyKeyCanReadButNotAct(t *testing.T) {
+	st := state.New("node-07")
+	h := NewWithKeys(st, Keys{Admin: "admin-key", ReadOnly: "scrape-key"})
+	do := func(method, path, key string) int {
+		req := httptest.NewRequest(method, path, strings.NewReader(`{"vm":"db"}`))
+		if key != "" {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for _, c := range []struct {
+		method, path, key string
+		want              int
+	}{
+		{"GET", "/api/v1/status", "scrape-key", 200},
+		{"GET", "/metrics", "scrape-key", 200},
+		{"GET", "/api/v1/stream?since=0", "", 401},
+		{"POST", "/api/v1/isolate", "scrape-key", 403},
+		{"POST", "/api/v1/isolate", "admin-key", 200},
+		{"POST", "/api/v1/isolate", "wrong", 401},
+		{"GET", "/api/v1/status", "admin-key", 200},
+	} {
+		if c.path == "/api/v1/stream?since=0" {
+			continue // a long-lived response; the 401 path is covered by the other cases
+		}
+		if got := do(c.method, c.path, c.key); got != c.want {
+			t.Errorf("%s %s with %q: %d, want %d", c.method, c.path, c.key, got, c.want)
+		}
+	}
+	if len(st.Isolations()) != 1 {
+		t.Fatalf("only the admin key's request should have been recorded: %d", len(st.Isolations()))
+	}
+}
+
+func TestAnEmptyReadOnlyKeyNeverMatches(t *testing.T) {
+	h := NewWithKeys(state.New("n"), Keys{Admin: "admin-key"}) // no read-only key configured
+	req := httptest.NewRequest("GET", "/api/v1/status", nil)
+	req.Header.Set("Authorization", "Bearer ")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("an empty bearer matched an unset key: %d", rec.Code)
+	}
+	if rec = get(NewWithKeys(state.New("n"), Keys{ReadOnly: "r"}), "/api/v1/status", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no key at all: %d", rec.Code)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
@@ -360,5 +361,41 @@ func TestExplainPrintsRankedFindingsBeforeEvidence(t *testing.T) {
 	i, j := strings.Index(out, "[high] storage_latency"), strings.Index(out, "\nevidence\n")
 	if i < 0 || j < 0 || i > j || !strings.Contains(out, "Block write p99 is up to 60 ms.") || !strings.Contains(out, "[low] no_host_cause") || !strings.Contains(out, "note: Latencies are lifetime.") {
 		t.Fatalf("%s", out)
+	}
+}
+
+func TestCLITrustsAPrivateCAOnlyWhenTold(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	// httpClient is what do() builds its transport from. loadConfig turns
+	// verification off by design for a loopback https URL, so test it directly.
+	t.Setenv("SHUKRA_TLS_INSECURE", "")
+	t.Setenv("SHUKRA_CA_FILE", "")
+	if resp, err := httpClient().Get(srv.URL); err == nil {
+		resp.Body.Close()
+		t.Fatal("an unknown certificate was trusted with no CA configured")
+	}
+	ca := t.TempDir() + "/ca.pem"
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(ca, pemBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHUKRA_CA_FILE", ca)
+	resp, err := httpClient().Get(srv.URL)
+	if err != nil {
+		t.Fatalf("the configured CA was not trusted: %v", err)
+	}
+	resp.Body.Close()
+	// Pointing at a file with no certificate must not quietly disable checking.
+	bad := t.TempDir() + "/bad.pem"
+	if err := os.WriteFile(bad, []byte("nope"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHUKRA_CA_FILE", bad)
+	if resp, err := httpClient().Get(srv.URL); err == nil {
+		resp.Body.Close()
+		t.Fatal("a broken CA file fell back to trusting everything")
 	}
 }
