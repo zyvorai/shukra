@@ -141,4 +141,4 @@ histogram_quantile(0.99, sum by (le, vm) (rate(shukra_tap_handshake_seconds_buck
 
 - It sees the **host kernel's** view of the tap. A drop inside the guest, or on the physical network past the host, is not visible, and neither is which **process** in the guest made a connection.
 - A server that answers after 3 seconds is counted as never answered, not accepted.
-- A VM with no tap Shukra can attach to (user-mode networking, or a tap in another network namespace) has none of this. `shukractl doctor` names those VMs.
+- A VM with no host interface Shukra can attach to (user-mode networking, or a tap the scan could not map out of another namespace) has none of this. `shukractl doctor` names those VMs. FluxVM's default netns is attached on the host veth; see [FluxVM](../tap.md#fluxvm).

@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -75,6 +76,23 @@ func writeMetrics(w io.Writer, st *state.State) {
 	for _, r := range sched {
 		if r.Measured {
 			fmt.Fprintf(w, "shukra_sched_wakeup_delay_seconds_total{%s} %g\n", lbl(r.VM), float64(r.WakeupDelayNs)/1e9)
+		}
+	}
+	counter("shukra_sched_vcpu_preempted_seconds_total", "Time the VM's vCPU threads were runnable but off a host CPU after being preempted. The host's view of losing the CPU, not the guest's steal counter.")
+	for _, r := range sched {
+		if r.Measured && r.VM != aggregate.Host { // the rest of the host has no vCPUs
+			fmt.Fprintf(w, "shukra_sched_vcpu_preempted_seconds_total{%s} %g\n", lbl(r.VM), float64(r.PreemptedNs)/1e9)
+		}
+	}
+	counter("shukra_sched_vcpu_preempted_by_seconds_total", "The same, by who took the CPU: by=\"vm:<name>\" for a thread of a QEMU process, otherwise a command name.")
+	for _, r := range sched {
+		if !r.Measured || r.VM == aggregate.Host {
+			continue
+		}
+		who := append([]aggregate.Preemptor(nil), r.AllPreemptors...)
+		sort.Slice(who, func(i, j int) bool { return who[i].Who < who[j].Who })
+		for _, p := range who {
+			fmt.Fprintf(w, "shukra_sched_vcpu_preempted_by_seconds_total{%s,by=\"%s\"} %g\n", lbl(r.VM), labelEscaper.Replace(p.Who), float64(p.Ns)/1e9)
 		}
 	}
 	block := st.Block("")

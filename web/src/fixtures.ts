@@ -30,8 +30,8 @@ export const fixture = {
     { name: 'drops', status: 'detached', detail: 'Fixture. No BPF program is attached.' },
   ],
   kvm: [{ vm: 'payment-prod-03', runtime: 'kubevirt', exits: 182000, entries: 181200, mmio: 420, pio: 12, measured: true, topReasons: [{ reason: 30, count: 90000, totalNs: 4200000000, name: 'io_instruction' }, { reason: 12, count: 40000, totalNs: 91000000000, name: 'hlt' }], topReasonsByTime: [{ reason: 12, count: 40000, totalNs: 91000000000, name: 'hlt' }, { reason: 30, count: 90000, totalNs: 4200000000, name: 'io_instruction' }], exitLatencyP50Ns: 4096, exitLatencyP99Ns: 262144, exitLatencyHist: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9000, 61000, 70000, 30000, 9000, 2500, 400, 90, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }],
-  sched: [{ vm: 'payment-prod-03', onCpuNs: 870000000, wakeupDelayNs: 14000000, wakeupCount: 2200, wakeupDelayP50Ns: 4096, wakeupDelayP99Ns: 65536, wakeupHist: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 300, 700, 800, 260, 110, 24, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], measured: true }],
-  schedThreads: [{ vm: 'payment-prod-03', tid: 19322, comm: 'CPU 0/KVM', role: 'vcpu', onCpuNs: 610000000, wakeupDelayNs: 9000000, wakeupCount: 1500, wakeupDelayP99Ns: 65536 }, { vm: 'payment-prod-03', tid: 19323, comm: 'IO iothread1', role: 'iothread', onCpuNs: 90000000, wakeupDelayNs: 4000000, wakeupCount: 700, wakeupDelayP99Ns: 32768 }],
+  sched: [{ vm: 'payment-prod-03', onCpuNs: 870000000, wakeupDelayNs: 14000000, wakeupCount: 2200, wakeupDelayP50Ns: 4096, wakeupDelayP99Ns: 65536, vcpuPreemptedNs: 240000000, vcpuPreemptions: 31, topPreemptors: [{ who: 'vm:batch-etl-01', ns: 190000000 }, { who: 'kworker', ns: 50000000 }], wakeupHist: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 300, 700, 800, 260, 110, 24, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], measured: true }],
+  schedThreads: [{ vm: 'payment-prod-03', tid: 19322, comm: 'CPU 0/KVM', role: 'vcpu', onCpuNs: 610000000, wakeupDelayNs: 9000000, wakeupCount: 1500, wakeupDelayP99Ns: 65536, preemptedNs: 240000000 }, { vm: 'payment-prod-03', tid: 19323, comm: 'IO iothread1', role: 'iothread', onCpuNs: 90000000, wakeupDelayNs: 4000000, wakeupCount: 700, wakeupDelayP99Ns: 32768 }],
   block: [{ vm: 'payment-prod-03', issues: 940, readP50Ns: 1200000, readP99Ns: 8400000, writeP50Ns: 3000000, writeP99Ns: 21000000, readMaxNs: 12000000, writeMaxNs: 28000000, readOps: 610, writeOps: 330, readBytes: 41943040, writeBytes: 25165824, readHist: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 40, 210, 260, 70, 20, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], writeHist: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 60, 120, 90, 30, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], measured: true }],
   net: {
     attribution: 'qemu-process',
@@ -93,7 +93,7 @@ export function fixtureResponse(path: string, init?: RequestInit): unknown {
       ],
       missing: [
         'guest tap attribution (TC/TCX on the VM tap is not attached)',
-        'CPU steal',
+        'CPU steal as the guest counts it (Shukra measures the host\'s view: how long the vCPUs were preempted)',
         'in-guest process identity',
       ],
       events: filterEvents(vm),

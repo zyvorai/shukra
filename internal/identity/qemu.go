@@ -1,5 +1,6 @@
-// Package identity resolves KVM guests from the QEMU process command line.
-// It does not see processes inside the guest.
+// Package identity resolves KVM guests from the QEMU process command line and,
+// when FluxVM is installed, from its VM records. It does not see processes
+// inside the guest.
 package identity
 
 import (
@@ -135,8 +136,9 @@ func runtimeOf(cmdline, name string) string {
 	return "qemu"
 }
 
-// Scan walks a /proc-shaped directory and returns QEMU virtual machines.
-// A missing root yields an empty list, not an error, so shukrad can still serve.
+// Scan walks a /proc-shaped directory and returns virtual machines: QEMU from
+// the command line, and FluxVM guests of any backend from vms.json. A missing
+// root yields an empty list, not an error, so shukrad can still serve.
 func Scan(root, hypervisor string) ([]VM, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -173,7 +175,7 @@ func Scan(root, hypervisor string) ([]VM, error) {
 		vm.Taps = mergeNames(vm.Taps, tunTaps(dir))
 		out = append(out, vm)
 	}
-	return out, nil
+	return enrichFluxVM(root, out, hypervisor), nil
 }
 
 func threads(dir string, pid int) ([]int, []Thread) {

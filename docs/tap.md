@@ -1,6 +1,6 @@
 # Guest traffic and isolation (the tap program)
 
-Every other program in Shukra sees the QEMU process. This one sees the guest. It attaches TCX to the host side of each VM's tap interface, so a frame it counts really is the guest's, and events from it are the only ones Shukra marks `guest_attributed: true`.
+Every other program in Shukra sees the VMM process: QEMU, or a FluxVM backend. This one sees the guest. It attaches TCX to the host side of each VM's tap, or to the host veth that stands in for that tap, so a frame it counts really is the guest's, and events from it are the only ones Shukra marks `guest_attributed: true`.
 
 It does four things: it **counts** the guest's traffic, **records** what the guest connects to and what connects to it, **follows** each TCP handshake to see what became of it, and can **isolate** the VM. A fifth question, *who dropped the packet*, is answered by its sibling program and has its own guide: [where packets die](drops.md). To use the two together to find lost traffic, see the [walkthrough](tutorials/08-lost-traffic.md).
 
@@ -9,7 +9,61 @@ It does four things: it **counts** the guest's traffic, **records** what the gue
 - Linux 6.6 or newer, for TCX. Older kernels report the tap program as detached with `TCX needs Linux 6.6 or newer`. There is no TC fallback yet.
 - A VM with a tap interface. The daemon finds a VM's taps two ways and merges them: `ifname=tap0` on the QEMU command line, and the `iff:` line in `/proc/<pid>/fdinfo/<fd>` of each `/dev/net/tun` fd the process holds. The second is how libvirt VMs are found, since libvirt hands QEMU its `vnet0` as a file descriptor (`-netdev tap,fd=37`). Reading another user's fds needs the daemon to have `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`, which the shipped unit grants. If it cannot read them, that VM has no known tap and nothing is attached or isolated for it: a name is never guessed. A VM on user-mode networking has no tap either.
 
-The daemon attaches the program to each VM's tap as the VM appears and takes it off when the VM goes. It shares the hook politely: it returns `TCX_NEXT`, never `TCX_PASS`, so any other program attached to the same tap (Cilium, or another tool) still runs after it. `TCX_PASS` would have accepted the packet and skipped them. `shukractl programs` shows `tap  attached  N taps` once at least one is on.
+The daemon attaches the program to each VM's tap as the VM appears and takes it off when the VM goes. It shares the hook politely: it returns `TCX_NEXT`, never `TCX_PASS`, so any other program attached to the same tap (Cilium, FluxVM's `fluxvm_egress`, or another tool) still runs after it. `TCX_PASS` would have accepted the packet and skipped them. `shukractl programs` shows `tap  attached  N taps` once at least one is on.
+
+## FluxVM
+
+[FluxVM](https://github.com/zyvorai/fluxvm) boots a guest with QEMU, Cloud Hypervisor, Firecracker, or its own `fluxvm-hypervisor`. Shukra does not call FluxVM's API and does not load FluxVM's programs. On each scan, after it has walked `/proc` for `qemu-system*`, it reads FluxVM's VM store and joins each live record to the process and to the host interface that actually carries the guest's frames. The BPF programs are unchanged. KVM, scheduler and block counters follow the VMM's threads. Guest connects, UDP flows, DNS names, handshake outcomes, kernel drops and isolation follow that host interface.
+
+### Where the record is
+
+`state_dir` in `/etc/fluxvm.toml`, or `/var/lib/fluxvm` when that line is absent or the file is missing. The store is `{state_dir}/vms.json`: a JSON object whose keys are VM ids and whose values are records. A missing file, an empty file, or a file that does not parse is not an error. The QEMU scan stands, and the daemon keeps serving.
+
+The fields read are `id`, `name`, `pid`, `tap_name` and `netns`. A record with no `pid`, or whose pid is not a live directory in the proc scan, is skipped. That is a stopped or deleted VM, not a guest Shukra failed to see.
+
+`runtime` becomes `fluxvm`. The name and UUID come from the record, not from the VMM command line. FluxVM's QEMU argv does not pass `-name` or `-uuid`, so without the record those guests would show up as `qemu-unnamed` with whatever `ifname=` the inner tap happened to be.
+
+### Which process
+
+A pid the QEMU scan already found is updated in place. It is not listed twice. `cloud-hypervisor`, `firecracker` and `fluxvm-hypervisor` are added when that binary is `argv[0]`. Firecracker's `jailer` execs into `firecracker`, so the pid in the record is the Firecracker process, not a leftover jailer. Threads come from `/proc/<pid>/task`. A vCPU thread in that thread group owns the KVM counters the same way a QEMU `CPU n/KVM` thread does.
+
+The process comm stays the binary. The kernel keeps 15 characters of it, so `cloud-hypervisor` is reported as `cloud-hypervis` and `fluxvm-hypervisor` as `fluxvm-hypervis`. `firecracker` and `jailer` fit.
+
+A QEMU, libvirt or kubevirt process that is not in the store is left as the command line described it. `runtime=libvirt` and `runtime=kubevirt` are still labels from that command line, not guest agents.
+
+### Which interface
+
+Guest frames are not the VMM's sockets. They leave the guest on a tap. The daemon runs in the host network namespace and can only attach to an interface that exists there. It picks one, in this order, and does not keep the others:
+
+1. **The edge FluxVM recorded**, when the file `/run/fluxvm/ebpf/vms/<id>/iface` exists and is not empty. `<id>` is the UUID with the hyphens removed. This is the interface FluxVM's own dataplane attached to, including a bridge-less direct tap whose guest device is not in the host namespace.
+2. **The host veth of a per-VM netns**, when the record has `netns` set and that file does not. The name is `vh` plus the first 8 hex digits of the same id. FluxVM's default (`"netns": true`) builds this:
+
+```text
+host namespace                         VM netns eph-<8hex>
+vh<8hex>  <---- veth pair ---->  vn<8hex> -- br<8hex> -- tap<8hex> -- guest
+     ^
+     TCX ingress = frames the guest sent
+     TCX egress  = frames sent to the guest
+```
+
+The inner tap is `tap<8hex>`. It is not in the host namespace, so it is not the name Shukra stores and not the interface it attaches to. Directions match a normal tap: ingress is from the guest, egress is toward it. NAT on this path is POSTROUTING on the host, after the TCX hook, so a `guest_connect` still carries the guest's own address (a `169.254` address on the default netns), not the masqueraded one.
+
+3. **`tap_name`**, when there is no netns. That is a host-bridge tap, usually `eph<8hex>`, or a macvtap, already visible in the host namespace.
+
+`shukractl vms` prints that name under `taps=`. For a default netns guest it is `vh…`, not `tap…`. Compare it with `shukractl trace tap`. A name that is not in this namespace is still the doctor finding `vm-tap-other-netns`: Shukra does not enter the namespace. The unit does not have `CAP_SYS_ADMIN`, and the fix is not "set `"netns": false`". A FluxVM guest is supposed to be traced on the host veth. The warning remains for a tap the scan could not map, and for any other runtime whose tap really is elsewhere.
+
+User-mode NAT (`network.mode` `user`, QEMU SLIRP) has no host interface. The VM is listed, `taps` is empty, there are no guest events, no drop counts and no isolation. `shukractl doctor` names it. Host-side KVM, scheduler and block counters still work, because those follow the process, not the tap.
+
+### What each program attributes
+
+| What | Joined by | Notes |
+|---|---|---|
+| KVM exits, on-CPU time, run-queue delay, block latency | The VMM's thread group | Block latency is the VMM's I/O, not a filesystem inside the guest. A `vhost-*` kernel thread outside the thread group is not included. |
+| `exec` and `exit` | The parent's tgid, if that tgid is watched | The watched set is every VMM pid from the scan. `qemu-system*`, `cloud-hypervisor`, `firecracker`, `fluxvm-hypervisor` and `jailer` are allowed execs, so a boot is not an unexpected-exec detection. `cpu`, `io`, `vhost` and `kvm` in the comm are allowed too. |
+| Host TCP (`tcp_v4_connect`, `tcp_v6_connect`, retransmits) | The socket owner | `attribution` stays `qemu-process` for every backend. That string means "the VMM's socket, not the guest". It was not renamed, so a client that matches it still matches. |
+| Guest connects, flows, inbound SYNs, DNS names, handshakes, drops, isolation | The host interface above | `attribution` is `guest-tap`. DNS names are read from the query on that interface the same way they are on a QEMU tap. |
+
+The live guest test, `scripts/test-live-guest.sh`, still boots two QEMU guests with `"netns": false` on a shared bridge. Those two have to reach each other on one L2 segment, which the default netns does not provide. It does not exercise the host-veth path. That path is covered by the identity tests in `internal/identity`.
 
 ## What it records
 
@@ -92,7 +146,7 @@ Pinning needs a bpf filesystem at `/sys/fs/bpf` (present on any systemd host). W
 - VLAN-tagged frames and IPv6 extension headers are judged by their outer addresses only, and the SYN event needs the TCP header to follow the IPv6 header directly. Traffic that cannot be parsed is dropped while isolated.
 - ICMP and other protocols are counted and can be dropped, but do not produce events. A UDP event carries addresses and ports; the name in a DNS query is a separate `guest_dns` event.
 - Isolation blocks the VM's tap. It does not stop the guest talking to another guest on the same host bridge unless that traffic crosses this tap, and it does not touch vhost-user or SR-IOV interfaces.
-- A VM whose tap lives in another network namespace (a sandbox or container runtime that gives each VM its own) has no tap this daemon can attach to, since it runs in the host's namespace. Such a VM is listed with its tap name but has no tap counters, no guest events and cannot be isolated. `shukractl doctor` names such a VM (`vm-tap-other-netns`, a warning), and you can compare `taps` on `GET /api/v1/vms` with the rows of `GET /api/v1/trace/tap` yourself. A tap that exists here but is not traced yet is a separate, informational finding (`vm-tap-untraced`): it is normal for the moment after a VM starts, and a problem if it stays. Found on a live host where one of ten VMs was like this; fluxvm puts a VM's tap in its own namespace unless its spec says `"netns": false`.
+- A VM whose tap is not in the host namespace, and that the scan could not map to one, has nothing to attach to. It is listed with that tap name but has no tap counters, no guest events and cannot be isolated. `shukractl doctor` names it (`vm-tap-other-netns`, a warning). Compare `taps` on `GET /api/v1/vms` with `GET /api/v1/trace/tap`. A tap that exists here but is not traced yet is a separate, informational finding (`vm-tap-untraced`): normal for the moment after a VM starts, and a problem if it stays. FluxVM's default netns is mapped before this check; see [FluxVM](#fluxvm).
 
 ### What the counters count
 
@@ -102,13 +156,13 @@ Pinning needs a bpf filesystem at `/sys/fs/bpf` (present on any systemd host). W
 
 Shukra's program can only drop a frame on a tap that is **isolated**, and it counts every frame it drops (`dropped` in `trace tap`). So if a VM's traffic is being lost and `dropped` is 0, something else is dropping it, and the `drops` program says what: [where packets die](drops.md). The connection counters above say whether the connection got an answer at all. Together they separate a refusing destination, a dropping host and a guest that is not reading its NIC, and the [walkthrough](tutorials/08-lost-traffic.md) shows how.
 
-Three things a real host showed, all about fluxvm and none about Shukra, are in that guide: two guests with the same MAC, a dataplane policy that allows only some CIDRs and ports, and a tap in another network namespace.
+Three things a real host showed, all about FluxVM and none about a bug in the tap program, are in that guide: two guests with the same MAC, a dataplane policy that allows only some CIDRs and ports, and (before host-veth tracing) a guest tap left inside a netns the daemon could not see. The third is now traced; the first two are still FluxVM configuration.
 
 ## How it was checked
 
 The full account is in [testing](testing.md). For the tap program:
 
 - **`scripts/test-tap.sh`** builds a real network path with no KVM (a namespace for the guest, a veth for the tap, a fake QEMU naming it) and runs on a real kernel in CI. It checks refusal without an allow list; guest events and detections attributed to the VM; the counters; that an allowed address stays reachable and a non-allowed one is dropped over IPv4, IPv6 and ping; that isolation survives a `kill -9`, a restart and a graceful stop and is lifted by `-detach-all`; a real `tun` tap; UDP flows and their rules; drops from a real `tc` filter, told apart from Shukra's own; and **every TCP handshake outcome both ways with exact counts**: on GitHub's kernel, 17 outbound attempts came out as 5 accepted, 6 refused, 4 never answered and 2 blocked with 1 retransmit, and 7 inbound as 3 accepted, 2 refused and 2 ignored, and the identity attempts = accepted + refused + never answered + blocked held.
-- **`scripts/test-live-guest.sh`** boots two real KVM guests and checks the same things end to end on a hypervisor: the taps are found and attached as hot-plugs, events are attributed with the guest's own address, packet counts equal the kernel's `rx_packets` and `tx_packets`, the guests reach each other, an accepted and a refused connection are seen from both taps, and deleting the VMs detaches everything.
+- **`scripts/test-live-guest.sh`** boots two real KVM guests through FluxVM, with `"netns": false` on a shared bridge so they can reach each other, and checks the same things end to end: the taps are found and attached as hot-plugs, events are attributed with the guest's own address, packet counts equal the kernel's `rx_packets` and `tx_packets`, the guests reach each other, an accepted and a refused connection are seen from both taps, and deleting the VMs detaches everything. The default per-VM netns is not what this script boots; that mapping is covered by the identity tests. See [FluxVM](#fluxvm).
 
 The rig must never run on a hypervisor already running Shukra: it shares the pin directory and its cleanup detaches every tap.

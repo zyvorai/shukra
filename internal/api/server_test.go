@@ -650,3 +650,38 @@ func TestOutcomeMetricsSplitByDirectionAndResultAndHaveALatencyHistogram(t *test
 		}
 	}
 }
+
+func TestMetricsExposeVCPUPreemptionByWhoTookTheCPU(t *testing.T) {
+	st := state.New("node-07")
+	st.SetVMs([]identity.VM{{Name: "db", PID: 100, Threads: []int{100, 101}}, {Name: "idle", PID: 200, Threads: []int{200}}})
+	st.SetCounters(map[uint32]aggregate.Counters{
+		101: {OnCPUNs: 5, PreemptNs: 3_500_000_000, Preemptors: map[string]uint64{"vm:web": 3_000_000_000, "kworker": 500_000_000, `we"ird`: 0}},
+	})
+	text := get(New(st, "k"), "/metrics", "k").Body.String()
+	for _, want := range []string{
+		`shukra_sched_vcpu_preempted_seconds_total{vm="db"} 3.5`,
+		`shukra_sched_vcpu_preempted_by_seconds_total{vm="db",by="kworker"} 0.5`,
+		`shukra_sched_vcpu_preempted_by_seconds_total{vm="db",by="vm:web"} 3`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, `vm="idle"`) && strings.Contains(text, `shukra_sched_vcpu_preempted_seconds_total{vm="idle"}`) {
+		t.Fatalf("a VM the sched program has not measured has no series, not a zero:\n%s", text)
+	}
+	if strings.Contains(text, "ird") {
+		t.Fatalf("a preemptor with no time is not a series:\n%s", text)
+	}
+}
+
+func TestTheSchedRowAlwaysHasAPreemptorListNotNull(t *testing.T) {
+	st := state.New("node-07")
+	st.SetVMs([]identity.VM{{Name: "db", PID: 100, Threads: []int{100}}})
+	st.SetCounters(map[uint32]aggregate.Counters{100: {OnCPUNs: 5}})
+	body := get(New(st, "k"), "/api/v1/trace/sched", "k").Body.String()
+	compact := strings.Join(strings.Fields(body), "")
+	if strings.Contains(compact, `"topPreemptors":null`) || !strings.Contains(compact, `"topPreemptors":[]`) {
+		t.Fatalf("an empty list must be [] and not null: %s", body)
+	}
+}

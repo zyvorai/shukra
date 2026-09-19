@@ -274,3 +274,67 @@ func TestDeltaAgainstNothingIsEverythingAndCloneIsIndependent(t *testing.T) {
 		t.Fatal("a nil map should stay nil")
 	}
 }
+
+func TestPreemptionIsSummedPerVMAndDeltaIsThatWindowsOwn(t *testing.T) {
+	vms := []identity.VM{{Name: "db", PID: 100, Threads: []int{100, 101, 102}}}
+	by := map[uint32]Counters{
+		101: {OnCPUNs: 1, PreemptNs: 300, PreemptCount: 3, Preemptors: map[string]uint64{"vm:web": 200, "kworker": 100}},
+		102: {OnCPUNs: 1, PreemptNs: 50, PreemptCount: 1, Preemptors: map[string]uint64{"vm:web": 50}},
+	}
+	rows := Sched(vms, by, "db")
+	if len(rows) != 1 || rows[0].PreemptedNs != 350 || rows[0].PreemptedCount != 4 {
+		t.Fatalf("%+v", rows)
+	}
+	if got := rows[0].Preemptors; len(got) != 2 || got[0] != (Preemptor{"vm:web", 250}) || got[1] != (Preemptor{"kworker", 100}) {
+		t.Fatalf("most time first, summed across threads: %+v", got)
+	}
+
+	base := Counters{PreemptNs: 100, PreemptCount: 1, Preemptors: map[string]uint64{"vm:web": 100}}
+	cur := Counters{PreemptNs: 350, PreemptCount: 4, Preemptors: map[string]uint64{"vm:web": 250, "kworker": 100}}
+	d := Delta(cur, base)
+	if d.PreemptNs != 250 || d.PreemptCount != 3 || d.Preemptors["vm:web"] != 150 || d.Preemptors["kworker"] != 100 {
+		t.Fatalf("%+v", d)
+	}
+	if base.Preemptors["vm:web"] != 100 || cur.Preemptors["vm:web"] != 250 {
+		t.Fatal("Delta modified an input")
+	}
+	// A counter that went backwards is a reset (a thread that restarted), not a huge difference.
+	r := Delta(Counters{PreemptNs: 10, Preemptors: map[string]uint64{"x": 10}}, Counters{PreemptNs: 9_000, Preemptors: map[string]uint64{"x": 9_000}})
+	if r.PreemptNs != 10 || r.Preemptors["x"] != 10 {
+		t.Fatalf("%+v", r)
+	}
+	c := cur.Clone()
+	cur.Preemptors["vm:web"] = 1
+	if c.Preemptors["vm:web"] != 250 {
+		t.Fatal("Clone shares the preemptor map")
+	}
+}
+
+func TestTopPreemptorsIsNeverNilAndIsBounded(t *testing.T) {
+	if got := TopPreemptors(nil, 5); got == nil || len(got) != 0 {
+		t.Fatalf("an empty list must be [] and not null: %#v", got)
+	}
+	m := map[string]uint64{"a": 1, "b": 6, "c": 5, "d": 4, "e": 3, "f": 2, "z": 0}
+	got := TopPreemptors(m, 3)
+	if len(got) != 3 || got[0].Who != "b" || got[1].Who != "c" || got[2].Who != "d" {
+		t.Fatalf("%+v", got)
+	}
+	for _, p := range TopPreemptors(m, 10) {
+		if p.Who == "z" {
+			t.Fatal("a preemptor with no time is not listed")
+		}
+	}
+	tie := TopPreemptors(map[string]uint64{"b": 5, "a": 5}, 5)
+	if tie[0].Who != "a" {
+		t.Fatalf("ties are ordered by name so the output is stable: %+v", tie)
+	}
+}
+
+func TestSchedThreadsCarriesPreemptionForVCPUsOnly(t *testing.T) {
+	vms := []identity.VM{{Name: "db", PID: 100, Threads: []int{101, 102}, ThreadInfo: []identity.Thread{{TID: 101, Comm: "CPU 0/KVM", Role: "vcpu"}, {TID: 102, Comm: "IO iothread1", Role: "iothread"}}}}
+	by := map[uint32]Counters{101: {OnCPUNs: 1, PreemptNs: 7}, 102: {OnCPUNs: 1}}
+	rows := SchedThreads(vms, by, "db")
+	if len(rows) != 2 || rows[0].PreemptedNs != 7 || rows[1].PreemptedNs != 0 {
+		t.Fatalf("%+v", rows)
+	}
+}

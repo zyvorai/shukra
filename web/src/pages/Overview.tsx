@@ -30,7 +30,7 @@ export default function Overview() {
       <section className="card">
         <p className="eyebrow">BOUNDARY</p>
         <h3>What this build will not say</h3>
-        <p className="missing">CPU steal is not measured.</p>
+        <p className="missing">CPU steal as the guest counts it is not measured. The host&apos;s view of it, vCPU preemption, is on the Scheduler page.</p>
         <p className="missing">Guest tap flows are not measured.</p>
         <p className="missing">In-guest process identity is not measured.</p>
         {data?.summary && <p>{data.summary}</p>}

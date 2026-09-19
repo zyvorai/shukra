@@ -69,7 +69,7 @@ Nothing is said while the program is not attached, and no series exists: a VM th
 
 - It counts packets the **host kernel** dropped on the tap. A drop inside the guest, or on the physical network, is not seen.
 - It needs Linux 5.17 or newer, for the drop reason. On an older kernel it reports itself `detached` with that reason and the rest of Shukra works.
-- It watches VM taps, so a VM with no tap it can attach to (user-mode networking, or a tap in another network namespace) has no drops row. `shukractl doctor` names those VMs.
+- It watches the interfaces the tap program is on, so a VM with no host interface (user-mode networking, or a tap the scan could not map out of another namespace) has no drops row. `shukractl doctor` names those VMs. A FluxVM guest on the default netns is watched on its host veth. See [FluxVM](tap.md#fluxvm).
 - The function is the first free seen for a reason on a tap. If the same reason is later freed somewhere else, that is not shown.
 
 ## Cost
@@ -96,7 +96,7 @@ Everything above was found on a real hypervisor, not designed in advance:
 - **Guests that never read their NIC.** Four libvirt guests showed `FULL_RING`, freed in `tun_net_xmit`, and the kernel's own `tx_dropped` on their taps rose by exactly the same number over any window (+30 in 60 seconds, on all four, and +0 on the rest).
 - **Another program dropping guest traffic.** Two test guests' taps showed `TC_INGRESS` drops, freed in `__netif_receive_skb_core`, with Shukra's own count at 0. `bpftool net show dev <tap>` listed fluxvm's `fluxvm_egress` at `clsact/ingress`. That host's fluxvm dataplane was configured to allow only private CIDRs and ports 80, 443 and 53, so a guest's traffic to a public address, or to another guest on an unlisted port, was dropped at the sender's tap.
 - **Two guests with the same MAC.** fluxvm gives a tap guest QEMU's default MAC unless the spec sets `mac`, so a second guest on the same bridge takes the first one's frames. Set a unique `mac` on each.
-- **A tap in another network namespace.** fluxvm's default puts each VM's tap in its own namespace, where Shukra cannot attach. `shukractl doctor` names such a VM.
+- **A tap in another network namespace.** On that host, FluxVM's default put each guest tap in its own namespace and Shukra attached nowhere, so `shukractl doctor` named the VM and there was no drops row. That default is now traced on the host veth `vh<8hex>`. A tap the scan still cannot map is named the same way. See [FluxVM](tap.md#fluxvm).
 
 The handshake counts point the same way: on that run the guest under test made 31 outbound TCP attempts, 2 accepted, 2 refused and 27 never answered, while the taps showed 110 and 60 dropped packets. A packet count and a connection count are different units and do not match, but both are consistent with a dataplane dropping the guests' traffic to public addresses. That cause was inferred from the program attached to the taps, not proven by removing it. See [guest traffic](tap.md) for the handshake counters, and the [walkthrough](tutorials/08-lost-traffic.md) for how to use both together.
 

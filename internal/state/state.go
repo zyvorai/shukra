@@ -518,7 +518,7 @@ func (s *State) ExplainOver(name string, now time.Time, window time.Duration) Ex
 	if len(net) > 0 && (net[0].Connects > 0 || net[0].Retransmits > 0) {
 		evidence = append(evidence, "TCP connects are from the QEMU process. They are not guest flows.")
 	}
-	missing := []string{"CPU steal", "in-guest process identity"}
+	missing := []string{"CPU steal as the guest counts it (Shukra measures the host's view: how long the vCPUs were preempted)", "in-guest process identity"}
 	tapAttached := false
 	for _, p := range s.Programs() {
 		if p.Name == "tap" && p.Status == "attached" {

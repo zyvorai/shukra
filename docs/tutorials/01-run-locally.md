@@ -1,6 +1,6 @@
 # Run it locally
 
-You can build and browse Shukra on a laptop. Programs will report detached. That is correct. The daemon still scans `/proc` for `qemu-system-*` and serves the API. It does not fill in counters it did not collect.
+You can build and browse Shukra on a laptop. Programs will report detached. That is correct. The daemon still scans `/proc` for `qemu-system-*` and, if FluxVM's store is readable, for its VMMs, and serves the API. It does not fill in counters it did not collect.
 
 ## Build
 
@@ -54,7 +54,7 @@ export SHUKRA_API_KEY=shukra   # or the token you set
 ./bin/shukractl vms
 ```
 
-`programs` should list `kvm`, `sched`, `block`, `net`, `drops` and `tap`, each `detached` with the reason beside it and no invented numbers. `vms` is empty unless a `qemu-system` process is actually running on this machine.
+`programs` should list `kvm`, `sched`, `block`, `net`, `drops` and `tap`, each `detached` with the reason beside it and no invented numbers. `vms` is empty unless a `qemu-system` process, or a FluxVM VMM listed in `vms.json`, is actually running on this machine.
 
 The same token signs you into the console at `http://127.0.0.1:30970`.
 

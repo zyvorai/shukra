@@ -53,8 +53,15 @@ export function Sched() {
         title="Scheduler"
         err={err}
         rows={data?.rows}
-        cols={['vm', 'onCpuNs', 'wakeupDelayNs', 'wakeupCount', 'wakeupDelayP50Ns', 'wakeupDelayP99Ns']}
-        format={{ onCpuNs: ns, wakeupDelayNs: ns, wakeupDelayP50Ns: ns, wakeupDelayP99Ns: ns }}
+        cols={['vm', 'onCpuNs', 'wakeupDelayNs', 'wakeupCount', 'wakeupDelayP50Ns', 'wakeupDelayP99Ns', 'vcpuPreemptedNs', 'vcpuPreemptions', 'topPreemptors']}
+        format={{
+          onCpuNs: ns,
+          wakeupDelayNs: ns,
+          wakeupDelayP50Ns: ns,
+          wakeupDelayP99Ns: ns,
+          vcpuPreemptedNs: ns,
+          topPreemptors: (v) => ((v as { who: string; ns: number }[] | undefined) || []).map((p) => `${p.who} ${ns(p.ns)}`).join(', ') || '—',
+        }}
       >
         {(data?.rows || []).map((r) => (
           <LatencyHist key={String(r.vm)} title={`${String(r.vm)} · run-queue delay`} buckets={buckets(r, 'wakeupHist')} unit="wakeups" />
@@ -65,8 +72,8 @@ export function Sched() {
           title="Threads"
           err=""
           rows={data.threads}
-          cols={['vm', 'role', 'comm', 'tid', 'onCpuNs', 'wakeupCount', 'wakeupDelayP99Ns']}
-          format={{ onCpuNs: ns, wakeupDelayP99Ns: ns }}
+          cols={['vm', 'role', 'comm', 'tid', 'onCpuNs', 'wakeupCount', 'wakeupDelayP99Ns', 'preemptedNs']}
+          format={{ onCpuNs: ns, wakeupDelayP99Ns: ns, preemptedNs: ns }}
         />
       )}
     </div>

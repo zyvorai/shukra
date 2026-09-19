@@ -210,3 +210,48 @@ func TestAFullTapQueueSaysTheGuestIsNotReadingItsNIC(t *testing.T) {
 		t.Fatalf("%+v", f)
 	}
 }
+
+func preemptRows(preempt uint64, by ...aggregate.Preemptor) ([]aggregate.SchedRow, []aggregate.ThreadRow) {
+	return []aggregate.SchedRow{{VM: "db", Measured: true, PreemptedNs: preempt, PreemptedCount: 12, Preemptors: by}},
+		[]aggregate.ThreadRow{{TID: 11, Role: "vcpu", OnCPUNs: 800 * ms}, {TID: 12, Role: "vcpu", OnCPUNs: 700 * ms}, {TID: 13, Role: "iothread", OnCPUNs: 9000 * ms}}
+}
+
+func TestCPUPreemptedNamesWhoTookTheCPUAndIsHighOnceItIsAFifthOfTheTime(t *testing.T) {
+	// 1500 ms on CPU (the iothread's 9 s is not a vCPU's), and 500 ms preempted: 25%.
+	sched, threads := preemptRows(500*ms, aggregate.Preemptor{Who: "vm:web", Ns: 350 * ms}, aggregate.Preemptor{Who: "vm:db", Ns: 100 * ms}, aggregate.Preemptor{Who: "kworker", Ns: 50 * ms})
+	f := find(diagnose(true, quiet, sched, threads, nil, nil, nil, nil), "cpu_preempted")
+	if f == nil || f.Confidence != "high" {
+		t.Fatalf("%+v", f)
+	}
+	all := strings.Join(f.Evidence, " ")
+	for _, want := range []string{"500 ms", "12 preemptions", "25%", "VM web (350 ms)", "this VM's own other threads (100 ms)", "host task kworker (50 ms)"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("evidence lacks %q: %s", want, all)
+		}
+	}
+	if strings.Index(all, "VM web") > strings.Index(all, "kworker") {
+		t.Errorf("most time first: %s", all)
+	}
+}
+
+func TestCPUPreemptedThresholds(t *testing.T) {
+	// Under 200 ms is not a finding, however large a share it is of a quiet VM. From there it is medium at 5% of
+	// the time the vCPUs wanted to run, and high at 20%.
+	sched, threads := preemptRows(100 * ms)
+	if f := find(diagnose(true, quiet, sched, threads, nil, nil, nil, nil), "cpu_preempted"); f != nil {
+		t.Fatalf("under the 200 ms floor is not a finding: %+v", f)
+	}
+	sched, threads = preemptRows(200 * ms)
+	if f := find(diagnose(true, quiet, sched, threads, nil, nil, nil, nil), "cpu_preempted"); f == nil || f.Confidence != "medium" {
+		t.Fatalf("200 ms of 1700 is 12%%: %+v", f)
+	}
+	sched, threads = preemptRows(210 * ms)
+	threads[0].OnCPUNs, threads[1].OnCPUNs = 5000*ms, 5000*ms
+	if f := find(diagnose(true, quiet, sched, threads, nil, nil, nil, nil), "cpu_preempted"); f != nil {
+		t.Fatalf("2%% of the time is ordinary scheduling: %+v", f)
+	}
+	unmeasured := []aggregate.SchedRow{{VM: "db", PreemptedNs: 900 * ms}}
+	if f := find(diagnose(true, quiet, unmeasured, threads, nil, nil, nil, nil), "cpu_preempted"); f != nil {
+		t.Fatalf("a VM the sched program has not measured has nothing to say: %+v", f)
+	}
+}

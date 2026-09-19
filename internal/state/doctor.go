@@ -208,7 +208,7 @@ func (s *State) Doctor() []Check {
 		if len(elsewhere) > 0 {
 			add("vm-tap-other-netns", "warn", strconv.Itoa(len(elsewhereVMs))+" of "+strconv.Itoa(len(vms))+" VMs have a tap in another network namespace",
 				briefList(elsewhere)+". The interface is not in the namespace this daemon runs in, so its guest traffic is not seen and the VM cannot be isolated.",
-				"Put the VM's tap in the host namespace (fluxvm: \"netns\": false on a host bridge; libvirt and plain QEMU already do).")
+				"Shukra attaches in the host network namespace. A FluxVM guest is traced on its host veth, not the tap inside the guest namespace. Any other runtime needs its tap in the host namespace.")
 		}
 		if len(untraced) > 0 {
 			add("vm-tap-untraced", "info", strconv.Itoa(len(untracedVMs))+" VMs have a tap that is not being traced yet",

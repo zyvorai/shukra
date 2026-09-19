@@ -11,6 +11,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/zyvorai/shukra/internal/event"
 )
@@ -267,4 +270,131 @@ func TestKernelIntegration(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestKernelPreemption pins two CPU-bound threads to one CPU. Each is preempted by the other about half the
+// time, so the "victim" must be charged preemption, and the charge must name the other thread by its
+// command, which the test sets. It is the check that the sched_switch program tells a task that was taken
+// off the CPU while runnable (charged) from one that went to sleep (not), and that the wait it measures
+// is real time.
+//
+//	sudo SHUKRA_BPF_TEST=1 go test -tags shukrabpf -run TestKernelPreemption -v ./internal/observe
+func TestKernelPreemption(t *testing.T) {
+	if os.Getenv("SHUKRA_BPF_TEST") != "1" {
+		t.Skip("set SHUKRA_BPF_TEST=1 to load BPF programs into the kernel")
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("loading BPF programs needs root")
+	}
+	for _, p := range Programs() {
+		if p.Name == "sched" && len(p.Status) >= 8 && p.Status[:8] != "attached" {
+			t.Fatalf("sched is not attached: %s", p.Detail)
+		}
+	}
+	SetWatched([]uint32{uint32(os.Getpid())})
+
+	var set unix.CPUSet
+	if err := unix.SchedGetaffinity(0, &set); err != nil || set.Count() == 0 {
+		t.Skipf("cannot read the CPU set: %v", err)
+	}
+	cpu := 0
+	for i := 0; i < 1024; i++ {
+		if set.IsSet(i) {
+			cpu = i
+			break
+		}
+	}
+	var one unix.CPUSet
+	one.Set(cpu)
+
+	const run = 1500 * time.Millisecond
+	victimTid := make(chan uint32, 1)
+	takerTid := make(chan uint32, 1)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	burn := func(name string, tid chan<- uint32, until func() bool) {
+		defer wg.Done()
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		if err := unix.SchedSetaffinity(0, &one); err != nil {
+			t.Errorf("affinity: %v", err)
+		}
+		if name != "" {
+			b := append([]byte(name), 0)
+			_ = unix.Prctl(unix.PR_SET_NAME, uintptr(unsafe.Pointer(&b[0])), 0, 0, 0)
+			runtime.KeepAlive(b)
+			if got, err := os.ReadFile("/proc/thread-self/comm"); err != nil || string(got) != name+"\n" {
+				t.Errorf("could not name this thread %q: comm is %q (%v)", name, got, err)
+			}
+		}
+		tid <- uint32(syscall.Gettid())
+		x := 1
+		for !until() {
+			x = x*31 + 7 // CPU-bound, never sleeps
+		}
+		_ = x
+	}
+	// The taker is started, and has renamed itself, before the victim exists, so every preemption of the victim
+	// sees the taker under its own name.
+	wg.Add(1)
+	go burn("shktaker", takerTid, func() bool {
+		select {
+		case <-stop:
+			return true
+		default:
+			return false
+		}
+	})
+	taker := <-takerTid
+	begin := time.Now()
+	wg.Add(1)
+	go burn("shkvictim", victimTid, func() bool { return time.Since(begin) > run })
+	victim := <-victimTid
+	// A control on the same CPU that runs briefly and sleeps. It waits for the CPU a lot (the two busy threads
+	// hold it), but a thread that went to sleep was not preempted, so it must not be charged.
+	sleeperTid := make(chan uint32, 1)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		_ = unix.SchedSetaffinity(0, &one)
+		sleeperTid <- uint32(syscall.Gettid())
+		for time.Since(begin) < run {
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	sleeper := <-sleeperTid
+	SetThreads(map[uint32]ThreadRef{victim: {VM: "testvm", Role: "vcpu"}, sleeper: {VM: "testvm", Role: "vcpu"}})
+	defer SetThreads(nil)
+	all := Sample()
+	before, sleeperBefore := all[victim], all[sleeper]
+	time.Sleep(run)
+	all = Sample()
+	after, sleeperAfter := all[victim], all[sleeper]
+	close(stop)
+	wg.Wait()
+
+	if slept := sleeperAfter.PreemptNs - sleeperBefore.PreemptNs; slept > uint64(run)/20 {
+		t.Fatalf("a thread that mostly sleeps was charged %s of preemption in a %s run: sleeping is not being preempted", time.Duration(slept), run)
+	}
+
+	pns := after.PreemptNs - before.PreemptNs
+	if pns == 0 || after.PreemptCount == before.PreemptCount {
+		t.Fatalf("a thread that shares a CPU with a busy one was never charged preemption: %+v", after)
+	}
+	if pns > uint64(run) {
+		t.Fatalf("preempted %s of a %s run: the wait is longer than the run", time.Duration(pns), run)
+	}
+	if pns < uint64(run)/10 {
+		t.Fatalf("two equal CPU-bound threads on one CPU share it, so the victim waits a large part of the run; got %s of %s", time.Duration(pns), run)
+	}
+	got := after.Preemptors["shktaker"] - before.Preemptors["shktaker"]
+	if got == 0 {
+		t.Fatalf("the taker's command is not named as the preemptor (tid %d): %v", taker, after.Preemptors)
+	}
+	if got > pns {
+		t.Fatalf("one preemptor took %d ns of a total of %d", got, pns)
+	}
+	t.Logf("victim %d preempted %s of %s in %d preemptions; taker got %s", victim, time.Duration(pns), run, after.PreemptCount-before.PreemptCount, time.Duration(got))
 }

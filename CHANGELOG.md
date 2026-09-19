@@ -4,6 +4,14 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### FluxVM guests
+
+- **All four backends are VMs.** QEMU, Cloud Hypervisor, Firecracker and `fluxvm-hypervisor` are named from `{state_dir}/vms.json` (`state_dir` in `/etc/fluxvm.toml`, otherwise `/var/lib/fluxvm`) and joined by pid. `runtime` is `fluxvm`. A QEMU pid already found is updated, not duplicated. Libvirt and plain QEMU that are not in the store are unchanged. See [FluxVM](docs/tap.md#fluxvm).
+- **The default per-VM netns is traced.** Guest frames are attached on the host veth `vh` plus the first 8 hex digits of the VM id, not on `tap<8hex>` inside `eph-<8hex>`. Ingress is from the guest. NAT is POSTROUTING, so the event still shows the guest address. If FluxVM wrote `/run/fluxvm/ebpf/vms/<id>/iface`, that name is used instead (direct mode). A host-bridge tap keeps `tap_name`.
+- **Host attribution stays `qemu-process`** for every backend. That string means the VMM's socket, not the guest.
+- `cloud-hypervisor`, `firecracker`, `fluxvm-hypervisor` and `jailer` are allowed execs, so a boot is not an unexpected-exec detection. Kernel comm is 15 characters.
+- User-mode NAT still has no host interface. `shukractl doctor` names it. The live guest script still boots with `"netns": false` on a shared bridge; the netns mapping is covered by the identity tests.
+
 ### Guest DNS names
 
 - **`guest_dns` events:** the name a guest asked for in a plain DNS query over UDP port 53, with its type, IPv4 and IPv6. The tap program only recognises a query and copies its question; the daemon decodes it (lower-cased, sanitised, cut at 253 bytes). A repeat of a name and type is announced once a minute, at most 200 per tap per second on their own budget. See [DNS names](docs/tap.md#dns-names).

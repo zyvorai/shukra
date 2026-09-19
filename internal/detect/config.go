@@ -25,6 +25,10 @@ const (
 	MetricBlockReadBPS      = "block_read_bytes_per_sec"
 	MetricBlockWriteBPS     = "block_write_bytes_per_sec"
 	MetricBlockIOPS         = "block_iops"
+	// MetricVCPUPreemptedMSPerSec is how many milliseconds per second the VM's vCPU threads were runnable but
+	// off a host CPU, summed over its vCPUs (so a 4-vCPU VM can exceed 1000). It is the host's view of losing
+	// the CPU, not the guest's steal counter, and needs the sched program.
+	MetricVCPUPreemptedMSPerSec = "vcpu_preempted_ms_per_sec"
 	// MetricGuestDropsPerSec counts packets the kernel dropped on a VM's tap that Shukra did not: another
 	// program on the tap, not isolation. It needs the drops program, and says nothing without it.
 	MetricGuestDropsPerSec = "guest_drops_per_sec"
@@ -38,7 +42,7 @@ const (
 var metrics = map[string]bool{
 	MetricBlockReadP99MS: true, MetricBlockWriteP99MS: true, MetricWakeupDelayMS: true,
 	MetricKVMExitsPerSec: true, MetricRetransmitsPerSec: true,
-	MetricKVMExitP99MS: true, MetricRunqueueP99MS: true,
+	MetricKVMExitP99MS: true, MetricRunqueueP99MS: true, MetricVCPUPreemptedMSPerSec: true,
 	MetricBlockReadBPS: true, MetricBlockWriteBPS: true, MetricBlockIOPS: true,
 	MetricGuestDropsPerSec: true, MetricConnectRefusedPerSec: true, MetricConnectTimeoutsPerSec: true, MetricInboundPerSec: true,
 }

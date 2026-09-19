@@ -66,6 +66,12 @@ func TestUnexpectedExec(t *testing.T) {
 	if len(st.Detections("payment-prod-03")) != 1 {
 		t.Fatalf("qemu binary was flagged: %+v", st.Detections("payment-prod-03"))
 	}
+	for _, comm := range []string{"cloud-hypervis", "firecracker", "fluxvm-hypervis", "jailer"} {
+		ag.Ingest(event.Event{Kind: event.KindExec, PID: 201, Comm: comm})
+	}
+	if len(st.Detections("payment-prod-03")) != 1 {
+		t.Fatalf("FluxVM VMM was flagged: %+v", st.Detections("payment-prod-03"))
+	}
 }
 
 func TestReloadKeepsPreviousListOnBadYAML(t *testing.T) {

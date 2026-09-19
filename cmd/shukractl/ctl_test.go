@@ -619,3 +619,23 @@ func TestTraceDropsSaysWhenTheProgramIsNotMeasuring(t *testing.T) {
 		t.Fatalf("%s", buf.String())
 	}
 }
+
+func TestTraceSchedShowsWhoTookTheVCPUsCPU(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"rows":[
+			{"vm":"db","onCpuNs":9000,"wakeupDelayNs":10,"wakeupCount":2,"vcpuPreemptedNs":3500000000,"vcpuPreemptions":42,"topPreemptors":[{"who":"vm:web","ns":3000000000},{"who":"kworker","ns":500000000}]},
+			{"vm":"quiet","onCpuNs":1,"vcpuPreemptedNs":0,"vcpuPreemptions":0,"topPreemptors":[]}]}`))
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+	var buf bytes.Buffer
+	if err := run([]string{"trace", "sched"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"vCPU preempted: 3500000000ns over 42 preemptions  (taken by: vm:web 3000000000ns, kworker 500000000ns)", "vCPU preempted: 0ns over 0 preemptions\n"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("missing %q:\n%s", want, buf.String())
+		}
+	}
+}

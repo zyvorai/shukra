@@ -36,7 +36,7 @@
 | Route | Returns |
 |---|---|
 | `GET /api/v1/status` | `version`, `product`, `mode`, `datapath`, `healthy`, `vms`, `programsAttached`, `programsTotal`, `detections`, `summary`. The last line says whether guest tap attribution is attached |
-| `GET /api/v1/vms` | `{"vms": [...]}`. Each VM: `name`, `uuid`, `runtime` (`libvirt`, `kubevirt` or `qemu`: a label from the command line), `pid`, `comm`, `taps`, `threadInfo` (each thread's `tid`, `comm` and inferred `role`: `vcpu`, `iothread`, `vhost`, `other`), `cmdline` |
+| `GET /api/v1/vms` | `{"vms": [...]}`. Each VM: `name`, `uuid`, `runtime` (`qemu`, `libvirt`, `kubevirt`, or `fluxvm`), `pid`, `comm`, `taps`, `threadInfo` (each thread's `tid`, `comm` and inferred `role`: `vcpu`, `iothread`, `vhost`, `other`), `cmdline`. `libvirt` and `kubevirt` are labels from the QEMU command line. `fluxvm` means the name, UUID and `taps` came from FluxVM's `vms.json`; `taps` is then the host interface, `vh<8hex>` for the default per-VM netns. See [FluxVM](tap.md#fluxvm) |
 | `GET /api/v1/programs` | `{"programs": [{"name","status","detail"}]}` for `kvm`, `sched`, `block`, `net`, `tap`, `drops`. `status` is `attached` or `detached`. `detail` says how many hooks, or why not |
 | `GET /api/v1/doctor` | `{"worst", "checks": [{"id","status","title","detail","fix"}]}`. `status` is `ok`, `info`, `warn` or `fail`, worst first. Only reads; readable with the read-only key |
 | `GET /api/v1/export` | One document: status, VMs, traces and events, for a bug report |
@@ -48,10 +48,10 @@ All take `?vm=<name>` to narrow to one VM. Every response has a `rows` list.
 | Route | What a row is |
 |---|---|
 | `GET /api/v1/trace/kvm` | Exit, entry, MMIO and PIO counts, exit-handling latency (`exitLatencyP50Ns`, `exitLatencyP99Ns`, `exitLatencyHist`), the costliest reasons by count and by time (Intel hosts name them). `measured` |
-| `GET /api/v1/trace/sched` | On-CPU time, run-queue delay (`wakeupDelayP50Ns`, `wakeupDelayP99Ns`, `wakeupHist`). `?threads=1` adds a `threads` list, one row per QEMU thread with its role, so a slow vCPU can be told from a slow iothread |
+| `GET /api/v1/trace/sched` | On-CPU time, run-queue delay (`wakeupDelayP50Ns`, `wakeupDelayP99Ns`, `wakeupHist`). `?threads=1` adds a `threads` list, one row per VMM thread with its role, so a slow vCPU can be told from a slow iothread |
 | `GET /api/v1/trace/block` | Requests, bytes, slowest request and read/write latency histograms |
-| `GET /api/v1/trace/net` | `tcp_v4_connect`/`tcp_v6_connect` counts and sampled retransmits **from the QEMU process**. Always `guestAttributed: false` |
-| `GET /api/v1/trace/tap` | Per VM tap, from the guest's point of view: `fromGuestPackets/Bytes`, `toGuestPackets/Bytes`, `droppedPackets/Bytes` (isolation's), `isolated`, and what became of every TCP handshake (below) |
+| `GET /api/v1/trace/net` | `tcp_v4_connect`/`tcp_v6_connect` counts and sampled retransmits **from the VMM process**. Always `guestAttributed: false`. The attribution string is `qemu-process` for every backend |
+| `GET /api/v1/trace/tap` | Per VM interface, from the guest's point of view: `fromGuestPackets/Bytes`, `toGuestPackets/Bytes`, `droppedPackets/Bytes` (isolation's), `isolated`, and what became of every TCP handshake (below). The interface name is the tap, or FluxVM's host veth |
 | `GET /api/v1/trace/drops` | What the kernel dropped on each VM tap. `measured`, then `taps` (per-tap totals) and `rows` (per reason). See [drops](drops.md) |
 
 ### Handshake fields on a tap row
@@ -88,15 +88,15 @@ An event carries `seq` (only grows), `product: "shukra"`, `kind`, `ts`, `vm` (`n
 
 | Kind | What it is | Attribution |
 |---|---|---|
-| `exec`, `exit` | A child of a QEMU process started or ended. `comm`, `ppid` | `qemu-process` |
-| `tcp_connect`, `tcp_retransmit` | The QEMU process's own sockets | `qemu-process` |
+| `exec`, `exit` | A child of a watched VMM started or ended: QEMU, or a FluxVM backend. `comm`, `ppid` | `qemu-process` |
+| `tcp_connect`, `tcp_retransmit` | The VMM's own sockets, not the guest. The string is `qemu-process` for every backend | `qemu-process` |
 | `block_slow`, `sched_delay` | A request or wakeup slower than the sample threshold. `latency_ns` | `qemu-process` |
 | `guest_connect` | The guest sent a TCP SYN. `src` is the guest, `dst` and `dport` where to, `proto: "tcp"`, `iface`, `blocked` | `guest-tap` |
 | `guest_flow` | The guest started a new UDP flow. `proto: "udp"` | `guest-tap` |
 | `guest_inbound` | A TCP SYN was sent **to** the guest. `src` is the peer, `dst` the guest, `dport` the guest port | `guest-tap` |
 | `guest_dns` | The guest asked for a name over UDP port 53. `dns_name` (lower-case), `qtype`, `src` the guest, `dst` the resolver, `dport: 53`, `blocked`, and `dns_truncated` when the name did not fit | `guest-tap` |
 | `detection` | A rule fired. `rule`, `severity`, `message`, and the attribution of the event that triggered it | as the trigger |
-| `vm_start`, `vm_stop` | A QEMU process appeared or went away | `qemu-process` |
+| `vm_start`, `vm_stop` | A VMM process appeared or went away | `qemu-process` |
 
 `guest_attributed` is `true` only for an event seen on a VM's tap **and** naming a VM in the current scan. A tap no VM owns gives `unattributed`, never a guessed name.
 

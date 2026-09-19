@@ -43,7 +43,7 @@ The rig and the daemon it starts share the pin directory `/sys/fs/bpf/shukra/tap
 
 ## The live guest test
 
-`scripts/test-live-guest.sh` boots two disposable Ubuntu cloud images with [fluxvm](https://github.com/zyvorai/fluxvm) on a host bridge: the guest under test and a peer. cloud-init makes the guest send a TCP SYN, twenty UDP datagrams on one flow and three multicast datagrams every 75 seconds, connect to a listener on the peer, and connect to a closed peer port. The script then checks a running daemon against what the kernel says.
+`scripts/test-live-guest.sh` boots two disposable Ubuntu cloud images with [fluxvm](https://github.com/zyvorai/fluxvm) on a host bridge (`"netns": false`, so the two guests share L2 and can reach each other): the guest under test and a peer. cloud-init makes the guest send a TCP SYN, twenty UDP datagrams on one flow and three multicast datagrams every 75 seconds, connect to a listener on the peer, and connect to a closed peer port. The script then checks a running daemon against what the kernel says. FluxVM's default per-VM netns, traced on the host veth, is not what this script boots; that mapping is the identity unit tests. See [FluxVM](tap.md#fluxvm).
 
 - It creates two VMs, gives them a TTL as a backstop, deletes them, and never touches another VM. It never isolates anything.
 - Both guests get their own `mac`, since fluxvm gives every tap guest the same default otherwise.

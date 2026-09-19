@@ -306,3 +306,41 @@ func TestTheConnectionMetricsSayNothingWhileTheTapProgramIsNotMeasuring(t *testi
 		}
 	}
 }
+
+func TestVCPUPreemptedMSPerSecSumsTheWindowsPreemptionAndSaysNothingWithoutTheSchedProgram(t *testing.T) {
+	var e Evaluator
+	r := []Threshold{{Name: "stolen", Metric: MetricVCPUPreemptedMSPerSec, Op: ">", Value: 100, Window: 10 * time.Second, Severity: "high"}}
+	on := func(ns uint64) map[string]aggregate.Counters {
+		return map[string]aggregate.Counters{"db": {OnCPUNs: 1, PreemptNs: ns}}
+	}
+	e.Evaluate(t0, on(1_000_000_000), r)
+	// 3 s of preemption in 10 s across the vCPUs: 300 ms a second.
+	f := e.Evaluate(t0.Add(10*time.Second), on(4_000_000_000), r)
+	if len(f) != 1 || f[0].VM != "db" || f[0].Value != 300 {
+		t.Fatalf("%+v", f)
+	}
+	// 0.5 s in the next 10 s is 50 ms a second: the old preemption is not counted again.
+	if f = e.Evaluate(t0.Add(20*time.Second), on(4_500_000_000), r); len(f) != 0 {
+		t.Fatalf("%+v", f)
+	}
+	// A counter that went backwards (the thread restarted) is skipped, not a giant number.
+	if f = e.Evaluate(t0.Add(30*time.Second), on(10), r); len(f) != 0 {
+		t.Fatalf("%+v", f)
+	}
+
+	// The sched program was not measuring this VM: nothing, not zero, even for a rule that a zero would satisfy.
+	var q Evaluator
+	z := []Threshold{{Name: "z", Metric: MetricVCPUPreemptedMSPerSec, Op: ">=", Value: 0, Window: 10 * time.Second, Severity: "high"}}
+	off := map[string]aggregate.Counters{"db": {}}
+	q.Evaluate(t0, off, z)
+	if f = q.Evaluate(t0.Add(10*time.Second), off, z); len(f) != 0 {
+		t.Fatalf("a rule fired with no measurement: %+v", f)
+	}
+}
+
+func TestTheVCPUPreemptedMetricIsAcceptedInARuleFile(t *testing.T) {
+	c, err := Parse([]byte("thresholds:\n  - {name: p, metric: vcpu_preempted_ms_per_sec, value: 200}\n"))
+	if err != nil || len(c.Thresholds) != 1 {
+		t.Fatalf("%v %+v", err, c)
+	}
+}

@@ -46,14 +46,14 @@ Six programs. Hot paths stay in maps. The ring buffer is only for discrete event
 
 Percentiles come from log2 buckets and can read up to 2x high. See [What each program measures](docs/signals.md) for every caveat.
 
-Identity comes from the host: the QEMU command line (`-name` / `guest=`, `-uuid`, `ifname=`) and, for libvirt VMs whose taps are passed as file descriptors, the process's `fdinfo`. A PID that is not a QEMU thread group rolls up to `_host` as `unattributed`. It is never given a made-up VM name.
+Identity comes from the host: the QEMU command line (`-name` / `guest=`, `-uuid`, `ifname=`) and, for libvirt VMs whose taps are passed as file descriptors, the process's `fdinfo`. A FluxVM guest (QEMU, Cloud Hypervisor, Firecracker, or `fluxvm-hypervisor`) is named from FluxVM's `vms.json` instead, and its guest traffic is traced on the host interface, which for the default per-VM netns is the veth `vh<8hex>` rather than the tap inside that namespace. See [FluxVM](docs/tap.md#fluxvm). A PID that is not one of those VMM thread groups rolls up to `_host` as `unattributed`. It is never given a made-up VM name.
 
 ## What this release will not pretend
 
 - **Host TCP is QEMU's, not the guest's.** `tcp_v4_connect` and `tcp_v6_connect` events are `attribution: "qemu-process"` and `guest_attributed: false`. Only events seen on a VM's tap are `guest_attributed: true`, and only for a tap that belongs to a VM in the current scan. A tap no VM owns stays unattributed. See [attribution](docs/attribution.md).
 - **No agent, no payloads.** Shukra never runs inside a guest and never reads application data. The one thing it reads beyond headers is the name in a plain DNS query over UDP port 53 (`-dns-events=false` turns that off); answers, DNS over TCP, TLS or HTTPS, and everything else are not read. It can say *which VM and which address*, not *which process inside the guest*. CPU steal is not measured.
 - **Isolation is real, and conditional.** `shukractl isolate` really drops the VM's tap traffic, but only with an explicit management allow list (`-isolate-allow`), only on Linux 6.6 or newer, and `applied` is `true` only after the kernel took the change. Without an allow list it is refused. Enforcement survives a daemon crash, restart or stop when `/sys/fs/bpf` is a bpf filesystem.
-- **A VM Shukra cannot see says so.** A VM on user-mode networking, or whose tap is in another network namespace (fluxvm's default), has no guest traffic, no drop counts and cannot be isolated. `shukractl doctor` names it.
+- **A VM Shukra cannot see says so.** User-mode networking has no tap. A tap that is not in the host namespace, and that was not mapped to one, has no guest traffic, no drop counts and cannot be isolated. `shukractl doctor` names it. FluxVM's default per-VM netns is mapped to the host veth and is traced. See [FluxVM](docs/tap.md#fluxvm).
 - **A program that is not measuring reports detached, with the reason.** A build without root, clang, or `/sys/kernel/btf/vmlinux` still serves discovered VMs. It never invents a counter, and a VM with no measurement has no series, not a zero.
 
 PacketWolf and Zeus OS are the intended consumers of this JSON. They are not in this repository.
@@ -181,8 +181,8 @@ Counters and the event list are not saved: they are read from the kernel or rebu
 
 ```text
 ┌──────────────── hypervisor ────────────────┐
-│  qemu-system   qemu-system   (untouched)   │
-│      ▲ tap          ▲ tap                  │
+│  VMM processes          (guests untouched) │
+│      ▲ tap or host veth vh*                │
 │  kvm / sched / block / net / drops / tap   │  eBPF, CO-RE, maps + a small ring
 │              │                             │
 │           shukrad                          │  identity, sampler, rules, state, API

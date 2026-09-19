@@ -4,8 +4,8 @@ Shukra is one privileged daemon on the hypervisor, a CLI and a console that only
 
 ```text
 ┌───────────────────────── hypervisor ─────────────────────────┐
-│  qemu-system   qemu-system   ...    (guests, untouched)      │
-│       ▲ tap vnet0   ▲ tap vnet1                              │
+│  VMM (qemu, cloud-hypervisor, firecracker, fluxvm-hypervisor)│
+│      ▲ tap or host veth vh*   (guests untouched)             │
 │  ┌────┴─────────────┴──────┐   ┌──────────────────────────┐  │
 │  │ tap  (TCX, per VM tap)  │   │ kvm sched block net drops│  │
 │  │ counters, events,       │   │ tracepoints and kprobes, │  │
@@ -27,11 +27,11 @@ Shukra is one privileged daemon on the hypervisor, a CLI and a console that only
 | Program | Attaches to | Keeps | Notes |
 |---|---|---|---|
 | `kvm` | `kvm_exit`, `kvm_entry`, `kvm_mmio`, `kvm_pio` | Per-thread exit counts by reason, entry counts, exit-handling time as a log2 histogram and time per reason | Hand-laid tracepoint records, because KVM records are not in vmlinux BTF on 6.8. `kvm_pio` does not exist on arm64 |
-| `sched` | `sched_switch`, `sched_wakeup`, `sched_process_exec`, `sched_process_exit` | On-CPU time and run-queue delay per thread, a `watched` set of QEMU thread groups | Exec and exit events are filtered in the kernel to children of QEMU |
+| `sched` | `sched_switch`, `sched_wakeup`, `sched_process_exec`, `sched_process_exit` | On-CPU time and run-queue delay per thread, a `watched` set of VMM thread groups | Exec and exit events are filtered in the kernel to children of a watched VMM (QEMU, or a FluxVM backend) |
 | `block` | `block_rq_issue`, `block_rq_complete` | Latency histogram, bytes and requests per direction, slowest request | Attributed to the task that dispatched the request. About 3% land on a kernel worker |
-| `net` | `tcp_v4_connect`, `tcp_v6_connect`, `tcp_retransmit_skb` | Exact connect counts; 1 in 64 retransmits become events | QEMU's own sockets. Never the guest |
+| `net` | `tcp_v4_connect`, `tcp_v6_connect`, `tcp_retransmit_skb` | Exact connect counts; 1 in 64 retransmits become events | The VMM's own sockets. Never the guest. The attribution string is still `qemu-process` |
 | `drops` | `skb:kfree_skb` | Per VM tap and drop reason: a count and the kernel function that freed the packet | Filters to VM taps first. Reads the record by field name (CO-RE). See [drops](drops.md) |
-| `tap` | TCX ingress and egress on each VM tap (Linux 6.6+) | Counters, TCP handshake outcomes, isolation policy, an event ring | The only program that sees the guest. See [guest traffic](tap.md) |
+| `tap` | TCX ingress and egress on each VM's host interface (Linux 6.6+) | Counters, TCP handshake outcomes, isolation policy, an event ring | The only program that sees the guest. On FluxVM's default netns the interface is the host veth, not the inner tap. See [guest traffic](tap.md) |
 
 Each of the first five loads on its own, and a missing hook detaches only that program: a host without a KVM tracepoint still gets scheduler, block and network data. `tap` is attached per VM interface and comes and goes with the VMs, so its status changes at runtime.
 
@@ -41,11 +41,13 @@ Each of the first five loads on its own, and a missing hook detaches only that p
 
 Identity comes from the host, never from inside the guest.
 
-- `identity.Scan` walks `/proc` for `qemu-system-*` processes every 2 seconds and reads each command line: `-name` or `guest=`, `-uuid`, `ifname=`. `libvirt` and `kubevirt` are labels derived from that command line, not a guest agent.
+- `identity.Scan` walks `/proc` every 2 seconds. A `qemu-system*` process is read from its command line: `-name` or `guest=`, `-uuid`, `ifname=`. `libvirt` and `kubevirt` are labels derived from that command line, not a guest agent.
+- When FluxVM is installed, the same scan reads `{state_dir}/vms.json` (`state_dir` from `/etc/fluxvm.toml`, otherwise `/var/lib/fluxvm`). Each record with a live pid is a VM: QEMU pids already found are updated, and `cloud-hypervisor`, `firecracker` and `fluxvm-hypervisor` are added. `runtime` is `fluxvm`. The name and UUID come from the record, because FluxVM's QEMU argv has neither `-name` nor `-uuid`. A missing store is ignored.
+- The interface traced is, in order, `/run/fluxvm/ebpf/vms/<id>/iface` if FluxVM wrote one, else the host veth `vh` plus the first 8 hex digits of the id when `netns` is set, else `tap_name`. The inner `tap<8hex>` of a per-VM netns is not kept. Detail, including why ingress on that veth is "from the guest", is in [FluxVM](tap.md#fluxvm).
 - A VM's **threads** come from `/proc/<pid>/task`, each with a role inferred from its name: `vcpu` (`CPU n/KVM`), `iothread`, `vhost`, or `other`.
-- A VM's **taps** are found two ways and merged: `ifname=` on the command line, and the `iff:` line in `/proc/<pid>/fdinfo` of each `/dev/net/tun` fd the process holds. The second is how libvirt VMs are found, since libvirt hands QEMU its tap as an inherited fd.
-- BPF maps are keyed by **thread id**. Userspace folds them into a VM through the thread list. A pid that is not a QEMU thread rolls up to `_host` as `unattributed` and is never given a made-up VM name.
-- An event seen on a tap is `guest_attributed` only if the tap belongs to a VM in the current scan.
+- A plain QEMU VM's **taps** are found two ways and merged: `ifname=` on the command line, and the `iff:` line in `/proc/<pid>/fdinfo` of each `/dev/net/tun` fd the process holds. The second is how libvirt VMs are found, since libvirt hands QEMU its tap as an inherited fd. A FluxVM record replaces that list with the host interface above.
+- BPF maps are keyed by **thread id**. Userspace folds them into a VM through the thread list. A pid that is not a VMM thread rolls up to `_host` as `unattributed` and is never given a made-up VM name.
+- An event seen on a traced interface is `guest_attributed` only if that interface belongs to a VM in the current scan.
 
 ## The tap program, in detail
 
@@ -113,7 +115,7 @@ A build without root, clang or BTF still serves discovered VMs and reports every
 | `bpf/*.bpf.c`, `bpf/event.h` | The programs and the shared event layout |
 | `internal/bpfgen` | Loads and attaches them (CO-RE via bpf2go). `tap.go` is the tap manager |
 | `internal/observe` | Reads the maps, decodes events, joins the loaders to the rest. Has a stub for builds without BPF |
-| `internal/identity` | Finds QEMU, its threads and its taps |
+| `internal/identity` | Finds QEMU and FluxVM VMMs, their threads, and the host interface to trace |
 | `internal/aggregate` | Turns per-thread maps into per-VM rows, deltas and clones |
 | `internal/state` | The in-memory truth, history, Explain, doctor |
 | `internal/detect`, `internal/agent` | Rules, thresholds, suppression, and the loop that applies them |

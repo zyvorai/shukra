@@ -24,7 +24,7 @@ The default build does not link CO-RE objects, so CI on any OS and a Mac stay gr
 These are what the docs say Shukra does, and each is enforced by a test:
 
 - **Never invent a number.** A program that is not measuring has no row and no series, not a zero. A VM that no program has measured gets `not_measured`, not "all clear". A metric is omitted, an API field says `measured: false`, and a rule says nothing.
-- **Never guess an identity.** A pid that is not a QEMU thread is `_host`/`unattributed`. A tap no VM owns produces an unattributed event. `guest_attributed` is `true` only for an event seen on a VM's tap that names a VM in the current scan.
+- **Never guess an identity.** A pid that is not a QEMU thread or a FluxVM VMM thread is `_host`/`unattributed`. A tap no VM owns produces an unattributed event. `guest_attributed` is `true` only for an event seen on a VM's host interface that names a VM in the current scan. A FluxVM guest is named from `vms.json`, not invented from a tap name.
 - **An empty list is `[]`, never `null`.** Go's nil slice encodes as `null`. Every list in the API goes through `orEmpty`, and a test checks the nested ones too.
 - **Windows, not lifetimes.** Anything Explain, doctor or a rule judges is read over a recent window from snapshots, and a counter that went backwards is a reset.
 - **Say what you cannot see.** Every signal has a caveat in [signals](signals.md), and Explain's `missing` list is part of its answer.

@@ -22,7 +22,7 @@ shukractl isolate payment-prod-03
 | `doctor [--json] [--strict]` | Audit the daemon: exposure, what is attached, what it cannot see. Only findings that need attention are printed, worst first, each with a fix. `--strict` exits non-zero on a warning too |
 | `programs` | Which observation programs are attached (`kvm`, `sched`, `block`, `net`, `drops`, `tap`), how many hooks, and why one is not |
 | `trace list`, `trace kvm\|sched\|block\|net\|tap\|drops [--vm NAME]` | Per-VM counters from the daemon. `tap` adds the guest's connections and their outcomes; `drops` says what the kernel dropped on each tap and whether it was Shukra |
-| `vms [--json]` | QEMU virtual machines found on the host |
+| `vms [--json]` | QEMU and FluxVM virtual machines found on the host |
 | `explain <vm> [--window 5m\|lifetime]` | Why a VM looks slow, from the last minute by default: ranked host-side causes with evidence, and what Shukra cannot see |
 | `recorder <vm> [--window 60s]` | Replay the flight recorder |
 | `watch [--json] [--once]` | Stream discrete events, resuming from the last one seen. A `guest_dns` line ends with `name=` and `qtype=` |

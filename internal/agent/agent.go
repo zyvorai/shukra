@@ -87,6 +87,18 @@ func (a *Agent) Refresh() {
 		tgids = append(tgids, uint32(vm.PID))
 	}
 	observe.SetWatched(tgids)
+	refs := map[uint32]observe.ThreadRef{}
+	for _, vm := range vms {
+		for _, t := range vm.ThreadInfo {
+			refs[uint32(t.TID)] = observe.ThreadRef{VM: vm.Name, Role: t.Role}
+		}
+		for _, tid := range vm.Threads {
+			if _, ok := refs[uint32(tid)]; !ok {
+				refs[uint32(tid)] = observe.ThreadRef{VM: vm.Name, Role: "unknown"}
+			}
+		}
+	}
+	observe.SetThreads(refs)
 	var taps []string
 	for _, vm := range vms {
 		taps = append(taps, vm.Taps...)
@@ -307,6 +319,11 @@ func allowedExec(comm string) bool {
 		return false
 	}
 	if strings.HasPrefix(c, "qemu-system") || strings.HasPrefix(c, "cpu") || strings.HasPrefix(c, "io") {
+		return true
+	}
+	// Kernel comm is 15 characters, so cloud-hypervisor and fluxvm-hypervisor
+	// arrive truncated. The prefix is the part both forms share.
+	if strings.HasPrefix(c, "cloud-hypervis") || strings.HasPrefix(c, "fluxvm-hypervis") || c == "firecracker" || c == "jailer" {
 		return true
 	}
 	return strings.Contains(c, "vhost") || strings.Contains(c, "kvm")
