@@ -52,6 +52,9 @@ There is no `_sum` series. The kernel keeps buckets, not a total, and a sum buil
 
 ## Known limits
 
+- Block bytes and requests are attributed to the task that **dispatched** the request, which is usually the submitting thread but not always: the block layer sometimes dispatches from a kernel worker, and those requests land on that worker's row, not the QEMU thread's. In an integration test on a 6.8 kernel about 3% of direct reads were attributed away from the thread that issued them. Treat a VM's block figures as slightly under-counted, most of all under heavy queueing. Latency percentiles are unaffected, since they come from the requests that were attributed.
+- A connect to a v4-mapped address on an `IPV6_V6ONLY` socket is refused by the kernel before any connection is attempted, so it is not counted. A dual-stack socket's v4-mapped connect is counted once.
+
 - Block requests are matched by device and sector between issue and completion. Two overlapping requests to the same sector can collide, and the older one is lost from the histogram.
 - The `kvm` timing has been loaded by the kernel verifier and its hooks attach, but it has not run: the host it was developed against has no `/dev/kvm`. Read it as unproven until you have seen non-zero `exit_latency` on a real hypervisor.
 - On arm64 the `kvm_pio` tracepoint does not exist (`kvm` attaches 3 of 4 hooks) and the exit reason field is an exception class.

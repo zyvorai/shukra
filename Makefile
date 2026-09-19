@@ -1,4 +1,4 @@
-.PHONY: deps generate build test install web dist
+.PHONY: deps generate build test test-bpf test-kernel install web dist
 
 PREFIX ?= /usr/local
 
@@ -40,6 +40,13 @@ test:
 # build tag keeps these files out, so this target is for CI and a hypervisor.
 test-bpf:
 	go test -count=1 -tags shukrabpf ./...
+
+# Loads the real programs into the running kernel and checks what they count
+# against load the test generates. Needs root, BTF and `make generate`.
+test-kernel:
+	mkdir -p bin
+	go test -c -tags shukrabpf -o bin/observe.test ./internal/observe
+	sudo SHUKRA_BPF_TEST=1 bin/observe.test -test.run TestKernelIntegration -test.v
 
 web:
 	npm --prefix web ci

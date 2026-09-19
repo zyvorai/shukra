@@ -150,6 +150,7 @@ Reference: [shukractl](docs/shukractl.md) · [Signals](docs/signals.md) · [Attr
 make test          # go test ./...
 make web           # npm ci, unit tests, production build
 make generate      # no-op without clang and /sys/kernel/btf/vmlinux
+make test-kernel   # load the programs into this kernel and check the counters (root, Linux)
 make dist          # release tarball and .deb for this architecture (Linux)
 ```
 
