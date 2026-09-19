@@ -3,8 +3,25 @@
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
-#include <bpf/bpf_core_read.h>
 #include "event.h"
+/* tcp_retransmit_skb is not a complete type in vmlinux BTF on 6.17.
+   Layout is the 6.8 trace format, packed so saddr stays at offset 34. */
+struct shukra_tcp_retrans {
+	__u16 common_type;
+	__u8 common_flags;
+	__u8 common_preempt_count;
+	int common_pid;
+	__u64 skbaddr;
+	__u64 skaddr;
+	int state;
+	__u16 sport;
+	__u16 dport;
+	__u16 family;
+	__u8 saddr[4];
+	__u8 daddr[4];
+	__u8 saddr_v6[16];
+	__u8 daddr_v6[16];
+} __attribute__((packed));
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
@@ -45,7 +62,7 @@ int BPF_KPROBE(shukra_tcp_v4_connect, struct sock *sk, struct sockaddr *uaddr) {
 }
 
 SEC("tracepoint/tcp/tcp_retransmit_skb")
-int shukra_retrans(struct trace_event_raw_tcp_event_sk_skb *ctx) {
+int shukra_retrans(struct shukra_tcp_retrans *ctx) {
 	__u32 pid = (__u32)bpf_get_current_pid_tgid();
 	__u64 *n = bpf_map_lookup_elem(&net_retrans, &pid);
 	if (n)
