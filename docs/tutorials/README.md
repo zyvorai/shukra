@@ -7,6 +7,7 @@ Short paths through Shukra. Each one assumes you have read the boundary: this re
 3. [Deploy a hypervisor](03-deploy.md) — rsync, remote build, systemd, and the checks that mean it worked.
 4. [Operator CLI](04-shukractl.md) — the daily commands, JSON, and the isolate record.
 5. [Console](05-console.md) — what each page is for, and the banner you should not click past.
-6. [Destination watchlist](06-watchlist.md) — notice a QEMU-process connect to a CIDR you care about.
+6. [Detection rules](06-watchlist.md) — destinations, ports, exec allow-list, per-VM thresholds, and suppression.
+7. [Alert sinks](07-alert-sinks.md) — webhook (signed), syslog and file delivery.
 
 Deeper reference, not a walkthrough: [shukractl](../shukractl.md), [attribution](../attribution.md), [tap/TCX roadmap](../roadmap-taptrace.md).

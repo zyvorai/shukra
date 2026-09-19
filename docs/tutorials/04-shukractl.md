@@ -63,7 +63,7 @@ shukractl recorder osboxes-debian --window 60s
 
 `explain` answers from evidence on hand. The missing list is part of the answer: guest tap, CPU steal, in-guest process. If those lines are present, Shukra is telling you it cannot see them.
 
-`recorder` replays the bounded per-VM ring, default cap 4096, default window 60s. Kinds you will actually see: `exec`, `tcp_connect`, `tcp_retransmit`, `block_slow` (at least 10ms), `sched_delay` (at least 20ms), `detection`, and process exit. Counters do not each become an event.
+`recorder` replays the bounded per-VM ring, default cap 4096, default window 60s. With `-data-dir` the ring is saved every minute and on clean shutdown and reloaded at start; without it the ring starts empty after a restart. Kinds you will actually see: `exec`, `tcp_connect`, `tcp_retransmit`, `block_slow` (at least 10ms), `sched_delay` (at least 20ms), `detection`, and process exit. Counters do not each become an event.
 
 ```bash
 shukractl watch

@@ -174,7 +174,10 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=${REMOTE_DIR}
 Environment=SHUKRA_API_KEY=\${API_KEY}
-ExecStart=/usr/local/bin/shukrad -listen 0.0.0.0:30970 -web ${REMOTE_DIR}/web/dist -watchlist /etc/shukra/detections.yaml
+ExecStart=/usr/local/bin/shukrad -listen 0.0.0.0:30970 -web ${REMOTE_DIR}/web/dist -watchlist /etc/shukra/detections.yaml -data-dir /var/lib/shukra
+ExecReload=/bin/kill -HUP \$MAINPID
+StateDirectory=shukra
+StateDirectoryMode=0700
 Restart=on-failure
 RestartSec=2
 

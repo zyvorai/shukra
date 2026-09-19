@@ -20,7 +20,7 @@ What it does:
 4. Installs `/usr/local/bin/shukrad` and `/usr/local/bin/shukractl`.
 5. Copies `configs/detections.example.yaml` to `/etc/shukra/detections.yaml`.
 6. Writes `~/.shukra/env` and `~/.shukra/api-key` for the SSH user.
-7. Installs `shukra.service`, enables it, and restarts it.
+7. Installs `shukra.service` (with `-data-dir /var/lib/shukra` and `ExecReload`), enables it, and restarts it. Detections, isolation requests and the flight recorder now survive that restart.
 8. Runs `shukractl status`, `programs`, `vms`, `trace list`, and `GET /api/v1/status`.
 
 The unit listens on `0.0.0.0:30970`. The token defaults to `shukra` unless you export `SHUKRA_API_KEY` before deploying. Set a real token on any host that is not a lab:

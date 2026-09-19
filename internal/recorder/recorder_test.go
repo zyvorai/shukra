@@ -40,3 +40,28 @@ func TestWindow(t *testing.T) {
 		t.Fatalf("%#v", got)
 	}
 }
+
+func TestSnapshotRoundTrip(t *testing.T) {
+	r := New(3)
+	now := time.Now().UTC()
+	for i := 0; i < 5; i++ {
+		r.Add(event.Event{Kind: event.KindExec, TS: now.Add(time.Duration(i) * time.Second), VM: event.VM{Name: "b"}, PID: uint32(i)})
+	}
+	r.Add(event.Event{Kind: event.KindExec, TS: now, VM: event.VM{Name: "a"}, PID: 99})
+	r.Add(event.Event{Kind: event.KindExec, TS: now, PID: 7}) // host rollup
+
+	snap := r.Snapshot()
+	if len(snap) != 5 { // b keeps 3 (cap), a 1, _host 1
+		t.Fatalf("%d events: %+v", len(snap), snap)
+	}
+	if snap[0].Attribution != event.AttributionUnattributed || snap[1].VM.Name != "a" || snap[2].PID != 2 || snap[4].PID != 4 {
+		t.Fatalf("order: %+v", snap)
+	}
+	again := New(3)
+	for _, e := range snap {
+		again.Add(e)
+	}
+	if got := again.Window("b", time.Minute, now.Add(10*time.Second)); len(got) != 3 || got[0].PID != 2 {
+		t.Fatalf("%+v", got)
+	}
+}

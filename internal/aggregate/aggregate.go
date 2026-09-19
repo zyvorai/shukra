@@ -154,6 +154,27 @@ func group(vms []identity.VM, byPID map[uint32]Counters) []bucket {
 	return rows
 }
 
+// PerVM folds per-PID counters onto each discovered VM by name. The host rollup
+// is left out: a PID that is not a QEMU thread has no VM to alert on.
+func PerVM(vms []identity.VM, byPID map[uint32]Counters) map[string]Counters {
+	out := map[string]Counters{}
+	for _, b := range group(vms, byPID) {
+		if b.name != Host {
+			out[b.name] = b.c
+		}
+	}
+	return out
+}
+
+// TotalExits is the sum of the per-reason exit counts.
+func (c Counters) TotalExits() uint64 {
+	var n uint64
+	for _, v := range c.Exits {
+		n += v
+	}
+	return n
+}
+
 func filter(rows []bucket, vm string) []bucket {
 	if vm == "" {
 		return rows

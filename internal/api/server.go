@@ -1,18 +1,50 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/zyvorai/shukra/internal/state"
 )
 
-// New serves the read API. Isolate records a decision and does not attach a program.
+// New serves the API behind a bearer key. An empty key fails closed: every
+// request is refused. Use NewNoAuth to serve without a key on purpose.
+// Isolate records a decision and does not attach a program.
 func New(st *state.State, apiKey string) http.Handler {
+	return auth(apiKey, routes(st))
+}
+
+// NewNoAuth serves the API with no bearer check. Only /healthz and /readyz are
+// reachable without a key under New; here everything is.
+func NewNoAuth(st *state.State) http.Handler {
+	return routes(st)
+}
+
+func routes(st *state.State) *http.ServeMux {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		s := st.Status()
+		code := http.StatusOK
+		if !st.Ready() {
+			code = http.StatusServiceUnavailable
+		}
+		writeJSON(w, code, map[string]any{
+			"ready": st.Ready(), "programsAttached": s.ProgramsAttached, "programsTotal": s.ProgramsTotal,
+		})
+	})
+	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		writeMetrics(w, st)
+	})
 	mux.HandleFunc("GET /api/v1/status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, st.Status())
 	})
@@ -20,7 +52,26 @@ func New(st *state.State, apiKey string) http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{"vms": st.VMs()})
 	})
 	mux.HandleFunc("GET /api/v1/events", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"events": st.Events(r.URL.Query().Get("vm"))})
+		since, err := parseSince(r.URL.Query().Get("since"))
+		if err != nil {
+			http.Error(w, "since must be an unsigned integer", http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"seq": st.Seq(), "events": st.EventsSince(r.URL.Query().Get("vm"), since)})
+	})
+	mux.HandleFunc("GET /api/v1/stream", func(w http.ResponseWriter, r *http.Request) {
+		since, err := parseSince(r.URL.Query().Get("since"))
+		if err == nil && since == 0 {
+			since, err = parseSince(r.Header.Get("Last-Event-ID"))
+		}
+		if err != nil {
+			http.Error(w, "since must be an unsigned integer", http.StatusBadRequest)
+			return
+		}
+		stream(w, r, st, r.URL.Query().Get("vm"), since)
+	})
+	mux.HandleFunc("GET /api/v1/isolations", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"isolations": st.Isolations()})
 	})
 	mux.HandleFunc("GET /api/v1/detections", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"detections": st.Detections(r.URL.Query().Get("vm"))})
@@ -85,18 +136,65 @@ func New(st *state.State, apiKey string) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, st.Isolate(body.VM, actor))
 	})
-	return auth(apiKey, mux)
+	return mux
+}
+
+func parseSince(raw string) (uint64, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	return strconv.ParseUint(raw, 10, 64)
+}
+
+// stream writes events as server-sent events. Each frame's id is the event Seq,
+// so a reconnecting client resumes with Last-Event-ID.
+func stream(w http.ResponseWriter, r *http.Request, st *state.State, vm string, since uint64) {
+	fl, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", "text/event-stream")
+	h.Set("Cache-Control", "no-cache")
+	h.Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	fl.Flush()
+	keepalive := time.NewTicker(15 * time.Second)
+	defer keepalive.Stop()
+	for {
+		changed := st.Changed()
+		for _, e := range st.EventsSince(vm, since) {
+			b, err := json.Marshal(e)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "id: %d\nevent: event\ndata: %s\n\n", e.Seq, b)
+			since = e.Seq
+		}
+		fl.Flush()
+		select {
+		case <-r.Context().Done():
+			return
+		case <-changed:
+		case <-keepalive.C:
+			fmt.Fprint(w, ": keepalive\n\n")
+			fl.Flush()
+		}
+	}
 }
 
 func auth(apiKey string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/assets/") {
+		switch {
+		case r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/assets/"),
+			r.URL.Path == "/healthz", r.URL.Path == "/readyz":
 			next.ServeHTTP(w, r)
 			return
 		}
 		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		got = strings.TrimSpace(got)
-		if apiKey != "" && got != apiKey {
+		if apiKey == "" || subtle.ConstantTimeCompare([]byte(got), []byte(apiKey)) != 1 {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"unauthorized"}`))

@@ -1,4 +1,40 @@
+# Shukra detection rules. `systemctl reload shukra` re-reads this file. A file
+# with a mistake is refused and the previous rules stay in force. Unknown keys
+# are a mistake, so a misspelled section cannot silently turn a rule off.
+#
+# Every detection is about the QEMU process, not a process inside the guest.
+
+# How long a repeat of the same detection (same rule, VM and destination) is held
+# back. The raw event is still recorded; only the alert is collapsed. Default 5m.
+# `suppress: 0s` alerts every time.
+# suppress: 5m
+
+# Connect to a watched address. Severity: low, medium, high (default), critical.
 destinations:
   - cidr: 185.0.0.0/8
     severity: high
     name: unexpected-egress
+
+# Connect to a watched destination port, whatever the address.
+# ports:
+#   - port: 25
+#     name: smtp-egress
+#     severity: medium
+
+# Process names that may start under a QEMU process without an alert, matched as
+# a lowercase prefix. QEMU's own threads are always allowed.
+# exec_allow:
+#   - node_exporter
+
+# Per-VM metrics over a window (5s to 10m, default 30s). Needs the kernel programs
+# attached. A rule stays quiet until a full window of history exists.
+#   block_read_p99_ms / block_write_p99_ms   p99 of requests finished in the window
+#   wakeup_delay_ms                          mean scheduler wakeup delay
+#   kvm_exits_per_sec, tcp_retransmits_per_sec
+# Latency is read from a log2 histogram, so a p99 can read up to 2x high.
+# op is ">" (default) or ">=". severity defaults to medium.
+# thresholds:
+#   - name: slow-disk
+#     metric: block_write_p99_ms
+#     value: 50
+#     window: 30s

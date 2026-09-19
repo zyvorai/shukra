@@ -2,6 +2,7 @@
 package recorder
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -65,6 +66,23 @@ func filter(evs []event.Event, cutoff time.Time) []event.Event {
 		if !e.TS.Before(cutoff) {
 			out = append(out, e)
 		}
+	}
+	return out
+}
+
+// Snapshot copies every held event, grouped by VM (sorted by name) and oldest
+// first within a VM. Feeding it back through Add restores the same rings.
+func (r *Recorder) Snapshot() []event.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	keys := make([]string, 0, len(r.buf))
+	for k := range r.buf {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var out []event.Event
+	for _, k := range keys {
+		out = append(out, r.buf[k]...)
 	}
 	return out
 }

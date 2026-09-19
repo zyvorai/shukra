@@ -13,6 +13,21 @@ import (
 	"github.com/zyvorai/shukra/internal/version"
 )
 
+// Persister receives what should survive a restart. State calls it after
+// releasing its lock, so an implementation may do file I/O.
+type Persister interface {
+	Detection(event.Event)
+	Isolation(Isolation)
+}
+
+// SinkStat is delivery accounting for one alert sink.
+type SinkStat struct {
+	Name    string
+	Sent    uint64
+	Failed  uint64
+	Dropped uint64
+}
+
 // Program is one eBPF object and whether it is attached.
 type Program struct {
 	Name   string `json:"name"`
@@ -74,13 +89,26 @@ type State struct {
 	events     []event.Event
 	isolations []Isolation
 	rec        *recorder.Recorder
+	seq        uint64
+	connects   map[string]uint64
+	ready      bool
+	persist    Persister
+	hooks      []func(event.Event)
+	suppressed uint64
+	sinkStats  func() []SinkStat
+	changed    chan struct{}
 }
+
+// MaxEvents bounds the in-memory event and detection lists.
+const MaxEvents = 2048
 
 func New(hostname string) *State {
 	return &State{
 		started:  time.Now().UTC(),
 		hostname: hostname,
 		byPID:    map[uint32]aggregate.Counters{},
+		connects: map[string]uint64{},
+		changed:  make(chan struct{}),
 		rec:      recorder.New(recorder.DefaultCap),
 		programs: []Program{
 			{Name: "kvm", Status: "detached", Detail: "not attached yet"},
@@ -103,10 +131,35 @@ func (s *State) VMs() []identity.VM {
 	return append([]identity.VM(nil), s.vms...)
 }
 
+// SetPrograms records attach state. It is called after a completed scan, so the
+// first call is also what makes the daemon ready.
 func (s *State) SetPrograms(p []Program) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.programs = append([]Program(nil), p...)
+	s.ready = true
+}
+
+// Ready reports whether the first scan finished.
+func (s *State) Ready() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ready
+}
+
+// Seq is the Seq of the newest stored event, or 0 before the first.
+func (s *State) Seq() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.seq
+}
+
+// Changed returns a channel that is closed the next time an event is added.
+// Take it before reading events so an event added in between is not missed.
+func (s *State) Changed() <-chan struct{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.changed
 }
 
 func (s *State) Programs() []Program {
@@ -124,23 +177,54 @@ func (s *State) SetCounters(by map[uint32]aggregate.Counters) {
 func (s *State) AddEvent(e event.Event) {
 	event.Normalize(&e)
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.seq++
+	e.Seq = s.seq
 	s.events = append(s.events, e)
-	if len(s.events) > 2048 {
-		s.events = append([]event.Event(nil), s.events[len(s.events)-2048:]...)
+	if len(s.events) > MaxEvents {
+		s.events = append([]event.Event(nil), s.events[len(s.events)-MaxEvents:]...)
 	}
-	if e.Kind == event.KindDetection {
+	switch e.Kind {
+	case event.KindDetection:
 		s.detections = append(s.detections, e)
+		if len(s.detections) > MaxEvents {
+			s.detections = append([]event.Event(nil), s.detections[len(s.detections)-MaxEvents:]...)
+		}
+	case event.KindTCPConnect:
+		// Counted here so the total keeps growing after the event list wraps.
+		name := e.VM.Name
+		if name == "" {
+			name = aggregate.Host
+		}
+		s.connects[name]++
 	}
 	s.rec.Add(e)
+	close(s.changed)
+	s.changed = make(chan struct{})
+	p, hooks := s.persist, s.hooks
+	s.mu.Unlock()
+	if e.Kind != event.KindDetection {
+		return
+	}
+	if p != nil {
+		p.Detection(e)
+	}
+	for _, fn := range hooks {
+		fn(e)
+	}
 }
 
 func (s *State) Events(vm string) []event.Event {
+	return s.EventsSince(vm, 0)
+}
+
+// EventsSince returns stored events with Seq greater than since. Events that
+// have already aged out of the list are not returned.
+func (s *State) EventsSince(vm string, since uint64) []event.Event {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []event.Event
 	for _, e := range s.events {
-		if vm == "" || e.VM.Name == vm {
+		if e.Seq > since && (vm == "" || e.VM.Name == vm) {
 			out = append(out, e)
 		}
 	}
@@ -159,6 +243,84 @@ func (s *State) Detections(vm string) []event.Event {
 	return out
 }
 
+// OnDetection registers fn to be called with each new detection, after State
+// releases its lock. fn must not block: it runs on the event path. Restored
+// detections do not call it.
+func (s *State) OnDetection(fn func(event.Event)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hooks = append(s.hooks, fn)
+}
+
+// AddSuppressed counts detections a rule held back as repeats.
+func (s *State) AddSuppressed(n uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.suppressed += n
+}
+
+// Suppressed is how many detections were held back as repeats.
+func (s *State) Suppressed() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.suppressed
+}
+
+// SetSinkStats sets where delivery counts for the alert sinks come from.
+func (s *State) SetSinkStats(fn func() []SinkStat) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sinkStats = fn
+}
+
+// SinkStats is delivery accounting for each configured sink, if any.
+func (s *State) SinkStats() []SinkStat {
+	s.mu.RLock()
+	fn := s.sinkStats
+	s.mu.RUnlock()
+	if fn == nil {
+		return nil
+	}
+	return fn()
+}
+
+// SetPersister sets where detections and isolations are also written. Call
+// Restore first so restored records are not written twice.
+func (s *State) SetPersister(p Persister) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.persist = p
+}
+
+// Restore loads records saved by a previous run. It moves seq forward to the
+// highest restored value so new events never reuse a seq a client has seen.
+// Events are re-normalized, so a hand-edited file cannot claim guest attribution.
+func (s *State) Restore(detections []event.Event, isolations []Isolation, recorded []event.Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range detections {
+		event.Normalize(&e)
+		s.detections = append(s.detections, e)
+		s.seq = max(s.seq, e.Seq)
+	}
+	if len(s.detections) > MaxEvents {
+		s.detections = append([]event.Event(nil), s.detections[len(s.detections)-MaxEvents:]...)
+	}
+	s.isolations = append(s.isolations, isolations...)
+	if len(s.isolations) > MaxEvents {
+		s.isolations = append([]Isolation(nil), s.isolations[len(s.isolations)-MaxEvents:]...)
+	}
+	for _, e := range recorded {
+		s.rec.Add(e)
+		s.seq = max(s.seq, e.Seq)
+	}
+}
+
+// RecorderSnapshot is every event the flight recorder holds, for saving.
+func (s *State) RecorderSnapshot() []event.Event {
+	return s.rec.Snapshot()
+}
+
 func (s *State) Recorder(vm string, window time.Duration, now time.Time) []event.Event {
 	return s.rec.Window(vm, window, now)
 }
@@ -175,8 +337,22 @@ func (s *State) Isolate(vm, actor string) Isolation {
 	}
 	s.mu.Lock()
 	s.isolations = append(s.isolations, rec)
+	if len(s.isolations) > MaxEvents {
+		s.isolations = append([]Isolation(nil), s.isolations[len(s.isolations)-MaxEvents:]...)
+	}
+	p := s.persist
 	s.mu.Unlock()
+	if p != nil {
+		p.Isolation(rec)
+	}
 	return rec
+}
+
+// Isolations is the audit trail of isolate requests, oldest first.
+func (s *State) Isolations() []Isolation {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]Isolation(nil), s.isolations...)
 }
 
 func (s *State) Status() Status {
@@ -220,18 +396,10 @@ func (s *State) Net(vm string) []aggregate.NetRow {
 	defer s.mu.RUnlock()
 	rows := aggregate.Net(s.vms, s.byPID, vm)
 	counts := map[string]uint64{}
-	for _, e := range s.events {
-		if e.Kind != event.KindTCPConnect {
-			continue
+	for name, n := range s.connects {
+		if vm == "" || name == vm {
+			counts[name] = n
 		}
-		name := e.VM.Name
-		if name == "" {
-			name = aggregate.Host
-		}
-		if vm != "" && name != vm {
-			continue
-		}
-		counts[name]++
 	}
 	seen := map[string]bool{}
 	for i := range rows {

@@ -29,6 +29,9 @@ type VM struct {
 
 // Event is one discrete observation. Hot counters never use this path.
 type Event struct {
+	// Seq is assigned by the daemon when it stores the event. It only grows, so a
+	// client can ask for everything after the last Seq it saw.
+	Seq             uint64    `json:"seq,omitempty"`
 	Product         string    `json:"product"`
 	Kind            Kind      `json:"kind"`
 	TS              time.Time `json:"ts"`
@@ -41,8 +44,11 @@ type Event struct {
 	Dst             string    `json:"dst,omitempty"`
 	DPort           uint16    `json:"dport,omitempty"`
 	Message         string    `json:"message,omitempty"`
-	Severity        string    `json:"severity,omitempty"`
-	LatencyNS       uint64    `json:"latency_ns,omitempty"`
+	// Rule names the detection rule that fired, so a consumer can route on it
+	// without parsing Message.
+	Rule      string `json:"rule,omitempty"`
+	Severity  string `json:"severity,omitempty"`
+	LatencyNS uint64 `json:"latency_ns,omitempty"`
 }
 
 // Normalize forces the product name and the guest-attribution boundary.

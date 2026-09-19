@@ -21,7 +21,7 @@ A wrong token does not open a fixture. Fixture data exists only when you start V
 | Block | Log2 histogram, p50 and p99 in the page, not in the kernel |
 | Programs | Attached or detached, and the hook detail |
 | Host connections | TCP connects and sampled retransmits |
-| Detections | Watchlist hits |
+| Detections | Rule hits: watchlist, port, exec and threshold detections |
 | Isolate | The recorded decision |
 
 Hash routes keep you on one origin. The mega-nav is the same set of pages.

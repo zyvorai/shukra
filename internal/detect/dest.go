@@ -30,7 +30,8 @@ type compiled struct {
 	net  *net.IPNet
 }
 
-// ParseYAML loads the watchlist. An empty document is an empty list, not an error.
+// ParseYAML loads only the destination watchlist. An empty document is an empty
+// list, not an error. Parse reads the whole detection file.
 func ParseYAML(b []byte) (*Watchlist, error) {
 	var f file
 	if len(b) == 0 {
@@ -39,8 +40,12 @@ func ParseYAML(b []byte) (*Watchlist, error) {
 	if err := yaml.Unmarshal(b, &f); err != nil {
 		return nil, err
 	}
+	return compile(f.Destinations)
+}
+
+func compile(rules []Rule) (*Watchlist, error) {
 	w := &Watchlist{}
-	for _, r := range f.Destinations {
+	for _, r := range rules {
 		if r.CIDR == "" {
 			return nil, fmt.Errorf("destination %q has empty cidr", r.Name)
 		}

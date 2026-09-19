@@ -159,39 +159,52 @@ func traceCmd(args []string, out io.Writer) error {
 func watchCmd(args []string, out io.Writer) error {
 	asJSON := has(args, "--json")
 	once := has(args, "--once")
-	var seen int
+	// The daemon keeps a bounded event list, so a count of events seen stops
+	// working once it wraps. Ask only for events newer than the last seq.
+	var since uint64
 	for {
-		b, _, err := do("GET", "/api/v1/events", nil)
-		if err != nil {
+		var err error
+		if since, err = watchPoll(since, asJSON, out); err != nil {
 			return err
-		}
-		var body struct {
-			Events []map[string]any `json:"events"`
-		}
-		if err := json.Unmarshal(b, &body); err != nil {
-			return err
-		}
-		if len(body.Events) > seen {
-			fresh := body.Events[seen:]
-			seen = len(body.Events)
-			if asJSON {
-				for _, e := range fresh {
-					enc := json.NewEncoder(out)
-					if err := enc.Encode(e); err != nil {
-						return err
-					}
-				}
-			} else {
-				for _, e := range fresh {
-					fmt.Fprintf(out, "%v  %v  %v  vm=%v  dst=%v\n", e["ts"], e["kind"], e["attribution"], nested(e, "vm", "name"), e["dst"])
-				}
-			}
 		}
 		if once {
 			return nil
 		}
 		time.Sleep(time.Second)
 	}
+}
+
+// watchPoll prints the events newer than since and returns the new cursor.
+func watchPoll(since uint64, asJSON bool, out io.Writer) (uint64, error) {
+	b, _, err := do("GET", fmt.Sprintf("/api/v1/events?since=%d", since), nil)
+	if err != nil {
+		return since, err
+	}
+	var body struct {
+		Seq    uint64           `json:"seq"`
+		Events []map[string]any `json:"events"`
+	}
+	if err := json.Unmarshal(b, &body); err != nil {
+		return since, err
+	}
+	// A daemon that restarted without a data dir starts again from seq 0. Our
+	// cursor is ahead of it, so start over rather than wait for it to catch up.
+	if body.Seq < since {
+		return 0, nil
+	}
+	for _, e := range body.Events {
+		if seq, ok := e["seq"].(float64); ok && uint64(seq) > since {
+			since = uint64(seq)
+		}
+		if asJSON {
+			if err := json.NewEncoder(out).Encode(e); err != nil {
+				return since, err
+			}
+			continue
+		}
+		fmt.Fprintf(out, "%v  %v  %v  vm=%v  dst=%v\n", e["ts"], e["kind"], e["attribution"], nested(e, "vm", "name"), e["dst"])
+	}
+	return since, nil
 }
 
 func isolateCmd(vm string, asJSON bool, out io.Writer) error {

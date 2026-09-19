@@ -111,3 +111,63 @@ func TestUnknownCommand(t *testing.T) {
 type ioDiscard struct{}
 
 func (ioDiscard) Write(p []byte) (int, error) { return len(p), nil }
+
+// The daemon keeps a bounded event list. watch has to follow seq, not a count.
+func TestWatchFollowsSeqAcrossPolls(t *testing.T) {
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Query().Get("since") {
+		case "0":
+			_, _ = w.Write([]byte(`{"seq":2049,"events":[{"seq":2048,"kind":"tcp_connect"},{"seq":2049,"kind":"tcp_connect"}]}`))
+		case "2049":
+			_, _ = w.Write([]byte(`{"seq":2050,"events":[{"seq":2050,"kind":"exec"}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"seq":2050,"events":[]}`))
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+
+	var buf bytes.Buffer
+	since := uint64(0)
+	for i := 0; i < 3; i++ {
+		var err error
+		if since, err = watchPoll(since, true, &buf); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := strings.Count(buf.String(), "\n"); got != 3 {
+		t.Fatalf("printed %d events, want each exactly once: %q", got, buf.String())
+	}
+	if want := []string{"since=0", "since=2049", "since=2050"}; strings.Join(queries, ",") != strings.Join(want, ",") {
+		t.Fatalf("queries %v, want %v", queries, want)
+	}
+}
+
+func TestWatchResetsWhenDaemonRestarted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("since") == "0" {
+			_, _ = w.Write([]byte(`{"seq":2,"events":[{"seq":1,"kind":"exec"},{"seq":2,"kind":"exec"}]}`))
+			return
+		}
+		// The daemon is at seq 2 but the client asks from 5000.
+		_, _ = w.Write([]byte(`{"seq":2,"events":[]}`))
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+
+	var buf bytes.Buffer
+	since, err := watchPoll(5000, true, &buf)
+	if err != nil || since != 0 {
+		t.Fatalf("since=%d err=%v", since, err)
+	}
+	if since, err = watchPoll(since, true, &buf); err != nil || since != 2 {
+		t.Fatalf("since=%d err=%v", since, err)
+	}
+	if got := strings.Count(buf.String(), "\n"); got != 2 {
+		t.Fatalf("printed %d: %q", got, buf.String())
+	}
+}

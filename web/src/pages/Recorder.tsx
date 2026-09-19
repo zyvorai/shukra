@@ -24,7 +24,7 @@ export default function Recorder() {
       {err && <p className="warning">{err}</p>}
       <section className="card">
         <p className="eyebrow">FLIGHT RECORDER</p>
-        <h3>{data?.window || '60s'}</h3>
+        <h3>{windowed ? '60s' : `Full ring · ${(data?.events || []).length} events`}</h3>
         {(data?.events || []).length === 0 && <p className="empty-state">No events in this window.</p>}
         <ol className="timeline">
           {(data?.events || []).map((e, i) => (

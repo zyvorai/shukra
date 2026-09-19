@@ -85,6 +85,31 @@ shukractl  →  HTTP  →  shukrad  →  tracepoints / kprobes
 
 The CLI never attaches a program. Pin paths, if a later loader adds them, stay under `/sys/fs/bpf/shukra`.
 
+## Monitor the daemon
+
+| Endpoint | Auth | |
+|---|---|---|
+| `GET /healthz` | none | Process is up |
+| `GET /readyz` | none | `200` after the first scan, `503` before. Body has attached and total programs |
+| `GET /metrics` | bearer | Prometheus text. A VM with no measured counters has no series, not a zero |
+| `GET /api/v1/events?since=<seq>` | bearer | Events newer than `seq`. Every event carries a `seq` that only grows |
+| `GET /api/v1/stream` | bearer | Server-sent events. Resume with `Last-Event-ID` or `?since=` |
+| `GET /api/v1/isolations` | bearer | Audit trail of isolate requests. Still `applied: false` |
+
+### Keep state across restarts
+
+By default everything is in memory. `shukrad -data-dir /var/lib/shukra` (the systemd unit sets it) keeps:
+
+| File | Written | Restored |
+|---|---|---|
+| `detections.jsonl` | on every detection | last 2048 |
+| `isolations.jsonl` | on every isolate request | last 2048 |
+| `recorder.json` | every minute and on clean shutdown | the per-VM flight recorder |
+
+Counters and the event list are not saved: they are read from the kernel or rebuilt. After a crash the recorder can be up to a minute behind, detections and isolations are not. Each log rolls to `.1` at 16 MiB. The directory is `0700`, files `0600`, because they name VMs and destinations. Restored events are re-normalized on load, so an edited file cannot claim guest attribution.
+
+`systemctl reload shukra` re-reads the detection rules. A bad file keeps the previous rules. An empty `SHUKRA_API_KEY` uses the dev token and warns; `-no-auth` is the only way to serve without a key.
+
 ## Architecture
 
 ```text
@@ -93,7 +118,7 @@ The CLI never attaches a program. Pin paths, if a later loader adds them, stay u
 │         ▲          ▲       │
 │   kvm / sched / block / net│  eBPF, CO-RE, maps + ring
 │              │             │
-│           shukrad          │  identity, recorder, watchlist
+│           shukrad          │  identity, recorder, detections
 │         :30970 API         │
 └────────────┬───────────────┘
              │ bearer
@@ -112,7 +137,8 @@ Events that leave the daemon carry `product: "shukra"`. A joined event has `attr
 | [Deploy a hypervisor](docs/tutorials/03-deploy.md) | `deploy-remote.sh`, systemd, what to check |
 | [Operator CLI](docs/tutorials/04-shukractl.md) | status, traces, explain, recorder, isolate |
 | [Console](docs/tutorials/05-console.md) | Pages, the host banner, what Apply does not do |
-| [Destination watchlist](docs/tutorials/06-watchlist.md) | YAML, severity, what a detection means |
+| [Detection rules](docs/tutorials/06-watchlist.md) | Destinations, ports, thresholds, suppression, what a detection means |
+| [Alert sinks](docs/tutorials/07-alert-sinks.md) | Signed webhook, syslog, JSONL file |
 
 Reference: [shukractl](docs/shukractl.md) · [Attribution](docs/attribution.md) · [Tap/TCX roadmap](docs/roadmap-taptrace.md) · [Security](SECURITY.md)
 
