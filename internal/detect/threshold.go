@@ -25,7 +25,8 @@ func (f Fired) Message() string {
 // vmSnap is the slice of a VM's cumulative counters that rules read.
 type vmSnap struct {
 	exits, delayNs, wakeups, retrans uint64
-	read, write                      []uint64
+	readBytes, writeBytes, ops       uint64
+	read, write, kvmLat, schedHist   []uint64
 }
 
 type snapshot struct {
@@ -113,7 +114,9 @@ func (e *Evaluator) base(now time.Time, window time.Duration) (snapshot, bool) {
 func snap(c aggregate.Counters) vmSnap {
 	return vmSnap{
 		exits: c.TotalExits(), delayNs: c.WakeupDelayNs, wakeups: c.WakeupCount, retrans: c.Retransmits,
+		readBytes: c.BlockReadBytes, writeBytes: c.BlockWriteBytes, ops: c.BlockReadOps + c.BlockWriteOps,
 		read: append([]uint64(nil), c.BlockRead...), write: append([]uint64(nil), c.BlockWrite...),
+		kvmLat: append([]uint64(nil), c.KVMLat...), schedHist: append([]uint64(nil), c.SchedHist...),
 	}
 }
 
@@ -140,6 +143,19 @@ func metric(name string, old, cur vmSnap, span time.Duration) (float64, bool) {
 		return p99ms(old.read, cur.read)
 	case MetricBlockWriteP99MS:
 		return p99ms(old.write, cur.write)
+	case MetricKVMExitP99MS:
+		return p99ms(old.kvmLat, cur.kvmLat)
+	case MetricRunqueueP99MS:
+		return p99ms(old.schedHist, cur.schedHist)
+	case MetricBlockReadBPS:
+		d, ok := sub(cur.readBytes, old.readBytes)
+		return float64(d) / secs, ok
+	case MetricBlockWriteBPS:
+		d, ok := sub(cur.writeBytes, old.writeBytes)
+		return float64(d) / secs, ok
+	case MetricBlockIOPS:
+		d, ok := sub(cur.ops, old.ops)
+		return float64(d) / secs, ok
 	}
 	return 0, false
 }

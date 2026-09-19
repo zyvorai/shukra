@@ -30,12 +30,16 @@ type Agent struct {
 	cfg        atomic.Pointer[detect.Config]
 	sup        detect.Suppressor
 	vendorOnce sync.Once
+	// vms is what the last scans found, keyed by pid: a restarted VM has a new pid,
+	// so it reads as a stop and a start. Touched only by Refresh.
+	vms       map[int]*trackedVM
+	firstScan bool
 	// eval is touched only by Refresh, which runs on one goroutine at a time.
 	eval detect.Evaluator
 }
 
 func New(st *state.State, procRoot, watchPath, host string) (*Agent, error) {
-	a := &Agent{State: st, ProcRoot: procRoot, Host: host, watchPath: watchPath}
+	a := &Agent{State: st, ProcRoot: procRoot, Host: host, watchPath: watchPath, vms: map[int]*trackedVM{}, firstScan: true}
 	a.cfg.Store(detect.DefaultConfig())
 	if err := a.Reload(); err != nil {
 		return nil, err
@@ -69,6 +73,7 @@ func (a *Agent) Refresh() {
 		return
 	}
 	a.State.SetVMs(vms)
+	a.trackVMs(time.Now().UTC(), vms)
 	a.vendorOnce.Do(func() { a.State.SetCPUVendor(cpuVendor(a.ProcRoot)) })
 	tgids := make([]uint32, 0, len(vms))
 	for _, vm := range vms {
@@ -244,4 +249,51 @@ func cpuVendor(root string) string {
 		}
 	}
 	return ""
+}
+
+type trackedVM struct {
+	vm     identity.VM
+	misses int
+}
+
+// stopAfterMisses is how many scans in a row must not find a VM before it is
+// reported stopped. Scan skips a process whose /proc files fail to read for a
+// moment, and one bad read must not look like a VM stopping and starting again.
+const stopAfterMisses = 2
+
+// trackVMs turns changes in the VM set into events. The first scan is silent:
+// VMs already running when the daemon starts were not started by anyone just now.
+func (a *Agent) trackVMs(now time.Time, vms []identity.VM) {
+	seen := make(map[int]bool, len(vms))
+	for _, vm := range vms {
+		seen[vm.PID] = true
+		if t, ok := a.vms[vm.PID]; ok {
+			t.vm, t.misses = vm, 0
+			continue
+		}
+		a.vms[vm.PID] = &trackedVM{vm: vm}
+		if !a.firstScan {
+			a.vmEvent(now, event.KindVMStart, vm, fmt.Sprintf("VM %s appeared (pid %d)", vm.Name, vm.PID))
+		}
+	}
+	for pid, t := range a.vms {
+		if seen[pid] {
+			continue
+		}
+		if t.misses++; t.misses >= stopAfterMisses {
+			a.vmEvent(now, event.KindVMStop, t.vm, fmt.Sprintf("VM %s is gone (pid %d)", t.vm.Name, pid))
+			delete(a.vms, pid)
+		}
+	}
+	a.firstScan = false
+}
+
+func (a *Agent) vmEvent(now time.Time, kind event.Kind, vm identity.VM, msg string) {
+	e := event.Event{
+		Kind: kind, TS: now, PID: uint32(vm.PID), TGID: uint32(vm.PID), Comm: vm.Comm,
+		VM:      event.VM{Name: vm.Name, UUID: vm.UUID, Runtime: vm.Runtime},
+		Message: msg,
+	}
+	event.Normalize(&e)
+	a.State.AddEvent(e)
 }

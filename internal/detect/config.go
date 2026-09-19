@@ -20,11 +20,18 @@ const (
 	MetricWakeupDelayMS     = "wakeup_delay_ms"
 	MetricKVMExitsPerSec    = "kvm_exits_per_sec"
 	MetricRetransmitsPerSec = "tcp_retransmits_per_sec"
+	MetricKVMExitP99MS      = "kvm_exit_latency_p99_ms"
+	MetricRunqueueP99MS     = "runqueue_delay_p99_ms"
+	MetricBlockReadBPS      = "block_read_bytes_per_sec"
+	MetricBlockWriteBPS     = "block_write_bytes_per_sec"
+	MetricBlockIOPS         = "block_iops"
 )
 
 var metrics = map[string]bool{
 	MetricBlockReadP99MS: true, MetricBlockWriteP99MS: true, MetricWakeupDelayMS: true,
 	MetricKVMExitsPerSec: true, MetricRetransmitsPerSec: true,
+	MetricKVMExitP99MS: true, MetricRunqueueP99MS: true,
+	MetricBlockReadBPS: true, MetricBlockWriteBPS: true, MetricBlockIOPS: true,
 }
 
 var severities = map[string]bool{"low": true, "medium": true, "high": true, "critical": true}

@@ -1,11 +1,18 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"os/signal"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -56,6 +63,8 @@ func run(args []string, out io.Writer) error {
 			return fmt.Errorf("isolate <vm>")
 		}
 		return isolateCmd(args[1], has(args[2:], "--json"), out)
+	case "rules":
+		return rulesCmd(args[1:], out)
 	case "install-cli":
 		return installCLI(args[1:], out)
 	default:
@@ -158,20 +167,108 @@ func traceCmd(args []string, out io.Writer) error {
 
 func watchCmd(args []string, out io.Writer) error {
 	asJSON := has(args, "--json")
-	once := has(args, "--once")
-	// The daemon keeps a bounded event list, so a count of events seen stops
-	// working once it wraps. Ask only for events newer than the last seq.
+	if has(args, "--once") {
+		_, err := watchPoll(0, asJSON, out)
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return watchLoop(ctx, out, asJSON, time.Second)
+}
+
+// watchLoop follows events until ctx ends. It streams from the daemon and, before
+// every (re)connect, polls once with the last seq it saw. That poll fills any gap
+// and notices a daemon that restarted with lower seqs, which a stream cursor
+// alone would wait on forever. A daemon with no stream endpoint is polled instead.
+func watchLoop(ctx context.Context, out io.Writer, asJSON bool, retry time.Duration) error {
 	var since uint64
-	for {
+	streaming := true
+	for ctx.Err() == nil {
 		var err error
 		if since, err = watchPoll(since, asJSON, out); err != nil {
 			return err
 		}
-		if once {
-			return nil
+		if streaming {
+			var unsupported bool
+			since, unsupported, err = watchStream(ctx, since, asJSON, out)
+			if unsupported {
+				streaming = false
+			} else if err != nil && ctx.Err() == nil && errors.Is(err, errUnauthorized) {
+				return err
+			}
 		}
-		time.Sleep(time.Second)
+		select {
+		case <-ctx.Done():
+		case <-time.After(retry):
+		}
 	}
+	return nil
+}
+
+var errUnauthorized = errors.New("the daemon rejected the API key")
+
+// streamClient has no overall timeout: a stream is meant to stay open.
+func streamClient() *http.Client {
+	c := httpClient()
+	return &http.Client{Transport: c.Transport}
+}
+
+// watchStream reads /api/v1/stream until it ends. unsupported is true when the
+// daemon has no such endpoint, so the caller should fall back to polling.
+func watchStream(ctx context.Context, since uint64, asJSON bool, out io.Writer) (uint64, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/stream", nil)
+	if err != nil {
+		return since, false, err
+	}
+	if key := os.Getenv("SHUKRA_API_KEY"); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Last-Event-ID", strconv.FormatUint(since, 10))
+	resp, err := streamClient().Do(req)
+	if err != nil {
+		return since, false, err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		return since, true, nil
+	case http.StatusUnauthorized:
+		return since, false, errUnauthorized
+	default:
+		return since, false, fmt.Errorf("stream: status %d", resp.StatusCode)
+	}
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(make([]byte, 64<<10), 1<<20)
+	var data string
+	for sc.Scan() {
+		line := sc.Text()
+		switch {
+		case strings.HasPrefix(line, "data: "):
+			data = strings.TrimPrefix(line, "data: ")
+		case line == "" && data != "":
+			var e map[string]any
+			if json.Unmarshal([]byte(data), &e) == nil {
+				if seq, ok := e["seq"].(float64); ok && uint64(seq) > since {
+					since = uint64(seq)
+				}
+				if err := printEvent(e, asJSON, out); err != nil {
+					return since, false, err
+				}
+			}
+			data = ""
+		}
+	}
+	return since, false, sc.Err()
+}
+
+func printEvent(e map[string]any, asJSON bool, out io.Writer) error {
+	if asJSON {
+		return json.NewEncoder(out).Encode(e)
+	}
+	_, err := fmt.Fprintf(out, "%v  %v  %v  vm=%v  dst=%v\n", e["ts"], e["kind"], e["attribution"], nested(e, "vm", "name"), e["dst"])
+	return err
 }
 
 // watchPoll prints the events newer than since and returns the new cursor.
@@ -196,13 +293,9 @@ func watchPoll(since uint64, asJSON bool, out io.Writer) (uint64, error) {
 		if seq, ok := e["seq"].(float64); ok && uint64(seq) > since {
 			since = uint64(seq)
 		}
-		if asJSON {
-			if err := json.NewEncoder(out).Encode(e); err != nil {
-				return since, err
-			}
-			continue
+		if err := printEvent(e, asJSON, out); err != nil {
+			return since, err
 		}
-		fmt.Fprintf(out, "%v  %v  %v  vm=%v  dst=%v\n", e["ts"], e["kind"], e["attribution"], nested(e, "vm", "name"), e["dst"])
 	}
 	return since, nil
 }

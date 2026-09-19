@@ -2,12 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestMain(m *testing.M) {
@@ -170,4 +175,170 @@ func TestWatchResetsWhenDaemonRestarted(t *testing.T) {
 	if got := strings.Count(buf.String(), "\n"); got != 2 {
 		t.Fatalf("printed %d: %q", got, buf.String())
 	}
+}
+
+func TestRulesCheckAcceptsAndRejects(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := dir + "/" + name
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	good := write("good.yaml", "suppress: 2m\nports:\n  - {port: 25, name: smtp}\nthresholds:\n  - {name: slow, metric: block_iops, value: 5000}\n")
+	var buf bytes.Buffer
+	if err := run([]string{"rules", "check", good}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"would be accepted", "2m0s", "smtp", "slow"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("missing %q:\n%s", want, buf.String())
+		}
+	}
+
+	// The check must say no to what the daemon would refuse, including a typo.
+	bad := write("bad.yaml", "threshold:\n  - name: x\n")
+	buf.Reset()
+	err := run([]string{"rules", "check", bad, "--json"}, &buf)
+	if err == nil || !strings.Contains(err.Error(), "threshold") {
+		t.Fatalf("typo accepted: %v", err)
+	}
+	if !strings.Contains(buf.String(), `"ok":false`) {
+		t.Fatalf("json: %s", buf.String())
+	}
+	if err := run([]string{"rules", "check", dir + "/missing.yaml"}, &buf); err == nil {
+		t.Fatal("a missing file was accepted")
+	}
+	if err := run([]string{"rules"}, &buf); err == nil {
+		t.Fatal("usage error expected")
+	}
+}
+
+func TestWatchStreamsAndResumesFromLastSeq(t *testing.T) {
+	var mu sync.Mutex
+	var resumedFrom []string
+	connections := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.URL.Path {
+		case "/api/v1/events":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"seq":3,"events":[]}`))
+		case "/api/v1/stream":
+			connections++
+			resumedFrom = append(resumedFrom, r.Header.Get("Last-Event-ID"))
+			w.Header().Set("Content-Type", "text/event-stream")
+			if connections == 1 {
+				fmt.Fprint(w, "id: 1\nevent: event\ndata: {\"seq\":1,\"kind\":\"exec\"}\n\n")
+				fmt.Fprint(w, "id: 2\nevent: event\ndata: {\"seq\":2,\"kind\":\"vm_start\"}\n\n")
+				fmt.Fprint(w, ": keepalive\n\n")
+				return // the connection drops
+			}
+			fmt.Fprint(w, "id: 3\nevent: event\ndata: {\"seq\":3,\"kind\":\"tcp_connect\"}\n\n")
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	sw := &safeWriter{w: &bytes.Buffer{}}
+	done := make(chan error, 1)
+	go func() { done <- watchLoop(ctx, sw, true, 20*time.Millisecond) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Count(sw.String(), "\n") >= 3 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	out := sw.String()
+	for _, want := range []string{`"kind":"exec"`, `"kind":"vm_start"`, `"kind":"tcp_connect"`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %s in:\n%s", want, out)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(resumedFrom) < 2 || resumedFrom[0] != "0" || resumedFrom[1] != "2" {
+		t.Fatalf("reconnect did not resume after the last seq it saw: %v", resumedFrom)
+	}
+}
+
+func TestWatchFallsBackToPollingWithoutAStreamEndpoint(t *testing.T) {
+	var polls int
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.URL.Path != "/api/v1/events" {
+			http.NotFound(w, r) // an older daemon
+			return
+		}
+		polls++
+		w.Header().Set("Content-Type", "application/json")
+		if polls == 1 {
+			_, _ = w.Write([]byte(`{"seq":1,"events":[{"seq":1,"kind":"exec"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"seq":2,"events":[{"seq":2,"kind":"exit"}]}`))
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	sw := &safeWriter{w: &bytes.Buffer{}}
+	done := make(chan error, 1)
+	go func() { done <- watchLoop(ctx, sw, true, 20*time.Millisecond) }()
+	for i := 0; i < 150 && strings.Count(sw.String(), "\n") < 2; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if !strings.Contains(sw.String(), `"kind":"exec"`) || !strings.Contains(sw.String(), `"kind":"exit"`) {
+		t.Fatalf("%s", sw.String())
+	}
+}
+
+func TestWatchStopsOnABadKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/events" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"seq":0,"events":[]}`))
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := watchLoop(ctx, &bytes.Buffer{}, false, 10*time.Millisecond)
+	if !errors.Is(err, errUnauthorized) {
+		t.Fatalf("a rejected key should end watch with an error, got %v", err)
+	}
+}
+
+// safeWriter lets the test read the buffer while the watcher writes to it.
+type safeWriter struct {
+	mu sync.Mutex
+	w  *bytes.Buffer
+}
+
+func (s *safeWriter) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.String()
+}
+
+func (s *safeWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
 }

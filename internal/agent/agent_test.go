@@ -356,3 +356,101 @@ func TestRefreshSetsVendorSoExitReasonsAreNamed(t *testing.T) {
 		t.Fatalf("%+v", rows)
 	}
 }
+
+// addQEMU writes a QEMU process into a fake /proc.
+func addQEMU(t *testing.T, root, pid, name string) {
+	t.Helper()
+	dir := filepath.Join(root, pid)
+	if err := os.MkdirAll(filepath.Join(dir, "task", pid), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := "qemu-system-x86_64\x00-name\x00guest=" + name + ",debug-threads=on\x00-uuid\x00u-" + name + "\x00"
+	if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte(cmd), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func kinds(st *state.State, k event.Kind) []event.Event {
+	var out []event.Event
+	for _, e := range st.Events("") {
+		if e.Kind == k {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func TestVMStartAndStopEvents(t *testing.T) {
+	root := t.TempDir()
+	addQEMU(t, root, "100", "already-running")
+	st := state.New("node-07")
+	ag, err := New(st, root, "", "node-07")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ag.Refresh()
+	if len(kinds(st, event.KindVMStart)) != 0 {
+		t.Fatal("a VM that was already running at daemon start was announced as new")
+	}
+
+	addQEMU(t, root, "200", "db")
+	ag.Refresh()
+	starts := kinds(st, event.KindVMStart)
+	if len(starts) != 1 || starts[0].VM.Name != "db" || starts[0].PID != 200 || starts[0].Attribution != event.AttributionQEMU || starts[0].GuestAttributed {
+		t.Fatalf("%+v", starts)
+	}
+	ag.Refresh()
+	if len(kinds(st, event.KindVMStart)) != 1 {
+		t.Fatal("start reported twice")
+	}
+
+	// One missed scan is not a stop: Scan skips a process it cannot read for a moment.
+	if err := os.Rename(filepath.Join(root, "200"), filepath.Join(root, "hidden")); err != nil {
+		t.Fatal(err)
+	}
+	ag.Refresh()
+	if len(kinds(st, event.KindVMStop)) != 0 {
+		t.Fatal("stopped after a single missed scan")
+	}
+	if err := os.Rename(filepath.Join(root, "hidden"), filepath.Join(root, "200")); err != nil {
+		t.Fatal(err)
+	}
+	ag.Refresh() // seen again: the miss count resets, and it is not a new VM
+	if len(kinds(st, event.KindVMStop)) != 0 || len(kinds(st, event.KindVMStart)) != 1 {
+		t.Fatal("a blip looked like a restart")
+	}
+
+	if err := os.RemoveAll(filepath.Join(root, "200")); err != nil {
+		t.Fatal(err)
+	}
+	ag.Refresh()
+	ag.Refresh()
+	stops := kinds(st, event.KindVMStop)
+	if len(stops) != 1 || stops[0].VM.Name != "db" || !strings.Contains(stops[0].Message, "gone") {
+		t.Fatalf("%+v", stops)
+	}
+	ag.Refresh()
+	if len(kinds(st, event.KindVMStop)) != 1 {
+		t.Fatal("stop reported twice")
+	}
+}
+
+func TestRestartIsAStopAndAStart(t *testing.T) {
+	root := t.TempDir()
+	addQEMU(t, root, "100", "db")
+	st := state.New("node-07")
+	ag, _ := New(st, root, "", "node-07")
+	ag.Refresh()
+	if err := os.RemoveAll(filepath.Join(root, "100")); err != nil {
+		t.Fatal(err)
+	}
+	addQEMU(t, root, "300", "db") // same name, new pid
+	ag.Refresh()
+	ag.Refresh()
+	if len(kinds(st, event.KindVMStart)) != 1 || len(kinds(st, event.KindVMStop)) != 1 {
+		t.Fatalf("starts %d stops %d", len(kinds(st, event.KindVMStart)), len(kinds(st, event.KindVMStop)))
+	}
+	if kinds(st, event.KindVMStart)[0].PID != 300 || kinds(st, event.KindVMStop)[0].PID != 100 {
+		t.Fatal("pids do not identify which instance started and which stopped")
+	}
+}

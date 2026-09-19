@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { useAPI } from '../useAPI';
+import { LIVE_MS, useAPI } from '../useAPI';
 
 type Det = { severity?: string; dst?: string; message?: string; guest_attributed: boolean; ts: string };
 
 export function Detections() {
-  const { data, err } = useAPI<{ detections: Det[] }>('/api/v1/detections');
+  const { data, err } = useAPI<{ detections: Det[] }>('/api/v1/detections', { refreshMs: LIVE_MS });
   return (
     <section className="card">
       <p className="eyebrow">WATCHLIST</p>

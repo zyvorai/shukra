@@ -174,3 +174,47 @@ func TestSuppressorTableIsBounded(t *testing.T) {
 		t.Fatalf("len %d", len(s.seen))
 	}
 }
+
+func TestNewMetricsUseOnlyTheWindow(t *testing.T) {
+	var e Evaluator
+	rules := []Threshold{
+		rule("slow-exit", MetricKVMExitP99MS, ">", 1, 10*time.Second),
+		rule("cpu-wait", MetricRunqueueP99MS, ">", 1, 10*time.Second),
+		rule("write-rate", MetricBlockWriteBPS, ">", 1_000_000, 10*time.Second),
+		rule("iops", MetricBlockIOPS, ">=", 500, 10*time.Second),
+	}
+	base := aggregate.Counters{KVMLat: histWith(50_000_000, 900), SchedHist: histWith(50_000_000, 900), BlockWriteBytes: 100, BlockWriteOps: 10}
+	e.Evaluate(t0, map[string]aggregate.Counters{"db": base}, rules)
+	// Ancient slow samples are still in the lifetime histograms. In the window only
+	// fast ones were added, plus 20 MB written over 10 s in 6000 requests.
+	cur := aggregate.Counters{
+		KVMLat: histWith(50_000_000, 900), SchedHist: histWith(50_000_000, 900),
+		BlockWriteBytes: 100 + 20_000_000, BlockWriteOps: 10 + 6000, BlockReadOps: 0,
+	}
+	cur.KVMLat[hist.Bucket(10_000)] += 100
+	cur.SchedHist[hist.Bucket(10_000)] += 100
+	f := e.Evaluate(t0.Add(10*time.Second), map[string]aggregate.Counters{"db": cur}, rules)
+	got := map[string]float64{}
+	for _, x := range f {
+		got[x.Rule.Name] = x.Value
+	}
+	if _, ok := got["slow-exit"]; ok {
+		t.Fatalf("old exits leaked into the window: %+v", f)
+	}
+	if _, ok := got["cpu-wait"]; ok {
+		t.Fatalf("old run-queue delay leaked into the window: %+v", f)
+	}
+	if got["write-rate"] < 1_999_000 || got["write-rate"] > 2_001_000 {
+		t.Fatalf("write rate %v: %+v", got["write-rate"], f)
+	}
+	if got["iops"] != 600 {
+		t.Fatalf("iops %v", got["iops"])
+	}
+	// Slow ones in the window do fire.
+	cur.KVMLat[hist.Bucket(30_000_000)] += 10
+	cur.SchedHist[hist.Bucket(30_000_000)] += 10
+	f = e.Evaluate(t0.Add(20*time.Second), map[string]aggregate.Counters{"db": cur}, rules[:2])
+	if len(f) != 2 {
+		t.Fatalf("%+v", f)
+	}
+}

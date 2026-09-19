@@ -35,6 +35,7 @@ func helpSections() []helpSection {
 		{title: "🛡️  Security", cmds: []helpCmd{
 			{"security <vm>", "Watchlist detections for one VM"},
 			{"isolate <vm>", "Record an isolate decision. Does not attach a program"},
+			{"rules check <file> [--json]", "Validate a detection file offline, before reloading"},
 		}},
 	}
 }

@@ -13,6 +13,8 @@ const (
 	KindSchedDelay    Kind = "sched_delay"
 	KindExit          Kind = "exit"
 	KindDetection     Kind = "detection"
+	KindVMStart       Kind = "vm_start"
+	KindVMStop        Kind = "vm_stop"
 )
 
 const (

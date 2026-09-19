@@ -30,6 +30,9 @@ destinations:
 # attached. A rule stays quiet until a full window of history exists.
 #   block_read_p99_ms / block_write_p99_ms   p99 of requests finished in the window
 #   wakeup_delay_ms                          mean scheduler wakeup delay
+#   kvm_exit_latency_p99_ms                  p99 host time handling a KVM exit (halts excluded)
+#   runqueue_delay_p99_ms                    p99 wait for a host CPU after a wakeup
+#   block_read_bytes_per_sec, block_write_bytes_per_sec, block_iops
 #   kvm_exits_per_sec, tcp_retransmits_per_sec
 # Latency is read from a log2 histogram, so a p99 can read up to 2x high.
 # op is ">" (default) or ">=". severity defaults to medium.
