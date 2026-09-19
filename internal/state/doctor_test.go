@@ -263,3 +263,92 @@ func TestProgramsDetachedForTheSameReasonAreOneFinding(t *testing.T) {
 		}
 	}
 }
+
+func withTapsTraced(st *State, names ...string) {
+	st.SetTapSource(func() []TapStat {
+		var out []TapStat
+		for _, n := range names {
+			out = append(out, TapStat{Name: n})
+		}
+		return out
+	})
+}
+
+func TestAVMWhoseTapIsInAnotherNamespaceIsNamedNotSilentlyUncovered(t *testing.T) {
+	st := healthy(t)
+	st.SetVMs([]identity.VM{
+		{Name: "db", Taps: []string{"tap0"}},
+		{Name: "sandbox", Taps: []string{"eph718bb58b"}},
+	})
+	withTapsTraced(st, "tap0")
+	st.linkExists = func(name string) bool { return name == "tap0" } // eph718bb58b is not in this namespace
+	checks := st.Doctor()
+	c := byID(checks, "vm-tap-other-netns")
+	if c == nil || c.Status != "warn" || !strings.HasPrefix(c.Title, "1 of 2 VMs") || !strings.Contains(c.Detail, "sandbox (eph718bb58b)") || strings.Contains(c.Detail, "db (") || !strings.Contains(c.Fix, "netns") {
+		t.Fatalf("%+v", c)
+	}
+	if byID(checks, "vm-tap-untraced") != nil {
+		t.Fatal("a tap that is not here was reported as untraced")
+	}
+	if checks[0].Status != "warn" {
+		t.Fatalf("the finding should rank first, got %+v", checks[0])
+	}
+}
+
+func TestATapThatExistsButIsNotTracedIsInformationNotAWarning(t *testing.T) {
+	st := healthy(t)
+	st.SetVMs([]identity.VM{{Name: "db", Taps: []string{"tap0"}}, {Name: "web", Taps: []string{"tap1"}}})
+	withTapsTraced(st, "tap0")
+	st.linkExists = func(string) bool { return true }
+	checks := st.Doctor()
+	c := byID(checks, "vm-tap-untraced")
+	if c == nil || c.Status != "info" || !strings.HasPrefix(c.Title, "1 VMs") || !strings.Contains(c.Detail, "web (tap1)") || !strings.Contains(c.Detail, "next scan") {
+		t.Fatalf("%+v", c)
+	}
+	if byID(checks, "vm-tap-other-netns") != nil {
+		t.Fatal("a tap that is here was reported as in another namespace")
+	}
+}
+
+func TestNoUncoveredTapFindingWhenThereIsNothingToCompareOrEverythingIsTraced(t *testing.T) {
+	// Every tap traced: nothing to say.
+	st := healthy(t)
+	withTapsTraced(st, "tap0")
+	st.linkExists = func(string) bool { return false }
+	for _, c := range st.Doctor() {
+		if strings.HasPrefix(c.ID, "vm-tap-") {
+			t.Fatalf("%+v", c)
+		}
+	}
+	// No tap source (an unknown, not an empty list): nothing to compare against.
+	st = healthy(t)
+	st.SetVMs([]identity.VM{{Name: "sandbox", Taps: []string{"eph1"}}})
+	st.linkExists = func(string) bool { return false }
+	if byID(st.Doctor(), "vm-tap-other-netns") != nil {
+		t.Fatal("reported without knowing what is traced")
+	}
+	// The tap program is not attached at all: the programs finding covers that.
+	st = healthy(t)
+	st.SetVMs([]identity.VM{{Name: "sandbox", Taps: []string{"eph1"}}})
+	withTapsTraced(st)
+	st.linkExists = func(string) bool { return false }
+	st.SetPrograms([]Program{{Name: "tap", Status: "detached", Detail: "TCX needs Linux 6.6 or newer"}})
+	if byID(st.Doctor(), "vm-tap-other-netns") != nil {
+		t.Fatal("reported while the tap program was detached")
+	}
+}
+
+func TestManyVMsInAnotherNamespaceAreListedBriefly(t *testing.T) {
+	st := healthy(t)
+	var vms []identity.VM
+	for _, n := range []string{"a", "b", "c", "d", "e", "f", "g"} {
+		vms = append(vms, identity.VM{Name: n, Taps: []string{"eph" + n}})
+	}
+	st.SetVMs(vms)
+	withTapsTraced(st)
+	st.linkExists = func(string) bool { return false }
+	c := byID(st.Doctor(), "vm-tap-other-netns")
+	if c == nil || !strings.HasPrefix(c.Title, "7 of 7 VMs") || !strings.Contains(c.Detail, "and 2 more") {
+		t.Fatalf("%+v", c)
+	}
+}

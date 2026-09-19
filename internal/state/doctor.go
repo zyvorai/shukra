@@ -65,9 +65,14 @@ func (s *State) Doctor() []Check {
 	vms := append([]identity.VM(nil), s.vms...)
 	enf := s.enforcer
 	kernel := s.kernelRelease
+	tapSrc := s.tapSource
+	exists := s.linkExists
 	s.mu.RUnlock()
 	if kernel == nil {
 		kernel = readKernelRelease
+	}
+	if exists == nil {
+		exists = hostLinkExists
 	}
 
 	var out []Check
@@ -171,13 +176,43 @@ func (s *State) Doctor() []Check {
 		if tapAttached {
 			st = "warn"
 		}
-		show := blind
-		if len(show) > 5 {
-			show = append(append([]string(nil), show[:5]...), fmt.Sprintf("and %d more", len(blind)-5))
-		}
 		add("blind-vms", st, strconv.Itoa(len(blind))+" of "+strconv.Itoa(len(vms))+" VMs have no known tap",
-			strings.Join(show, ", ")+". Their guest traffic is not seen and they cannot be isolated.",
+			briefList(blind)+". Their guest traffic is not seen and they cannot be isolated.",
 			"A VM on user-mode networking has no tap. For libvirt VMs the daemon needs CAP_SYS_PTRACE and CAP_DAC_READ_SEARCH to read their tap fds: use the shipped unit.")
+	}
+
+	// VMs whose tap is named but not traced. Only meaningful once the tap program is
+	// attached and there is a source of what it traces.
+	if tapSrc != nil && tapAttached {
+		traced := map[string]bool{}
+		for _, t := range tapSrc() {
+			traced[t.Name] = true
+		}
+		var elsewhere, untraced []string
+		elsewhereVMs, untracedVMs := map[string]bool{}, map[string]bool{}
+		for _, vm := range vms {
+			for _, tap := range vm.Taps {
+				switch {
+				case traced[tap]:
+				case exists(tap):
+					untraced = append(untraced, vm.Name+" ("+tap+")")
+					untracedVMs[vm.Name] = true
+				default:
+					elsewhere = append(elsewhere, vm.Name+" ("+tap+")")
+					elsewhereVMs[vm.Name] = true
+				}
+			}
+		}
+		if len(elsewhere) > 0 {
+			add("vm-tap-other-netns", "warn", strconv.Itoa(len(elsewhereVMs))+" of "+strconv.Itoa(len(vms))+" VMs have a tap in another network namespace",
+				briefList(elsewhere)+". The interface is not in the namespace this daemon runs in, so its guest traffic is not seen and the VM cannot be isolated.",
+				"Put the VM's tap in the host namespace (fluxvm: \"netns\": false on a host bridge; libvirt and plain QEMU already do).")
+		}
+		if len(untraced) > 0 {
+			add("vm-tap-untraced", "info", strconv.Itoa(len(untracedVMs))+" VMs have a tap that is not being traced yet",
+				briefList(untraced)+". The interface exists here but has no counters: a tap that has just appeared is picked up on the next scan, and one that stays here means the attach failed.",
+				"Run shukractl programs and check the daemon log.")
+		}
 	}
 
 	// Isolation.
@@ -262,4 +297,18 @@ func appendUnique(list []string, v string) []string {
 		}
 	}
 	return append(list, v)
+}
+
+// briefList names the first five and counts the rest.
+func briefList(names []string) string {
+	if len(names) <= 5 {
+		return strings.Join(names, ", ")
+	}
+	return strings.Join(append(append([]string(nil), names[:5]...), fmt.Sprintf("and %d more", len(names)-5)), ", ")
+}
+
+// hostLinkExists reports whether an interface is in this network namespace.
+func hostLinkExists(name string) bool {
+	_, err := os.Stat("/sys/class/net/" + name)
+	return err == nil
 }
