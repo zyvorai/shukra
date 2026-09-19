@@ -410,3 +410,94 @@ func TestVersionCommand(t *testing.T) {
 		t.Fatalf("%q %v", buf.String(), err)
 	}
 }
+
+func TestIsolateAndReleasePrintWhatActuallyHappened(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/isolate":
+			_, _ = w.Write([]byte(`{"vm":"db","enforcement":"tcx","applied":true,"taps":["tap0","tap1"],"reason":"Traffic is dropped, except ARP and 10.0.0.1/32.","audit":{"result":"applied"}}`))
+		case "/api/v1/release":
+			_, _ = w.Write([]byte(`{"vm":"db","enforcement":"tcx","applied":true,"taps":["tap0"],"reason":"Isolation lifted on tap0.","audit":{"result":"applied"}}`))
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+	var buf bytes.Buffer
+	if err := run([]string{"isolate", "db"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{"ISOLATE  db", "enforcement   tcx", "applied       true", "taps          tap0, tap1", "10.0.0.1/32"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "enforcement is not attached") {
+		t.Fatalf("an applied isolation was described as not attached:\n%s", out)
+	}
+	buf.Reset()
+	if err := run([]string{"release", "db"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "RELEASE  db") || !strings.Contains(buf.String(), "Isolation lifted") {
+		t.Fatalf("%s", buf.String())
+	}
+	if len(paths) != 2 || paths[0] != "POST /api/v1/isolate" || paths[1] != "POST /api/v1/release" {
+		t.Fatalf("%v", paths)
+	}
+	if err := run([]string{"release"}, &buf); err == nil {
+		t.Fatal("release with no VM should be a usage error")
+	}
+}
+
+func TestRefusedIsolateIsNeverShownAsDone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"vm":"db","enforcement":"not_attached","applied":false,"reason":"no management allow list is configured (-isolate-allow), so refusing to isolate","audit":{"result":"refused"}}`))
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+	var buf bytes.Buffer
+	if err := run([]string{"isolate", "db"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "applied       false") || !strings.Contains(out, "allow list") || !strings.Contains(out, "no datapath change") {
+		t.Fatalf("%s", out)
+	}
+}
+
+func TestTraceTapAndSecurityShowTheGuestTrafficAndTheAllowList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/trace/tap":
+			_, _ = w.Write([]byte(`{"note":"Traffic seen on the host side of each VM tap.","rows":[{"vm":"db","tap":"tap0","fromGuestBytes":1200,"fromGuestPackets":10,"toGuestBytes":3400,"toGuestPackets":12,"droppedPackets":5,"isolated":true}]}`))
+		case "/api/v1/security":
+			_, _ = w.Write([]byte(`{"vm":"db","enforcement":"tcx","allowList":["10.0.0.1/32"],"detections":[{"severity":"high","dst":"1.2.3.4","message":"x","guest_attributed":true,"attribution":"guest-tap"}]}`))
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+	var buf bytes.Buffer
+	if err := run([]string{"trace", "tap"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"tap=tap0", "from_guest=1200 B/10 pkts", "dropped=5 pkts", "isolated=true"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("missing %q:\n%s", want, buf.String())
+		}
+	}
+	buf.Reset()
+	if err := run([]string{"security", "db"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"enforcement=tcx", "management allow list: 10.0.0.1/32", "guest_attributed=true", "attribution=guest-tap"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("missing %q:\n%s", want, buf.String())
+		}
+	}
+}

@@ -250,3 +250,9 @@ main { max-width: 1800px; margin: auto; padding: 28px clamp(20px, 3.5vw, 64px) 9
 .severity-badge.conf-medium, .severity-badge.conf-low { color: var(--text-secondary); background: var(--bg-elevated-2); border: 1px solid var(--border); }
 .finding-evidence { color: var(--text-primary); font-variant-numeric: tabular-nums; margin: 4px 0 0; }
 .finding-basis { color: var(--text-tertiary); font-size: 12px; margin: 14px 0 0; }
+
+/* Isolate confirmation. A deliberate second step, since it cuts a VM off. */
+.confirm { border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 14px 16px; margin: 14px 0; background: var(--warning-bg); }
+.confirm p { color: var(--text-primary); margin: 0 0 12px; }
+.confirm button { margin-right: 10px; }
+.result-ok { color: var(--text-primary); }

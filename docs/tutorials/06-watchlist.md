@@ -89,10 +89,10 @@ shukractl security <vm>
 shukractl watch --json
 ```
 
-Or open Detections in the console. The event kind is `detection` and `rule` names the rule that fired. The message is the rule name plus the destination. `guest_attributed` is still false. The flight recorder keeps the same event, so `shukractl recorder <vm> --window 60s` shows it if it happened inside the window.
+Or open Detections in the console. The event kind is `detection` and `rule` names the rule that fired. The message is the rule name plus the destination. `guest_attributed` is false for a host connect. A rule that fires on a guest connect seen on the VM tap is `guest_attributed: true` with `attribution: "guest-tap"`, and it is a separate alert from a host connect to the same address. The flight recorder keeps the same event, so `shukractl recorder <vm> --window 60s` shows it if it happened inside the window.
 
 A connect that matches nothing is a normal `tcp_connect` event, not a detection.
 
 ## What you should not add
 
-Do not put "block this CIDR" in the YAML and expect it to happen. Enforcement is the isolate path, and [isolate does not attach](04-shukractl.md). Detection stays a notice until a later slice programs the tap, and even then the allow list for management access has to be explicit. See [roadmap-taptrace.md](../roadmap-taptrace.md).
+Do not put "block this CIDR" in the YAML and expect it to happen. A detection only notices. Enforcement is the separate, deliberate `isolate` step, which drops a whole VM's tap traffic except an explicit management allow list. See [Guest traffic and isolation](../tap.md).

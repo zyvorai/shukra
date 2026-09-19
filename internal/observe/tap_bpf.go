@@ -1,0 +1,203 @@
+//go:build linux && shukrabpf
+
+package observe
+
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"log"
+	"net"
+	"net/netip"
+	"os"
+	"sort"
+	"strings"
+	"sync"
+
+	"github.com/cilium/ebpf/ringbuf"
+	"github.com/zyvorai/shukra/internal/bpfgen"
+	"github.com/zyvorai/shukra/internal/event"
+)
+
+var tapErrOnce sync.Map
+
+// SyncTaps puts the tap program on the named interfaces and takes it off any
+// others. Names whose interface does not exist yet are tried again next time.
+// A failure is logged once per interface and reason, not on every scan.
+func SyncTaps(names []string) {
+	errs, err := bpfgen.SyncTaps(names)
+	if err != nil {
+		if _, seen := tapErrOnce.LoadOrStore("load:"+err.Error(), true); !seen {
+			log.Printf("tap program: %v", err)
+		}
+		return
+	}
+	for name, e := range errs {
+		if _, seen := tapErrOnce.LoadOrStore(name+":"+e.Error(), true); !seen {
+			log.Printf("tap program on %s: %v", name, e)
+		}
+	}
+}
+
+// TapProgram is the state of the tap program: attached once at least one VM tap
+// carries it, and detached, with the reason, otherwise.
+func TapProgram() (status, detail string) {
+	loaded, n, err := bpfgen.TapStatus()
+	switch {
+	case err != nil:
+		return "detached", err.Error()
+	case !loaded:
+		return "detached", "not loaded"
+	case n == 0:
+		return "detached", "no VM tap interfaces to attach to yet"
+	default:
+		return "attached", fmt.Sprintf("%d taps", n)
+	}
+}
+
+// TapSample reads the per-tap counters.
+func TapSample() []TapCounters {
+	stats := bpfgen.TapStats()
+	var out []TapCounters
+	for _, name := range bpfgen.TapAttached() {
+		iface, err := net.InterfaceByName(name)
+		if err != nil {
+			continue
+		}
+		s := stats[uint32(iface.Index)]
+		out = append(out, TapCounters{
+			Name: name, Ifindex: uint32(iface.Index),
+			FromPkts: s.FromPkts, FromBytes: s.FromBytes, ToPkts: s.ToPkts, ToBytes: s.ToBytes,
+			DroppedPkts: s.DroppedPkts, DroppedBytes: s.DroppedBytes, Isolated: bpfgen.TapIsolated(name),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+var tapStartOnce sync.Once
+
+// StartTap reads the tap event ring. Each event is a TCP connect attempt the
+// guest made, seen on its tap, so it is the guest's own traffic.
+func StartTap(handler func(event.Event)) {
+	tapStartOnce.Do(func() {
+		if handler == nil {
+			return
+		}
+		coll := bpfgen.TapCollection()
+		if coll == nil {
+			return
+		}
+		rd, err := ringbuf.NewReader(coll.Maps["tap_events"])
+		if err != nil {
+			lost.Add(1)
+			return
+		}
+		go func() {
+			var rec ringbuf.Record
+			for {
+				if err := rd.ReadInto(&rec); err != nil {
+					if errors.Is(err, os.ErrClosed) {
+						return
+					}
+					lost.Add(1)
+					continue
+				}
+				if e, ok := decodeTap(append([]byte(nil), rec.RawSample...), bpfgen.TapName); ok {
+					handler(e)
+				} else {
+					lost.Add(1)
+				}
+			}
+		}()
+	})
+}
+
+// decodeTap turns one tap ring sample into an event. The VM is filled in later,
+// from the interface name, by whoever knows which VM owns that tap.
+func decodeTap(b []byte, name func(ifindex uint32) string) (event.Event, bool) {
+	if len(b) < tapEventSize {
+		return event.Event{}, false
+	}
+	e := event.Event{
+		Kind:    event.KindGuestConnect,
+		Iface:   name(binary.LittleEndian.Uint32(b[8:12])),
+		DPort:   binary.LittleEndian.Uint16(b[12:14]),
+		Blocked: b[17] != 0,
+	}
+	switch b[16] {
+	case 2:
+		e.Src, e.Dst = net.IP(b[24:28]).String(), net.IP(b[40:44]).String()
+	case 10:
+		e.Src, e.Dst = net.IP(b[24:40]).String(), net.IP(b[40:56]).String()
+	default:
+		return event.Event{}, false
+	}
+	if e.Iface == "" {
+		return event.Event{}, false // a tap we no longer track
+	}
+	return e, true
+}
+
+// Enforcer turns isolation on and off on the taps that carry the program. It
+// refuses to work without a management allow list: an isolated VM that could
+// reach nothing could not be reached by the host that isolated it.
+type Enforcer struct {
+	allow    []netip.Prefix
+	loadErr  error
+	allowErr error
+}
+
+// NewEnforcer loads the allow list into the kernel program.
+func NewEnforcer(allow []netip.Prefix) *Enforcer {
+	e := &Enforcer{allow: allow}
+	if len(allow) > 0 {
+		e.allowErr = bpfgen.SetTapAllow(allow)
+	}
+	return e
+}
+
+func (e *Enforcer) Available() (bool, string) {
+	loaded, _, err := bpfgen.TapStatus()
+	switch {
+	case !loaded || err != nil:
+		return false, fmt.Sprintf("the tap program is not loaded: %v", err)
+	case len(e.allow) == 0:
+		return false, "no management allow list is configured (-isolate-allow), so refusing to isolate: an isolated VM must keep the access its host needs"
+	case e.allowErr != nil:
+		return false, fmt.Sprintf("the management allow list could not be loaded: %v", e.allowErr)
+	}
+	return true, ""
+}
+
+func (e *Enforcer) AllowList() []string {
+	out := make([]string, 0, len(e.allow))
+	for _, p := range e.allow {
+		out = append(out, p.String())
+	}
+	return out
+}
+
+func (e *Enforcer) Isolated(tap string) bool { return bpfgen.TapIsolated(tap) }
+
+func (e *Enforcer) set(taps []string, on bool) ([]string, error) {
+	var done []string
+	var failed []string
+	for _, t := range taps {
+		if err := bpfgen.SetTapIsolated(t, on); err != nil {
+			failed = append(failed, err.Error())
+			continue
+		}
+		done = append(done, t)
+	}
+	if len(failed) > 0 {
+		return done, errors.New(strings.Join(failed, "; "))
+	}
+	return done, nil
+}
+
+// Isolate flags the taps. It returns the ones that were flagged.
+func (e *Enforcer) Isolate(taps []string) ([]string, error) { return e.set(taps, true) }
+
+// Release clears the flag. It returns the taps that were cleared.
+func (e *Enforcer) Release(taps []string) ([]string, error) { return e.set(taps, false) }

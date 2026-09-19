@@ -68,7 +68,12 @@ func run(args []string, out io.Writer) error {
 		if len(args) < 2 {
 			return fmt.Errorf("isolate <vm>")
 		}
-		return isolateCmd(args[1], has(args[2:], "--json"), out)
+		return actCmd("isolate", args[1], has(args[2:], "--json"), out)
+	case "release":
+		if len(args) < 2 {
+			return fmt.Errorf("release <vm>")
+		}
+		return actCmd("release", args[1], has(args[2:], "--json"), out)
 	case "rules":
 		return rulesCmd(args[1:], out)
 	case "install-cli":
@@ -157,9 +162,9 @@ func traceCmd(args []string, out io.Writer) error {
 	}
 	kind := args[0]
 	switch kind {
-	case "kvm", "sched", "block", "net":
+	case "kvm", "sched", "block", "net", "tap":
 	default:
-		return fmt.Errorf("trace kvm|sched|block|net")
+		return fmt.Errorf("trace kvm|sched|block|net|tap")
 	}
 	vm := flagValue(args[1:], "--vm", "")
 	path := "/api/v1/trace/" + kind
@@ -306,12 +311,15 @@ func watchPoll(since uint64, asJSON bool, out io.Writer) (uint64, error) {
 	return since, nil
 }
 
-func isolateCmd(vm string, asJSON bool, out io.Writer) error {
+// actCmd asks the daemon to isolate or release a VM and prints what actually
+// happened. "applied" is the daemon's word, set only after the kernel program took
+// the change, so a refused or recorded-only request is never shown as done.
+func actCmd(action, vm string, asJSON bool, out io.Writer) error {
 	body, err := json.Marshal(map[string]string{"vm": vm})
 	if err != nil {
 		return err
 	}
-	b, _, err := do("POST", "/api/v1/isolate", body)
+	b, _, err := do("POST", "/api/v1/"+action, body)
 	if err != nil {
 		return err
 	}
@@ -322,11 +330,16 @@ func isolateCmd(vm string, asJSON bool, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "ISOLATE  %s\n", vm)
-	fmt.Fprintf(out, "enforcement   %s\n", m["enforcement"])
+	fmt.Fprintf(out, "%s  %s\n", strings.ToUpper(action), vm)
+	fmt.Fprintf(out, "enforcement   %v\n", m["enforcement"])
 	fmt.Fprintf(out, "applied       %v\n", m["applied"])
-	fmt.Fprintf(out, "%s\n", m["reason"])
-	fmt.Fprintln(out, "no datapath change — enforcement is not attached")
+	if taps := stringsOf(m["taps"]); len(taps) > 0 {
+		fmt.Fprintf(out, "taps          %s\n", strings.Join(taps, ", "))
+	}
+	fmt.Fprintf(out, "%v\n", m["reason"])
+	if applied, _ := m["applied"].(bool); !applied && m["enforcement"] == "not_attached" {
+		fmt.Fprintln(out, "no datapath change — enforcement is not attached")
+	}
 	return nil
 }
 
@@ -386,6 +399,7 @@ func formatTraceList(w io.Writer, m map[string]any) {
 	fmt.Fprintln(w, "  sched   sched_switch sched_wakeup exec. Delay samples only when slow")
 	fmt.Fprintln(w, "  block   block_rq_issue/complete log2 histogram. p50/p99 in userspace")
 	fmt.Fprintln(w, "  net     tcp_v4/v6_connect (exact) and sampled retransmits. QEMU process, not the guest")
+	fmt.Fprintln(w, "  tap     TCX on each VM tap: the guest's own traffic, and isolation")
 	fmt.Fprintln(w)
 	formatPrograms(w, m)
 }
@@ -441,13 +455,19 @@ func formatRecorder(w io.Writer, m map[string]any) {
 
 func formatSecurity(w io.Writer, m map[string]any) {
 	fmt.Fprintf(w, "SECURITY  %s  enforcement=%s\n", str(m, "vm"), str(m, "enforcement"))
+	if allow := stringsOf(m["allowList"]); len(allow) > 0 {
+		fmt.Fprintf(w, "  management allow list: %s\n", strings.Join(allow, ", "))
+	}
+	if why := str(m, "reason"); why != "" {
+		fmt.Fprintf(w, "  isolate is not enforced: %s\n", why)
+	}
 	rows := list(m, "detections")
 	if len(rows) == 0 {
 		fmt.Fprintln(w, "  no detections")
 		return
 	}
 	for _, e := range rows {
-		fmt.Fprintf(w, "  %s  %s  %s  guest_attributed=%v\n", str(e, "severity"), str(e, "dst"), str(e, "message"), e["guest_attributed"])
+		fmt.Fprintf(w, "  %s  %s  %s  guest_attributed=%v  attribution=%s\n", str(e, "severity"), str(e, "dst"), str(e, "message"), e["guest_attributed"], str(e, "attribution"))
 	}
 }
 
@@ -472,6 +492,9 @@ func formatTrace(w io.Writer, kind string, m map[string]any) {
 			fmt.Fprintf(w, "  issues=%s  read_p50=%s  read_p99=%s  write_p99=%s", num(row, "issues"), num(row, "readP50Ns"), num(row, "readP99Ns"), num(row, "writeP99Ns"))
 		case "net":
 			fmt.Fprintf(w, "  connects=%s  retransmits=%s  attribution=%s  guest_attributed=%v", num(row, "connects"), num(row, "retransmits"), str(row, "attribution"), row["guest_attributed"])
+		case "tap":
+			fmt.Fprintf(w, "  tap=%s  from_guest=%s B/%s pkts  to_guest=%s B/%s pkts  dropped=%s pkts  isolated=%v",
+				str(row, "tap"), num(row, "fromGuestBytes"), num(row, "fromGuestPackets"), num(row, "toGuestBytes"), num(row, "toGuestPackets"), num(row, "droppedPackets"), row["isolated"])
 		}
 		fmt.Fprintln(w)
 	}

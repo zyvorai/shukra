@@ -59,6 +59,10 @@ jobs:
         run: |
           go test -c -tags shukrabpf -o "$RUNNER_TEMP/observe.test" ./internal/observe
           sudo SHUKRA_BPF_TEST=1 "$RUNNER_TEMP/observe.test" -test.run TestKernelIntegration -test.v
+      - name: Tap program and isolation (network namespace, no KVM)
+        # A namespace stands in for the guest and a veth for its tap. Needs Linux 6.6+
+        # for TCX, so a red step here on an old runner kernel is a real answer.
+        run: scripts/test-tap.sh
       - name: Installer
         run: scripts/test-install.sh
       - name: Console tests

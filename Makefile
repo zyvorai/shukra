@@ -1,4 +1,4 @@
-.PHONY: deps generate build test test-bpf test-kernel install web dist
+.PHONY: deps generate build test test-bpf test-kernel test-tap install web dist
 
 PREFIX ?= /usr/local
 
@@ -47,6 +47,11 @@ test-kernel:
 	mkdir -p bin
 	go test -c -tags shukrabpf -o bin/observe.test ./internal/observe
 	sudo SHUKRA_BPF_TEST=1 bin/observe.test -test.run TestKernelIntegration -test.v
+
+# The tap program and isolation, end to end, in a network namespace. Needs Linux
+# 6.6+, root, and `make generate`.
+test-tap:
+	./scripts/test-tap.sh
 
 web:
 	npm --prefix web ci

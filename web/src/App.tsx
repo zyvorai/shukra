@@ -27,9 +27,9 @@ const heroes: Partial<Record<Page, { eyebrow: string; title: string; lede: strin
   sched: { eyebrow: 'Diagnostics', title: 'Scheduler delay.', lede: 'On-CPU time and run-queue delay for QEMU threads, and which thread is slow.', tint: 'amber' },
   block: { eyebrow: 'Diagnostics', title: 'Block latency.', lede: 'Requests, bytes, worst case and the latency distribution, from a log2 histogram on the QEMU I/O thread.', tint: 'amber' },
   programs: { eyebrow: 'Diagnostics', title: 'What is attached.', lede: 'kvm, sched, block, and net. Detached is an honest state.', tint: 'green' },
-  connections: { eyebrow: 'Network', title: 'Host connections.', lede: 'tcp_v4_connect from the QEMU process. Not the guest.', tint: 'purple' },
-  detections: { eyebrow: 'Security', title: 'New destinations.', lede: 'Watchlist hits. No packet was dropped.', tint: 'red' },
-  isolate: { eyebrow: 'Security', title: 'Hold the VM.', lede: 'The decision is recorded. The datapath is not programmed.', tint: 'red' },
+  connections: { eyebrow: 'Network', title: 'Host connections.', lede: "QEMU's own connects, and the guest's own on its tap when the tap program is attached.", tint: 'purple' },
+  detections: { eyebrow: 'Security', title: 'New destinations.', lede: 'Rule hits. A detection only notices. Isolating is a separate, deliberate step.', tint: 'red' },
+  isolate: { eyebrow: 'Security', title: 'Hold the VM.', lede: "Drops the VM's tap traffic except your management allow list. Nothing happens until you confirm.", tint: 'red' },
 };
 
 export default function App() {

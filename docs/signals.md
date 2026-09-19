@@ -7,6 +7,7 @@ Everything here is the QEMU process, seen from the host. None of it is measured 
 | `kvm` | Exit counts by reason. **Handling time**: `kvm_exit` to the next `kvm_entry` on the same vCPU thread, as a log2 histogram. Total time per reason | A halt blocks until an interrupt, so its time is guest idle. It is in the per-reason totals and left out of the latency histogram (reason 12 on VMX, 120 on SVM) |
 | `sched` | On-CPU time. **Run-queue delay** (wakeup to running) as a log2 histogram, per task | Per QEMU thread with `?threads=1`, so a slow vCPU is distinguishable from a slow iothread |
 | `block` | Completed requests, bytes, slowest request, and a log2 latency histogram, per direction | It is the QEMU I/O thread, not the guest filesystem. The slowest request is updated without a lock, so two CPUs racing can miss a slightly smaller maximum |
+| `tap` | Per-tap packets and bytes each way and what isolation dropped, from TCX on the VM tap. A `guest_connect` event per TCP SYN the guest sends, capped at 200 per tap per second | The only program that sees the guest. Needs Linux 6.6+. See [Guest traffic and isolation](tap.md) |
 | `net` | `tcp_v4_connect` and `tcp_v6_connect`, counted exactly in a kernel map. 1 in 64 retransmits become events, IPv4 and IPv6 | A dual-stack socket connecting to a v4-mapped address is counted once, by the IPv4 probe |
 
 ## Events

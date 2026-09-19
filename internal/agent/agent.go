@@ -4,6 +4,7 @@ package agent
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"sync"
@@ -80,6 +81,14 @@ func (a *Agent) Refresh() {
 		tgids = append(tgids, uint32(vm.PID))
 	}
 	observe.SetWatched(tgids)
+	var taps []string
+	for _, vm := range vms {
+		taps = append(taps, vm.Taps...)
+	}
+	observe.SyncTaps(taps)
+	if acted := a.State.ReapplyIsolations(); len(acted) > 0 {
+		log.Printf("isolation re-applied for %s", strings.Join(acted, ", "))
+	}
 	var programs []state.Program
 	for _, p := range observe.Programs() {
 		programs = append(programs, state.Program{Name: p.Name, Status: p.Status, Detail: p.Detail})
@@ -90,6 +99,7 @@ func (a *Agent) Refresh() {
 		a.evaluate(time.Now().UTC(), vms, c)
 	}
 	observe.Start(a.Ingest)
+	observe.StartTap(a.Ingest)
 }
 
 // evaluate runs the threshold rules against the latest counters.
@@ -134,6 +144,10 @@ func (a *Agent) Ingest(e event.Event) {
 		e.TS = time.Now().UTC()
 	}
 	cfg := a.cfg.Load()
+	if e.Kind == event.KindGuestConnect {
+		a.ingestGuest(e, cfg)
+		return
+	}
 	tgid := e.TGID
 	if tgid == 0 {
 		tgid = e.PID
@@ -188,16 +202,51 @@ func (a *Agent) Ingest(e event.Event) {
 	if e.Kind != event.KindTCPConnect {
 		return
 	}
+	a.connectRules(e, cfg, detection)
+}
+
+// The suppression key includes the attribution: QEMU's own connect and the guest's are
+// different facts, and one must not hide the other.
+// connectRules applies the destination and port rules to one connect, wherever it
+// was seen. The detection keeps the event's attribution, so a rule that fires on
+// what the guest did says the guest did it.
+func (a *Agent) connectRules(e event.Event, cfg *detect.Config, detection func(rule, severity, msg string) event.Event) {
 	if e.Dst != "" {
 		if rule, ok := cfg.Watch.Match(net.ParseIP(e.Dst)); ok {
-			a.raise(e.TS, cfg, "dest|"+rule.Name+"|"+e.VM.Name+"|"+e.Dst,
+			a.raise(e.TS, cfg, "dest|"+rule.Name+"|"+e.VM.Name+"|"+e.Attribution+"|"+e.Dst,
 				detection(rule.Name, rule.Severity, rule.Name+" destination "+e.Dst))
 		}
 	}
 	if rule, ok := cfg.MatchPort(e.DPort); ok {
-		a.raise(e.TS, cfg, fmt.Sprintf("port|%s|%s|%s:%d", rule.Name, e.VM.Name, e.Dst, e.DPort),
+		a.raise(e.TS, cfg, fmt.Sprintf("port|%s|%s|%s|%s:%d", rule.Name, e.VM.Name, e.Attribution, e.Dst, e.DPort),
 			detection(rule.Name, rule.Severity, fmt.Sprintf("%s port %d to %s", rule.Name, e.DPort, e.Dst)))
 	}
+}
+
+// ingestGuest handles a connect the guest made, seen on its tap. It joins the
+// event to the VM that owns the tap and marks it guest-attributed. A tap that no
+// VM in the current scan owns stays unattributed: this never names a guess.
+func (a *Agent) ingestGuest(e event.Event, cfg *detect.Config) {
+	for _, vm := range a.State.VMs() {
+		for _, t := range vm.Taps {
+			if t == e.Iface {
+				e.VM = event.VM{Name: vm.Name, UUID: vm.UUID, Runtime: vm.Runtime}
+				e.TGID = uint32(vm.PID)
+				e.Attribution = event.AttributionGuestTap
+			}
+		}
+	}
+	event.Normalize(&e)
+	a.State.AddEvent(e)
+	if e.VM.Name == "" {
+		return
+	}
+	a.connectRules(e, cfg, func(rule, severity, msg string) event.Event {
+		det := e
+		det.Kind = event.KindDetection
+		det.Rule, det.Severity, det.Message = rule, severity, msg
+		return det
+	})
 }
 
 func allowedExec(comm string) bool {

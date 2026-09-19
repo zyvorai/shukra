@@ -454,3 +454,96 @@ func TestRestartIsAStopAndAStart(t *testing.T) {
 		t.Fatal("pids do not identify which instance started and which stopped")
 	}
 }
+
+func newTapAgent(t *testing.T, yaml string) (*Agent, *state.State) {
+	t.Helper()
+	ag, st, _ := newAgent(t, yaml)
+	st.SetVMs([]identity.VM{
+		{Name: "db", UUID: "u1", Runtime: "qemu", PID: 100, Taps: []string{"tapdb"}},
+		{Name: "web", UUID: "u2", Runtime: "qemu", PID: 200, Taps: []string{"tapweb"}},
+	})
+	return ag, st
+}
+
+func guestConnect(ag *Agent, iface, src, dst string, dport uint16, blocked bool) {
+	ag.Ingest(event.Event{Kind: event.KindGuestConnect, TS: time.Now().UTC(), Iface: iface, Src: src, Dst: dst, DPort: dport, Blocked: blocked})
+}
+
+func TestGuestConnectIsJoinedToTheVMThatOwnsTheTap(t *testing.T) {
+	ag, st := newTapAgent(t, "")
+	guestConnect(ag, "tapweb", "10.0.0.5", "8.8.8.8", 53, false)
+	got := kinds(st, event.KindGuestConnect)
+	if len(got) != 1 {
+		t.Fatalf("%+v", got)
+	}
+	e := got[0]
+	if e.VM.Name != "web" || e.TGID != 200 || !e.GuestAttributed || e.Attribution != event.AttributionGuestTap ||
+		e.Src != "10.0.0.5" || e.Dst != "8.8.8.8" || e.DPort != 53 || e.Iface != "tapweb" {
+		t.Fatalf("%+v", e)
+	}
+	// Each VM gets its own tap's traffic and nobody else's.
+	if len(st.Events("db")) != 0 {
+		t.Fatal("another VM's guest traffic was attributed to db")
+	}
+}
+
+func TestAnUnownedTapNeverNamesAVM(t *testing.T) {
+	ag, st := newTapAgent(t, "destinations:\n  - cidr: 8.0.0.0/8\n    name: watched\n")
+	guestConnect(ag, "tapstray", "10.0.0.9", "8.8.8.8", 53, false)
+	e := kinds(st, event.KindGuestConnect)
+	if len(e) != 1 || e[0].VM.Name != "" || e[0].GuestAttributed || e[0].Attribution != event.AttributionUnattributed {
+		t.Fatalf("%+v", e)
+	}
+	if len(st.Detections("")) != 0 {
+		t.Fatal("a detection fired for traffic no VM owns, so it could not say whose it was")
+	}
+}
+
+func TestRulesFireOnWhatTheGuestDidAndSayTheGuestDidIt(t *testing.T) {
+	ag, st := newTapAgent(t, "destinations:\n  - cidr: 203.0.113.0/24\n    name: bad-net\nports:\n  - port: 25\n    name: smtp\n    severity: medium\n")
+	guestConnect(ag, "tapdb", "10.0.0.5", "203.0.113.7", 443, false)
+	guestConnect(ag, "tapdb", "10.0.0.5", "9.9.9.9", 25, true)
+	guestConnect(ag, "tapdb", "10.0.0.5", "9.9.9.9", 443, false) // matches nothing
+	dets := st.Detections("db")
+	if len(dets) != 2 {
+		t.Fatalf("%+v", dets)
+	}
+	for _, d := range dets {
+		if !d.GuestAttributed || d.Attribution != event.AttributionGuestTap || d.Iface != "tapdb" || d.VM.Name != "db" || d.Src != "10.0.0.5" {
+			t.Fatalf("a detection on guest traffic lost its attribution: %+v", d)
+		}
+	}
+	byRule := map[string]event.Event{}
+	for _, d := range dets {
+		byRule[d.Rule] = d
+	}
+	if byRule["bad-net"].Dst != "203.0.113.7" || !byRule["smtp"].Blocked {
+		t.Fatalf("%+v", byRule)
+	}
+}
+
+func TestAHostConnectDoesNotHideTheGuestsConnectToTheSameAddress(t *testing.T) {
+	ag, st := newTapAgent(t, "suppress: 1m\ndestinations:\n  - cidr: 185.0.0.0/8\n    name: egress\n")
+	now := time.Now().UTC()
+	// The same destination, once as QEMU's own socket and twice as the guest's.
+	ag.Ingest(event.Event{Kind: event.KindTCPConnect, TS: now, PID: 100, TGID: 100, Dst: "185.1.1.1", DPort: 443})
+	guestConnect(ag, "tapdb", "10.0.0.5", "185.1.1.1", 443, false)
+	guestConnect(ag, "tapdb", "10.0.0.5", "185.1.1.1", 443, false)
+	var host, guest int
+	for _, d := range st.Detections("db") {
+		switch {
+		case d.GuestAttributed && d.Attribution == event.AttributionGuestTap:
+			guest++
+		case !d.GuestAttributed && d.Attribution == event.AttributionQEMU:
+			host++
+		default:
+			t.Fatalf("a detection with a mixed-up attribution: %+v", d)
+		}
+	}
+	if host != 1 || guest != 1 {
+		t.Fatalf("host %d guest %d: each kind of connect is its own alert, and repeats of one kind are collapsed", host, guest)
+	}
+	if st.Suppressed() != 1 {
+		t.Fatalf("suppressed %d, want the one repeated guest connect", st.Suppressed())
+	}
+}

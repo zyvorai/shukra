@@ -46,11 +46,12 @@ type Audit struct {
 
 // Isolation is the response to an isolate request.
 type Isolation struct {
-	VM          string `json:"vm"`
-	Enforcement string `json:"enforcement"`
-	Applied     bool   `json:"applied"`
-	Reason      string `json:"reason"`
-	Audit       Audit  `json:"audit"`
+	VM          string   `json:"vm"`
+	Enforcement string   `json:"enforcement"`
+	Applied     bool     `json:"applied"`
+	Taps        []string `json:"taps,omitempty"`
+	Reason      string   `json:"reason"`
+	Audit       Audit    `json:"audit"`
 }
 
 // Explain is the evidence available for one VM, plus what this build cannot say.
@@ -95,6 +96,8 @@ type State struct {
 	seq        uint64
 	connects   map[string]uint64
 	ready      bool
+	enforcer   Enforcer
+	tapSource  func() []TapStat
 	cpuVendor  string
 	persist    Persister
 	hooks      []func(event.Event)
@@ -119,6 +122,7 @@ func New(hostname string) *State {
 			{Name: "sched", Status: "detached", Detail: "not attached yet"},
 			{Name: "block", Status: "detached", Detail: "not attached yet"},
 			{Name: "net", Status: "detached", Detail: "not attached yet"},
+			{Name: "tap", Status: "detached", Detail: "not attached yet"},
 		},
 	}
 }
@@ -329,29 +333,6 @@ func (s *State) Recorder(vm string, window time.Duration, now time.Time) []event
 	return s.rec.Window(vm, window, now)
 }
 
-func (s *State) Isolate(vm, actor string) Isolation {
-	rec := Isolation{
-		VM:          vm,
-		Enforcement: "not_attached",
-		Applied:     false,
-		Reason:      "TC/TCX tap enforcement is not in this build. No program was attached.",
-		Audit: Audit{
-			TS: time.Now().UTC(), Actor: actor, Action: "isolate", VM: vm, Result: "recorded_only",
-		},
-	}
-	s.mu.Lock()
-	s.isolations = append(s.isolations, rec)
-	if len(s.isolations) > MaxEvents {
-		s.isolations = append([]Isolation(nil), s.isolations[len(s.isolations)-MaxEvents:]...)
-	}
-	p := s.persist
-	s.mu.Unlock()
-	if p != nil {
-		p.Isolation(rec)
-	}
-	return rec
-}
-
 // Isolations is the audit trail of isolate requests, oldest first.
 func (s *State) Isolations() []Isolation {
 	s.mu.RLock()
@@ -368,12 +349,18 @@ func (s *State) Status() Status {
 			att++
 		}
 	}
+	summary := "observe: host traces only, guest tap attribution not attached"
+	for _, p := range s.programs {
+		if p.Name == "tap" && p.Status == "attached" {
+			summary = "observe: host traces, and guest traffic on the VM taps (" + p.Detail + ")"
+		}
+	}
 	return Status{
 		Version: version.Version, Product: version.Product, Tagline: version.Tagline,
 		Mode: "observe", Datapath: "tracepoint-kprobe", Healthy: true,
 		VMs: len(s.vms), ProgramsAttached: att, ProgramsTotal: len(s.programs),
 		Detections: len(s.detections),
-		Summary:    "observe: host traces only, guest tap attribution not attached",
+		Summary:    summary,
 	}
 }
 
@@ -489,17 +476,23 @@ func (s *State) Explain(name string, now time.Time) Explain {
 	if len(net) > 0 && (net[0].Connects > 0 || net[0].Retransmits > 0) {
 		evidence = append(evidence, "TCP connects are from the QEMU process. They are not guest flows.")
 	}
+	missing := []string{"CPU steal", "in-guest process identity"}
+	tapAttached := false
+	for _, p := range s.Programs() {
+		if p.Name == "tap" && p.Status == "attached" {
+			tapAttached = true
+		}
+	}
+	if !tapAttached {
+		missing = append([]string{"guest tap attribution (TCX on the VM tap is not attached)"}, missing...)
+	}
 	return Explain{
 		VM: vm, Question: "why is this VM slow?",
 		Findings: diagnose(vm.Name != "", kvm, sched, s.SchedThreads(name), block, net),
 		Basis:    Basis,
 		Evidence: evidence,
-		Missing: []string{
-			"guest tap attribution (TC/TCX on the VM tap is not attached)",
-			"CPU steal",
-			"in-guest process identity",
-		},
-		Events: s.Recorder(name, 60*time.Second, now),
+		Missing:  missing,
+		Events:   s.Recorder(name, 60*time.Second, now),
 	}
 }
 

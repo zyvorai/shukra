@@ -15,11 +15,15 @@ const (
 	KindDetection     Kind = "detection"
 	KindVMStart       Kind = "vm_start"
 	KindVMStop        Kind = "vm_stop"
+	KindGuestConnect  Kind = "guest_connect"
 )
 
 const (
 	AttributionQEMU         = "qemu-process"
 	AttributionUnattributed = "unattributed"
+	// AttributionGuestTap marks an event seen on a VM's tap interface. It is the
+	// only attribution under which an event is guest_attributed.
+	AttributionGuestTap = "guest-tap"
 )
 
 // VM is the identity attached to an event. Empty name means the PID was not a QEMU thread.
@@ -44,9 +48,14 @@ type Event struct {
 	TGID            uint32    `json:"tgid,omitempty"`
 	// PPID is the tgid of the parent process, read by the kernel program for exec
 	// and exit events. It lets an event be joined to a VM after the process is gone.
-	PPID    uint32 `json:"ppid,omitempty"`
-	Comm    string `json:"comm,omitempty"`
-	Dst     string `json:"dst,omitempty"`
+	PPID uint32 `json:"ppid,omitempty"`
+	Comm string `json:"comm,omitempty"`
+	Dst  string `json:"dst,omitempty"`
+	// Src, Iface and Blocked are set on events seen on a VM tap. Iface is the tap
+	// name, and Blocked says isolation dropped the connect attempt.
+	Src     string `json:"src,omitempty"`
+	Iface   string `json:"iface,omitempty"`
+	Blocked bool   `json:"blocked,omitempty"`
 	DPort   uint16 `json:"dport,omitempty"`
 	Message string `json:"message,omitempty"`
 	// Rule names the detection rule that fired, so a consumer can route on it
@@ -56,15 +65,22 @@ type Event struct {
 	LatencyNS uint64 `json:"latency_ns,omitempty"`
 }
 
-// Normalize forces the product name and the guest-attribution boundary.
+// Normalize forces the product name and the guest-attribution boundary. An event
+// is guest_attributed only when it was seen on a VM's tap and names that VM.
+// Everything else, including anything read back from a file, is the QEMU process
+// or unattributed.
 func Normalize(e *Event) {
 	e.Product = "shukra"
+	if e.Attribution == AttributionGuestTap && e.VM.Name != "" {
+		e.GuestAttributed = true
+		return
+	}
 	e.GuestAttributed = false
 	if e.VM.Name != "" {
 		e.Attribution = AttributionQEMU
 		return
 	}
-	if e.Attribution == "" {
+	if e.Attribution == "" || e.Attribution == AttributionGuestTap {
 		e.Attribution = AttributionUnattributed
 	}
 }

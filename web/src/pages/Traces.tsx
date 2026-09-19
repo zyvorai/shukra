@@ -98,11 +98,22 @@ export function Programs() {
 
 export function Connections() {
   const { data, err } = useAPI<{ events: Row[] }>('/api/v1/events', { refreshMs: LIVE_MS });
-  const rows = (data?.events || []).filter((e) => e.kind === 'tcp_connect' || e.kind === 'tcp_retransmit');
+  const all = data?.events || [];
+  const host = all.filter((e) => e.kind === 'tcp_connect' || e.kind === 'tcp_retransmit');
+  const guest = all.filter((e) => e.kind === 'guest_connect');
   return (
     <div>
       <HostBanner />
-      <Trace title="Host connections" err={err} rows={rows} cols={['ts', 'kind', 'dst', 'dport', 'attribution', 'guest_attributed']} />
+      <Trace title="Host connections" err={err} rows={host} cols={['ts', 'kind', 'dst', 'dport', 'attribution', 'guest_attributed']} />
+      {guest.length > 0 && (
+        <Trace
+          title="Guest connections (seen on the VM tap)"
+          err=""
+          rows={guest}
+          cols={['ts', 'vm', 'src', 'dst', 'dport', 'blocked', 'attribution', 'guest_attributed']}
+          format={{ vm: (v) => String((v as { name?: string } | undefined)?.name ?? '—'), blocked: (v) => (v ? 'dropped' : '—') }}
+        />
+      )}
     </div>
   );
 }

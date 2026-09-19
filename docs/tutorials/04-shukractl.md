@@ -34,7 +34,7 @@ shukractl vms
 shukractl vms --json
 ```
 
-`status` is the one screen to trust first: product, version, mode `observe`, VM count, how many programs attached, detection count. The last line is the boundary, not a slogan: host traces only, guest tap attribution not attached.
+`status` is the one screen to trust first: product, version, mode `observe`, VM count, how many programs attached, detection count. The last line is the boundary, not a slogan: it says whether guest tap attribution is attached.
 
 `--json` is the form to pipe. Human boards are for a TTY.
 
@@ -50,7 +50,7 @@ shukractl trace net --vm osboxes-debian
 
 `trace kvm` is exit, entry, MMIO, and PIO counters for that QEMU process. It is not a per-exit log.
 
-`trace net` is `tcp_v4_connect` and a 1-in-64 sample of retransmits. The socket owner is QEMU. Do not brief it as guest egress. The JSON says `guest_attributed: false` and `attribution: "qemu-process"` when the PID joined a VM.
+`trace net` is `tcp_v4_connect` and `tcp_v6_connect` counted exactly, and a 1-in-64 sample of retransmits. The socket owner is QEMU. Do not brief it as guest egress. The JSON says `guest_attributed: false` and `attribution: "qemu-process"` when the PID joined a VM. The guest's own traffic is `trace tap`, seen on the VM's tap.
 
 A VM name that does not match is an empty result, not a guessed one.
 
@@ -81,6 +81,6 @@ shukractl isolate osboxes-debian
 
 `security` is the destination watchlist. A hit means the QEMU process connected to a CIDR in the YAML. See [the watchlist tutorial](06-watchlist.md).
 
-`isolate` is a POST. The record is stored. The response is `applied: false` and `enforcement: "not_attached"`. The CLI prints that. If a runbook says the VM is now cut off, the runbook is wrong for this build.
+`isolate` is a POST that does something. With the tap program attached and a management allow list configured (`shukrad -isolate-allow ...`), it drops the VM's tap traffic except ARP, IPv6 neighbour discovery and that list, and prints `applied true` with the taps it changed. `release` lifts it. Without an allow list it is refused and prints the reason, and `applied` stays `false`. `applied` is the daemon's word, set only after the kernel took the change, so a runbook can trust it. Isolation holds while `shukrad` runs and is re-applied after a restart, but the tap is open while the daemon is down. See [Guest traffic and isolation](../tap.md).
 
 Next: the same facts in the [console](05-console.md).

@@ -134,25 +134,38 @@ func routes(st *state.State) *http.ServeMux {
 	})
 	mux.HandleFunc("GET /api/v1/security", func(w http.ResponseWriter, r *http.Request) {
 		vm := r.URL.Query().Get("vm")
-		writeJSON(w, http.StatusOK, map[string]any{
-			"vm":          vm,
-			"detections":  st.Detections(vm),
-			"enforcement": "not_attached",
-		})
+		mode, allow, why := st.Enforcement()
+		out := map[string]any{"vm": vm, "detections": st.Detections(vm), "enforcement": mode, "allowList": allow}
+		if why != "" {
+			out["reason"] = why
+		}
+		writeJSON(w, http.StatusOK, out)
 	})
-	mux.HandleFunc("POST /api/v1/isolate", func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			VM string `json:"vm"`
+	act := func(do func(vm, actor string) state.Isolation) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				VM string `json:"vm"`
+			}
+			if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil || body.VM == "" {
+				http.Error(w, "vm is required", http.StatusBadRequest)
+				return
+			}
+			actor := r.Header.Get("X-Shukra-Actor")
+			if actor == "" {
+				actor = "api"
+			}
+			writeJSON(w, http.StatusOK, do(body.VM, actor))
 		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil || body.VM == "" {
-			http.Error(w, "vm is required", http.StatusBadRequest)
-			return
-		}
-		actor := r.Header.Get("X-Shukra-Actor")
-		if actor == "" {
-			actor = "api"
-		}
-		writeJSON(w, http.StatusOK, st.Isolate(body.VM, actor))
+	}
+	mux.HandleFunc("POST /api/v1/isolate", act(st.Isolate))
+	mux.HandleFunc("POST /api/v1/release", act(st.Release))
+	mux.HandleFunc("GET /api/v1/trace/tap", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"attribution":     "guest-tap",
+			"guestAttributed": true,
+			"note":            "Traffic seen on the host side of each VM tap: from_guest is what the guest sent, to_guest is what was sent to it.",
+			"rows":            st.Taps(r.URL.Query().Get("vm")),
+		})
 	})
 	return mux
 }

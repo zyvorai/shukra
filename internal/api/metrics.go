@@ -136,6 +136,31 @@ func writeMetrics(w io.Writer, st *state.State) {
 	}
 	writeHistograms(w, "shukra_kvm_exit_latency_seconds", "KVM exit handling time, kvm_exit to the next kvm_entry. Halts are excluded.", kl)
 
+	taps := st.Taps("")
+	if len(taps) > 0 {
+		counter("shukra_tap_bytes_total", "Bytes on a VM tap, from the guest's point of view. This is the guest's own traffic.")
+		for _, t := range taps {
+			fmt.Fprintf(w, "shukra_tap_bytes_total{%s,tap=%q,direction=\"from_guest\"} %d\nshukra_tap_bytes_total{%s,tap=%q,direction=\"to_guest\"} %d\n",
+				lbl(t.VM), t.Tap, t.FromBytes, lbl(t.VM), t.Tap, t.ToBytes)
+		}
+		counter("shukra_tap_packets_total", "Packets on a VM tap, from the guest's point of view.")
+		for _, t := range taps {
+			fmt.Fprintf(w, "shukra_tap_packets_total{%s,tap=%q,direction=\"from_guest\"} %d\nshukra_tap_packets_total{%s,tap=%q,direction=\"to_guest\"} %d\n",
+				lbl(t.VM), t.Tap, t.FromPkts, lbl(t.VM), t.Tap, t.ToPkts)
+		}
+		counter("shukra_tap_dropped_packets_total", "Packets isolation dropped on a VM tap.")
+		for _, t := range taps {
+			fmt.Fprintf(w, "shukra_tap_dropped_packets_total{%s,tap=%q} %d\n", lbl(t.VM), t.Tap, t.DroppedPkts)
+		}
+		gauge("shukra_tap_isolated", "1 while the VM tap is isolated.")
+		for _, t := range taps {
+			v := 0
+			if t.Isolated {
+				v = 1
+			}
+			fmt.Fprintf(w, "shukra_tap_isolated{%s,tap=%q} %d\n", lbl(t.VM), t.Tap, v)
+		}
+	}
 	net := st.Net("")
 	counter("shukra_tcp_connects_total", "tcp_v4_connect from the QEMU process. Not guest traffic.")
 	for _, r := range net {

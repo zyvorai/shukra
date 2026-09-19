@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/zyvorai/shukra/internal/agent"
 	"github.com/zyvorai/shukra/internal/api"
+	"github.com/zyvorai/shukra/internal/observe"
 	"github.com/zyvorai/shukra/internal/persist"
 	"github.com/zyvorai/shukra/internal/sink"
 	"github.com/zyvorai/shukra/internal/state"
@@ -35,6 +37,7 @@ func main() {
 	alertFile := flag.String("alert-file", "", "append each detection as a JSON line to this file")
 	tlsCert := flag.String("tls-cert", "", "serve HTTPS with this certificate (PEM). Needs -tls-key. SIGHUP reloads it")
 	tlsKey := flag.String("tls-key", "", "private key for -tls-cert (PEM)")
+	isolateAllow := flag.String("isolate-allow", "", "comma-separated CIDRs an isolated VM can still reach (your management and monitoring networks). Without it isolate is refused")
 	noAuth := flag.Bool("no-auth", false, "serve the API without a bearer key")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
@@ -104,6 +107,21 @@ func main() {
 		st.OnDetection(alerts.Emit)
 		st.SetSinkStats(alerts.Stats)
 	}
+	allow, err := parseAllow(*isolateAllow)
+	if err != nil {
+		log.Fatalf("isolate-allow: %v", err)
+	}
+	st.SetEnforcer(observe.NewEnforcer(allow))
+	st.SetTapSource(func() []state.TapStat {
+		var out []state.TapStat
+		for _, t := range observe.TapSample() {
+			out = append(out, state.TapStat{
+				Name: t.Name, FromPkts: t.FromPkts, FromBytes: t.FromBytes, ToPkts: t.ToPkts, ToBytes: t.ToBytes,
+				DroppedPkts: t.DroppedPkts, DroppedBytes: t.DroppedBytes, Isolated: t.Isolated,
+			})
+		}
+		return out
+	})
 	ag, err := agent.New(st, *proc, *watch, host)
 	if err != nil {
 		log.Fatal(err)
@@ -211,6 +229,27 @@ func main() {
 			log.Printf("persist: closing %s: %v", *dataDir, err)
 		}
 	}
+}
+
+// parseAllow reads the management allow list. A bare address is a single host.
+func parseAllow(list string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, f := range strings.Split(list, ",") {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		if p, err := netip.ParsePrefix(f); err == nil {
+			out = append(out, p.Masked())
+			continue
+		}
+		a, err := netip.ParseAddr(f)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not an address or CIDR", f)
+		}
+		out = append(out, netip.PrefixFrom(a, a.BitLen()))
+	}
+	return out, nil
 }
 
 // isLoopback reports whether addr only accepts connections from this host.
