@@ -161,6 +161,15 @@ func writeMetrics(w io.Writer, st *state.State) {
 			fmt.Fprintf(w, "shukra_tap_isolated{%s,tap=%q} %d\n", lbl(t.VM), t.Tap, v)
 		}
 	}
+	// Only while the drops program is measuring: a VM it cannot see has no series, never a zero. The
+	// per-reason counts only grow, so this is a counter. What is Shukra's and what is not is a difference
+	// of two counters read a moment apart, which can dip, so it is served on the API and not here.
+	if drops, _ := st.Drops(""); len(drops) > 0 {
+		counter("shukra_tap_kernel_drops_total", "Packets the kernel dropped on a VM tap, by the kernel's own reason. Shukra's isolation drops appear here as TC_INGRESS or TC_EGRESS.")
+		for _, d := range drops {
+			fmt.Fprintf(w, "shukra_tap_kernel_drops_total{%s,tap=%q,reason=%q} %d\n", lbl(d.VM), d.Tap, d.Reason, d.Count)
+		}
+	}
 	net := st.Net("")
 	counter("shukra_tcp_connects_total", "tcp_v4_connect from the QEMU process. Not guest traffic.")
 	for _, r := range net {

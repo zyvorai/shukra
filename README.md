@@ -20,7 +20,7 @@ Observe. Protect. Explain.
 
 ## What you get in 0.1
 
-Five observation programs. Hot paths stay in maps. The ring buffer is only for discrete events.
+Six observation programs. Hot paths stay in maps. The ring buffer is only for discrete events.
 
 | Program | Hooks | What it records |
 |---|---|---|
@@ -29,6 +29,7 @@ Five observation programs. Hot paths stay in maps. The ring buffer is only for d
 | `block` | `block_rq_issue`, `block_rq_complete` | Latency histogram, requests, bytes and the slowest request, per direction |
 | `net` | `tcp_v4_connect`, `tcp_v6_connect`, sampled `tcp_retransmit_skb` | Exact connect counts (IPv4 and IPv6) and 1-in-64 retransmit samples |
 | `tap` | TCX on each VM tap (Linux 6.6+) | The guest's own traffic: per-tap counters, an event per TCP connect and per new UDP flow, and isolation |
+| `drops` | `skb:kfree_skb` on each VM tap | What the kernel dropped on the tap and why, with Shukra's own isolation drops subtracted, so another program dropping a VM's traffic (Cilium, a dataplane, a tc filter) or a guest not reading its NIC is named |
 
 Percentiles come from log2 buckets and can read up to 2x high. See [What each program measures](docs/signals.md) for the caveats.
 
@@ -98,7 +99,7 @@ The CLI never attaches a program. The tap program pins its links and maps under 
 | `GET /metrics` | bearer | Prometheus text. A VM with no measured counters has no series, not a zero |
 | `GET /api/v1/events?since=<seq>` | bearer | Events newer than `seq`. Every event carries a `seq` that only grows |
 | `GET /api/v1/stream` | bearer | Server-sent events. Resume with `Last-Event-ID` or `?since=` |
-| `GET /api/v1/vms`, `GET /api/v1/trace/{kvm,sched,block,net,tap}` | bearer | The VMs and their per-VM counters. An empty list is `[]`, never `null` |
+| `GET /api/v1/vms`, `GET /api/v1/trace/{kvm,sched,block,net,tap,drops}` | bearer | The VMs and their per-VM counters. An empty list is `[]`, never `null` |
 | `GET /api/v1/explain?vm=<name>&window=<dur>` | bearer | Ranked findings for one VM. `window` is 10s to 5m, or `0` for lifetime; the default is the last minute |
 | `GET /api/v1/doctor` | bearer, read-only key is enough | The same audit as `shukractl doctor`: what needs attention, worst first. It never contains a key |
 | `GET /api/v1/isolations` | bearer | Audit trail of isolate and release requests, and whether each took effect |

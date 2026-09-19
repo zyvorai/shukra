@@ -60,6 +60,7 @@ thresholds:            # per VM, over a window
 | `kvm_exit_latency_p99_ms` | p99 host time handling a KVM exit in the window. Halts are excluded, since they are guest idle |
 | `runqueue_delay_p99_ms` | p99 wait for a host CPU after a wakeup, across the VM's threads |
 | `block_read_bytes_per_sec`, `block_write_bytes_per_sec`, `block_iops` | Throughput and request rate on the QEMU I/O thread |
+| `guest_drops_per_sec` | Packets per second the kernel dropped on the VM's taps that Shukra did not (another program, not isolation). Needs the drops program; without it a rule says nothing |
 | `kvm_exits_per_sec` | KVM exits per second |
 | `tcp_retransmits_per_sec` | retransmits per second |
 

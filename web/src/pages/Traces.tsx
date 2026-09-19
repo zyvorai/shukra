@@ -91,6 +91,33 @@ export function Block() {
   );
 }
 
+export function Drops() {
+  const { data, err } = useAPI<{ measured: boolean; taps: Row[]; rows: Row[] }>('/api/v1/trace/drops', { refreshMs: LIVE_MS });
+  if (data && !data.measured) {
+    return (
+      <section className="card">
+        <p className="eyebrow">TRACE</p>
+        <h3>Packets the kernel dropped on VM taps</h3>
+        <p className="empty-state">The drops program is not measuring, so nothing can be said about drops. The Programs page says why. Shukra does not show a zero it did not measure.</p>
+      </section>
+    );
+  }
+  return (
+    <>
+      <Trace
+        title="Packets the kernel dropped on VM taps"
+        err={err}
+        rows={data?.taps}
+        cols={['vm', 'tap', 'kernelDrops', 'shukraDropped', 'otherDrops', 'guestNotReading']}
+      />
+      <Trace title="By reason" err="" rows={data?.rows} cols={['vm', 'tap', 'reason', 'count', 'location']} />
+      <p className="hint">
+        Shukra&apos;s own isolation drops show up as TC_INGRESS or TC_EGRESS, and are subtracted: <b>other drops</b> is what something else did. A full queue means the guest is not reading its NIC.
+      </p>
+    </>
+  );
+}
+
 export function Programs() {
   const { data, err } = useAPI<{ programs: Row[] }>('/api/v1/programs', { refreshMs: LIVE_MS });
   return <Trace title="Programs" err={err} rows={data?.programs} cols={['name', 'status', 'detail']} />;

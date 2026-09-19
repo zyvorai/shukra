@@ -27,6 +27,8 @@ type vmSnap struct {
 	exits, delayNs, wakeups, retrans uint64
 	readBytes, writeBytes, ops       uint64
 	read, write, kvmLat, schedHist   []uint64
+	foreignDrops                     uint64
+	foreignOK                        bool // the drops program was measuring when this was taken
 }
 
 type snapshot struct {
@@ -40,6 +42,19 @@ type snapshot struct {
 // are the QEMU process's, not the guest's. Not safe for concurrent use.
 type Evaluator struct {
 	history []snapshot
+	foreign map[string]uint64
+}
+
+// SetForeignDrops gives, per VM, how many packets the kernel has dropped on its taps that Shukra did
+// not. Nil means the drops program is not measuring, and guest_drops_per_sec then says nothing.
+func (e *Evaluator) SetForeignDrops(m map[string]uint64) { e.foreign = m }
+
+func (e *Evaluator) snapOf(name string, c aggregate.Counters) vmSnap {
+	s := snap(c)
+	if e.foreign != nil {
+		s.foreignDrops, s.foreignOK = e.foreign[name], true
+	}
+	return s
 }
 
 // Evaluate records cur and returns the rules that are crossed right now.
@@ -73,7 +88,7 @@ func (e *Evaluator) Evaluate(now time.Time, cur map[string]aggregate.Counters, r
 			if !ok {
 				continue
 			}
-			v, ok := metric(r.Metric, old, snap(cur[vm]), span)
+			v, ok := metric(r.Metric, old, e.snapOf(vm, cur[vm]), span)
 			if !ok {
 				continue
 			}
@@ -88,7 +103,7 @@ func (e *Evaluator) Evaluate(now time.Time, cur map[string]aggregate.Counters, r
 func (e *Evaluator) record(now time.Time, cur map[string]aggregate.Counters, keep time.Duration) {
 	s := snapshot{at: now, vms: make(map[string]vmSnap, len(cur))}
 	for n, c := range cur {
-		s.vms[n] = snap(c)
+		s.vms[n] = e.snapOf(n, c)
 	}
 	e.history = append(e.history, s)
 	// Keep one snapshot at or before the oldest edge any rule needs.
@@ -155,6 +170,12 @@ func metric(name string, old, cur vmSnap, span time.Duration) (float64, bool) {
 		return float64(d) / secs, ok
 	case MetricBlockIOPS:
 		d, ok := sub(cur.ops, old.ops)
+		return float64(d) / secs, ok
+	case MetricGuestDropsPerSec:
+		if !old.foreignOK || !cur.foreignOK {
+			return 0, false // not measured then or now: say nothing, not zero
+		}
+		d, ok := sub(cur.foreignDrops, old.foreignDrops)
 		return float64(d) / secs, ok
 	}
 	return 0, false

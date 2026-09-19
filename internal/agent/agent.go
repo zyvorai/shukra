@@ -111,6 +111,7 @@ func (a *Agent) Refresh() {
 // evaluate runs the threshold rules against the latest counters.
 func (a *Agent) evaluate(now time.Time, vms []identity.VM, byPID map[uint32]aggregate.Counters) {
 	cfg := a.cfg.Load()
+	a.eval.SetForeignDrops(a.State.ForeignDrops())
 	fired := a.eval.Evaluate(now, aggregate.PerVM(vms, byPID), cfg.Thresholds)
 	for _, f := range fired {
 		var joined identity.VM

@@ -8,6 +8,7 @@ Everything here is the QEMU process, seen from the host. None of it is measured 
 | `sched` | On-CPU time. **Run-queue delay** (wakeup to running) as a log2 histogram, per task | Per QEMU thread with `?threads=1`, so a slow vCPU is distinguishable from a slow iothread |
 | `block` | Completed requests, bytes, slowest request, and a log2 latency histogram, per direction | It is the QEMU I/O thread, not the guest filesystem. The slowest request is updated without a lock, so two CPUs racing can miss a slightly smaller maximum |
 | `tap` | Per-tap packets and bytes each way and what isolation dropped, from TCX on the VM tap. A `guest_connect` event per TCP SYN and a `guest_flow` event per new UDP flow, capped at 200 per tap per second | The only program that sees the guest. Needs Linux 6.6+. See [Guest traffic and isolation](tap.md) |
+| `drops` | What the kernel dropped on each VM tap, counted by the kernel's own reason (`skb:kfree_skb`): TC_INGRESS, TC_EGRESS, FULL_RING and the rest, and the kernel function that freed the last one | Only the VM taps are counted. Shukra's own isolation drops appear as TC_INGRESS or TC_EGRESS, so they are subtracted using the tap program's `dropped` count: what is left is **someone else's**. A full queue (FULL_RING) is the guest not reading its NIC, and is reported on its own. The function is named only if `/proc/kallsyms` shows real addresses, which needs `CAP_SYSLOG`; otherwise the address is shown. Reason names come from this kernel's BTF, and an unknown reason is shown as its number |
 | `net` | `tcp_v4_connect` and `tcp_v6_connect`, counted exactly in a kernel map. 1 in 64 retransmits become events, IPv4 and IPv6 | A dual-stack socket connecting to a v4-mapped address is counted once, by the IPv4 probe |
 
 ## Events
@@ -49,10 +50,12 @@ There is no `_sum` series. The kernel keeps buckets, not a total, and a sum buil
 | `shukra_sched_runqueue_delay_seconds` | histogram, `vm` |
 | `shukra_kvm_exit_latency_seconds` | histogram, `vm` |
 | `shukra_kvm_exits_by_reason_total` | counter, `vm`, `reason`, `name` (Intel only) |
+| `shukra_tap_kernel_drops_total` | counter, `vm`, `tap`, `reason`. Only while the drops program is measuring. The Shukra/other split is on `/api/v1/trace/drops`, not here, because it is a difference of two counters read a moment apart and can dip |
 | `shukra_kvm_exit_handling_seconds_total` | counter, `vm`, `reason`, `name`. A halt's time is guest idle |
 
 ## Known limits
 
+- The `drops` program refuses to attach unless this kernel's `skb:kfree_skb` is laid out the way the program reads it (it has a `reason` field, so Linux 5.17 or newer, at the expected offsets), and says why. A difference of fewer than 5 packets between the kernel's count and Shukra's is treated as skew between two reads, not as another program dropping traffic.
 - Block bytes and requests are attributed to the task that **dispatched** the request, which is usually the submitting thread but not always: the block layer sometimes dispatches from a kernel worker, and those requests land on that worker's row, not the QEMU thread's. In an integration test on a 6.8 kernel about 3% of direct reads were attributed away from the thread that issued them. Treat a VM's block figures as slightly under-counted, most of all under heavy queueing. Latency percentiles are unaffected, since they come from the requests that were attributed.
 - A connect to a v4-mapped address on an `IPV6_V6ONLY` socket is refused by the kernel before any connection is attempted, so it is not counted. A dual-stack socket's v4-mapped connect is counted once.
 

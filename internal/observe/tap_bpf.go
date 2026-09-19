@@ -37,6 +37,7 @@ func SyncTaps(names []string) {
 			log.Printf("tap program on %s: %v", name, e)
 		}
 	}
+	watchDrops()
 }
 
 // TapProgram is the state of the tap program: attached once at least one VM tap

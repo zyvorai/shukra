@@ -81,7 +81,9 @@ Pinning needs a bpf filesystem at `/sys/fs/bpf` (present on any systemd host). W
 
 ## When guests cannot reach each other
 
-Shukra's program can only drop a frame on a tap that is **isolated**, and it counts every frame it drops (`dropped` in `trace tap`). So if traffic is being lost and `dropped` is 0, something else is dropping it, and the kernel will say where. Trace the packet drops while the traffic runs:
+Shukra's program can only drop a frame on a tap that is **isolated**, and it counts every frame it drops (`dropped` in `trace tap`). So if traffic is being lost and `dropped` is 0, something else is dropping it. **`shukractl trace drops` says so directly**: for each tap it gives what the kernel dropped by reason, how many of those were Shukra's, and how many were not (`other`). `shukractl doctor` warns (`vm-drops-not-shukra`) when another program is dropping a VM's traffic, and (`vm-nic-not-consumed`) when a guest is not reading its NIC; `explain` gives the same as a cause; and a `guest_drops_per_sec` rule can alert on it.
+
+Where the `drops` program is not attached (an older kernel, or a build without BPF), the kernel will still say where. Trace the packet drops by hand while the traffic runs:
 
 ```bash
 sudo bpftrace -e 'tracepoint:skb:kfree_skb /args->protocol == 0x800/ {

@@ -303,6 +303,12 @@ check "shukra saw that connect as a guest_connect on the sender's tap, tcp, gues
 check "the peer's tap carried its reply (from-guest packets, none dropped)" "[ \"\$(tap_row_of $TAPB | cut -d, -f1 | tr -d '[] ')\" -ge 1 ] && [ \"\$(tap_row_of $TAPB | cut -d, -f3 | tr -d ' ')\" = 0 ]"
 check "and nothing was dropped on the sender's tap either" "[ \"\$(tap_row | cut -d, -f3 | tr -d ' ')\" = 0 ]"
 
+# The drops program counts what the kernel dropped on the taps. Whether anything else dropped traffic
+# depends on the host (fluxvm's dataplane, when it has one, legitimately drops the guest's traffic to a
+# public address), so this asserts that it is measuring and names both taps, and prints the numbers.
+check "the drops program is measuring and lists both guests' taps" "api $URL/api/v1/trace/drops | J \"d['measured'] and {'$TAP','$TAPB'} <= {t['tap'] for t in d['taps']}\" | grep -q True"
+echo "  kernel drops on the two taps (tap, kernel, shukra's, someone else's, guest not reading): $(api "$URL/api/v1/trace/drops" | J "[(t['tap'],t['kernelDrops'],t['shukraDropped'],t['otherDrops'],t['guestNotReading']) for t in d['taps'] if t['tap'] in ('$TAP','$TAPB')]")"
+
 echo "== 6. delete both VMs: the tap programs come off"
 sudo "$FLUXCTL" delete "$ID" >/dev/null 2>&1; ID=""
 sudo "$FLUXCTL" delete "$IDB" >/dev/null 2>&1; IDB=""

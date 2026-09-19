@@ -202,6 +202,40 @@ usend 10.99.0.3 9999 2 42100; sleep 1
 check "released: UDP to that address is delivered again" "[ \"\$(recvd b4)\" = \"\$((B4+2))\" ]"
 kill $UDP_PID 2>/dev/null
 
+echo "== 10. drops: what the kernel dropped on the tap, and whose it was"
+# Shukra's own drops are TC_INGRESS in the kernel's eyes. So the kernel's count minus what the tap program
+# says it dropped is what something ELSE dropped, and a real tc filter on the tap is that something.
+dtap() { api "$U/api/v1/trace/drops" | J "[t for t in d['taps'] if t['tap']=='vethh'][0]['$1']"; }
+check "the drops program is attached" "api $U/api/v1/programs | J \"[p['status'] for p in d['programs'] if p['name']=='drops'][0]\" | grep -q attached"
+check "the tap is listed, for its VM, with nothing invented" "api $U/api/v1/trace/drops | J \"[t['vm'] for t in d['taps'] if t['tap']=='vethh'][0]\" | grep -q taptest"
+OTHER0=$(dtap otherDrops); SHUK0=$(dtap shukraDropped)
+
+# Something else drops the guest's packets: a real tc filter on the tap, nothing to do with Shukra.
+# TCX may already have created the clsact qdisc, so an existing one is fine, and only the filter is
+# removed afterwards: deleting the qdisc could take Shukra's own links with it.
+sudo tc qdisc add dev vethh clsact 2>/dev/null || true
+sudo tc filter add dev vethh ingress matchall action drop
+check "the filter is really on the tap" "sudo tc filter show dev vethh ingress | grep -q matchall"
+guest ping -c 20 -i 0.05 -W 1 10.99.0.1 >/dev/null 2>&1; sleep 1
+OTHER1=$(dtap otherDrops); SHUK1=$(dtap shukraDropped)
+sudo tc filter del dev vethh ingress
+check "Shukra's own programs are still on the tap after the filter is gone" "sudo bpftool net show dev vethh 2>/dev/null | grep -q shukra_tap_from_guest"
+check "twenty pings dropped by a tc filter are counted as the kernel's TC_INGRESS on that tap" "api $U/api/v1/trace/drops | J \"sum(r['count'] for r in d['rows'] if r['tap']=='vethh' and r['reason']=='TC_INGRESS')\" | awk '\$1>=20{f=1} END{exit !f}'"
+check "they are 'other', not Shukra's: otherDrops rose by at least twenty ($OTHER0 -> $OTHER1)" "[ $((OTHER1-OTHER0)) -ge 20 ]"
+check "and Shukra says it dropped none of them ($SHUK0 -> $SHUK1)" "[ $SHUK1 -eq $SHUK0 ]"
+check "doctor names the VM and the tap" "api $U/api/v1/doctor | J \"any(c['id']=='vm-drops-not-shukra' and 'taptest (vethh' in c['detail'] for c in d['checks'])\" | grep -q True"
+check "the drops are on /metrics with the kernel's reason" "api $U/metrics | grep -q 'shukra_tap_kernel_drops_total{vm=\"taptest\",tap=\"vethh\",reason=\"TC_INGRESS\"}'"
+check "the kernel function that dropped them is named or shown as an address" "api $U/api/v1/trace/drops | J \"[r['location'] for r in d['rows'] if r['tap']=='vethh' and r['reason']=='TC_INGRESS'][0]\" | grep -qE '.+'"
+
+# Shukra's own isolation is the same kernel reason, and must NOT be blamed on anyone else.
+api -X POST -d '{"vm":"taptest"}' $U/api/v1/isolate >/dev/null; sleep 1
+OTHER2=$(dtap otherDrops); SHUK2=$(dtap shukraDropped)
+guest ping -c 20 -i 0.05 -W 1 10.99.0.3 >/dev/null 2>&1; sleep 1
+OTHER3=$(dtap otherDrops); SHUK3=$(dtap shukraDropped)
+api -X POST -d '{"vm":"taptest"}' $U/api/v1/release >/dev/null; sleep 1
+check "isolation dropped the pings: Shukra's own count rose by at least twenty ($SHUK2 -> $SHUK3)" "[ $((SHUK3-SHUK2)) -ge 20 ]"
+check "and they are not blamed on another program: otherDrops did not move ($OTHER2 -> $OTHER3)" "[ $((OTHER3-OTHER2)) -le 3 ]"
+
 echo "== 8. enforcement outlives the daemon"
 ALLOW="-isolate-allow 10.99.0.1/32,fd99::1/128"
 mine() { sudo bpftool net 2>/dev/null | grep -E "^vethh" | grep -c shukra_tap; }

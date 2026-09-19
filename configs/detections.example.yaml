@@ -39,6 +39,7 @@ destinations:
 #   runqueue_delay_p99_ms                    p99 wait for a host CPU after a wakeup
 #   block_read_bytes_per_sec, block_write_bytes_per_sec, block_iops
 #   kvm_exits_per_sec, tcp_retransmits_per_sec
+#   guest_drops_per_sec                      packets/s the kernel dropped on the VM's taps that Shukra did not
 # Latency is read from a log2 histogram, so a p99 can read up to 2x high.
 # op is ">" (default) or ">=". severity defaults to medium.
 # thresholds:

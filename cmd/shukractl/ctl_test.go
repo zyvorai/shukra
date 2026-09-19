@@ -583,3 +583,39 @@ func TestDoctorJSONIsThePlainReport(t *testing.T) {
 		t.Fatalf("%v %s", err, buf.String())
 	}
 }
+
+func TestTraceDropsSaysWhoseDropsTheyAreAndWhereTheyHappened(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/trace/drops" {
+			_, _ = w.Write([]byte(`{"measured":true,"note":"Packets the kernel dropped.","taps":[{"vm":"db","tap":"tap0","kernelDrops":60,"shukraDropped":2,"otherDrops":58,"guestNotReading":0}],"rows":[{"vm":"db","tap":"tap0","reason":"TC_INGRESS","count":60,"location":"__netif_receive_skb_core"}]}`))
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+	var buf bytes.Buffer
+	if err := run([]string{"trace", "drops"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"vm=db", "tap=tap0", "kernel=60", "shukra=2", "other=58", "TC_INGRESS", "60", "last freed in __netif_receive_skb_core"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("missing %q:\n%s", want, buf.String())
+		}
+	}
+}
+
+func TestTraceDropsSaysWhenTheProgramIsNotMeasuring(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"measured":false,"rows":[],"taps":[]}`))
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+	var buf bytes.Buffer
+	if err := run([]string{"trace", "drops"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "not measuring") || strings.Contains(buf.String(), "kernel=") {
+		t.Fatalf("%s", buf.String())
+	}
+}

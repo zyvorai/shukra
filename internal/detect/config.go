@@ -25,6 +25,9 @@ const (
 	MetricBlockReadBPS      = "block_read_bytes_per_sec"
 	MetricBlockWriteBPS     = "block_write_bytes_per_sec"
 	MetricBlockIOPS         = "block_iops"
+	// MetricGuestDropsPerSec counts packets the kernel dropped on a VM's tap that Shukra did not: another
+	// program on the tap, not isolation. It needs the drops program, and says nothing without it.
+	MetricGuestDropsPerSec = "guest_drops_per_sec"
 )
 
 var metrics = map[string]bool{
@@ -32,6 +35,7 @@ var metrics = map[string]bool{
 	MetricKVMExitsPerSec: true, MetricRetransmitsPerSec: true,
 	MetricKVMExitP99MS: true, MetricRunqueueP99MS: true,
 	MetricBlockReadBPS: true, MetricBlockWriteBPS: true, MetricBlockIOPS: true,
+	MetricGuestDropsPerSec: true,
 }
 
 var severities = map[string]bool{"low": true, "medium": true, "high": true, "critical": true}

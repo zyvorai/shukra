@@ -12,7 +12,7 @@ export const fixture = {
     healthy: true,
     vms: 3,
     programsAttached: 0,
-    programsTotal: 5,
+    programsTotal: 6,
     detections: 1,
     summary: 'observe: host traces only, guest tap attribution not attached',
   },
@@ -27,6 +27,7 @@ export const fixture = {
     { name: 'block', status: 'detached', detail: 'Fixture. No BPF program is attached.' },
     { name: 'net', status: 'detached', detail: 'Fixture. Host TCP only. Not guest traffic.' },
     { name: 'tap', status: 'detached', detail: 'Fixture. No VM tap is attached.' },
+    { name: 'drops', status: 'detached', detail: 'Fixture. No BPF program is attached.' },
   ],
   kvm: [{ vm: 'payment-prod-03', runtime: 'kubevirt', exits: 182000, entries: 181200, mmio: 420, pio: 12, measured: true, topReasons: [{ reason: 30, count: 90000, totalNs: 4200000000, name: 'io_instruction' }, { reason: 12, count: 40000, totalNs: 91000000000, name: 'hlt' }], topReasonsByTime: [{ reason: 12, count: 40000, totalNs: 91000000000, name: 'hlt' }, { reason: 30, count: 90000, totalNs: 4200000000, name: 'io_instruction' }], exitLatencyP50Ns: 4096, exitLatencyP99Ns: 262144, exitLatencyHist: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9000, 61000, 70000, 30000, 9000, 2500, 400, 90, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }],
   sched: [{ vm: 'payment-prod-03', onCpuNs: 870000000, wakeupDelayNs: 14000000, wakeupCount: 2200, wakeupDelayP50Ns: 4096, wakeupDelayP99Ns: 65536, wakeupHist: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 300, 700, 800, 260, 110, 24, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], measured: true }],
@@ -57,6 +58,7 @@ export function fixtureResponse(path: string, init?: RequestInit): unknown {
     return url.searchParams.get('threads') === '1' ? { rows, threads: filter(fixture.schedThreads, vm) } : { rows };
   }
   if (url.pathname === '/api/v1/trace/block') return { rows: filter(fixture.block, vm) };
+  if (url.pathname === '/api/v1/trace/drops') return { measured: false, rows: [], taps: [] };
   if (url.pathname === '/api/v1/security') {
     return { vm: vm || '', detections: fixture.events.filter((e) => e.kind === 'detection'), enforcement: 'not_attached', allowList: [], durable: false, reason: 'Fixture. No management allow list is configured, so isolate would be refused.' };
   }

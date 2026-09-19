@@ -490,7 +490,7 @@ func TestEmptyListsAreArraysNotNull(t *testing.T) {
 	srv := New(state.New("node-07"), "k")
 	for path, key := range map[string]string{
 		"/api/v1/vms": "vms", "/api/v1/trace/kvm": "rows", "/api/v1/trace/sched": "rows",
-		"/api/v1/trace/block": "rows", "/api/v1/trace/net": "rows", "/api/v1/trace/tap": "rows",
+		"/api/v1/trace/block": "rows", "/api/v1/trace/net": "rows", "/api/v1/trace/tap": "rows", "/api/v1/trace/drops": "rows",
 	} {
 		var body map[string]json.RawMessage
 		if err := json.Unmarshal(get(srv, path, "k").Body.Bytes(), &body); err != nil {
@@ -499,5 +499,68 @@ func TestEmptyListsAreArraysNotNull(t *testing.T) {
 		if got := string(body[key]); got != "[]" {
 			t.Errorf("%s: %q is %s, not []: a client cannot take its length", path, key, got)
 		}
+	}
+}
+
+func withDrops(attached bool) *state.State {
+	st := state.New("node-07")
+	st.SetVMs([]identity.VM{{Name: "db", Taps: []string{"tap0"}}})
+	status := "detached"
+	if attached {
+		status = "attached"
+	}
+	st.SetPrograms([]state.Program{{Name: "tap", Status: "attached"}, {Name: "drops", Status: status}})
+	st.SetTapSource(func() []state.TapStat { return []state.TapStat{{Name: "tap0", DroppedPkts: 3}} })
+	st.SetDropSource(func() []state.DropStat {
+		return []state.DropStat{{Tap: "tap0", Reason: "TC_INGRESS", Count: 40, Location: "__netif_receive_skb_core"}, {Tap: "tap9", Reason: "TC_INGRESS", Count: 7}}
+	})
+	return st
+}
+
+func TestDropsEndpointServesTheRowsAndTheSummaryForOwnedTapsOnly(t *testing.T) {
+	var body struct {
+		Measured bool `json:"measured"`
+		Rows     []struct {
+			VM, Tap, Reason, Location string
+			Count                     uint64
+		} `json:"rows"`
+		Taps []struct {
+			VM            string `json:"vm"`
+			ShukraDropped uint64 `json:"shukraDropped"`
+			OtherDrops    uint64 `json:"otherDrops"`
+		} `json:"taps"`
+	}
+	rec := get(New(withDrops(true), "k"), "/api/v1/trace/drops", "k")
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Measured || len(body.Rows) != 1 || body.Rows[0].VM != "db" || body.Rows[0].Reason != "TC_INGRESS" || body.Rows[0].Count != 40 || body.Rows[0].Location != "__netif_receive_skb_core" {
+		t.Fatalf("tap9 belongs to no VM and must not be shown: %s", rec.Body.String())
+	}
+	if len(body.Taps) != 1 || body.Taps[0].ShukraDropped != 3 || body.Taps[0].OtherDrops != 37 {
+		t.Fatalf("%s", rec.Body.String())
+	}
+}
+
+func TestDropsEndpointSaysNotMeasuringAndInventsNothing(t *testing.T) {
+	rec := get(New(withDrops(false), "k"), "/api/v1/trace/drops", "k")
+	var body struct {
+		Measured bool              `json:"measured"`
+		Rows     []json.RawMessage `json:"rows"`
+		Taps     []json.RawMessage `json:"taps"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Measured || body.Rows == nil || len(body.Rows) != 0 || body.Taps == nil || len(body.Taps) != 0 {
+		t.Fatalf("%v %s", err, rec.Body.String())
+	}
+}
+
+func TestDropMetricsExistOnlyWhileTheProgramMeasures(t *testing.T) {
+	on := get(New(withDrops(true), "k"), "/metrics", "k").Body.String()
+	if !strings.Contains(on, `shukra_tap_kernel_drops_total{vm="db",tap="tap0",reason="TC_INGRESS"} 40`) || strings.Contains(on, "tap9") {
+		t.Fatalf("%s", on)
+	}
+	off := get(New(withDrops(false), "k"), "/metrics", "k").Body.String()
+	if strings.Contains(off, "shukra_tap_kernel_drops_total") {
+		t.Fatalf("a series with no measurement behind it:\n%s", off)
 	}
 }

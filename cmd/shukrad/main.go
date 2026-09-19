@@ -137,6 +137,13 @@ func main() {
 		}
 		return out
 	})
+	st.SetDropSource(func() []state.DropStat {
+		var out []state.DropStat
+		for _, d := range observe.DropSample() {
+			out = append(out, state.DropStat{Tap: d.Tap, Reason: d.Reason, Count: d.Count, Location: d.Location})
+		}
+		return out
+	})
 	ag, err := agent.New(st, *proc, *watch, host)
 	if err != nil {
 		log.Fatal(err)
