@@ -18,13 +18,14 @@ jobs:
       - name: BPF toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm linux-tools-common linux-tools-generic
+          sudo apt-get install -y clang-18 llvm-18 linux-tools-common linux-tools-generic
           ver="$(uname -r)"
           sudo apt-get install -y "linux-tools-${ver}" || true
+          if ! command -v clang >/dev/null 2>&1; then
+            sudo ln -sfn "$(command -v clang-18)" /usr/local/bin/clang
+          fi
           if ! command -v llvm-strip >/dev/null 2>&1; then
-            strip="$(ls /usr/bin/llvm-strip-* 2>/dev/null | head -1)"
-            test -n "$strip"
-            sudo ln -sfn "$strip" /usr/local/bin/llvm-strip
+            sudo ln -sfn "$(command -v llvm-strip-18)" /usr/local/bin/llvm-strip
           fi
           real="$(find /usr/lib/linux-tools -type f -name bpftool | head -1)"
           test -n "$real"
