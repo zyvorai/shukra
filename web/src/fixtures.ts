@@ -17,7 +17,7 @@ export const fixture = {
     summary: 'observe: host traces only, guest tap attribution not attached',
   },
   vms: [
-    { name: 'payment-prod-03', uuid: '8f3c2a10-1111-2222-3333-444455556666', runtime: 'kubevirt', hypervisor: 'node-07', pid: 19321, taps: ['tap7'], comm: 'qemu-system-x86_64' },
+    { name: 'payment-prod-03', uuid: '8f3c2a10-1111-2222-3333-444455556666', runtime: 'kubevirt', hypervisor: 'node-07', pid: 19321, taps: ['tap7'], comm: 'qemu-system-x86_64', threadInfo: [{ tid: 19321, comm: 'qemu-system-x86', role: 'other' }, { tid: 19322, comm: 'CPU 0/KVM', role: 'vcpu' }, { tid: 19323, comm: 'IO iothread1', role: 'iothread' }, { tid: 19324, comm: 'vhost-19321', role: 'vhost' }] },
     { name: 'api-01', uuid: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', runtime: 'libvirt', hypervisor: 'node-07', pid: 20100, taps: ['tap1'], comm: 'qemu-system-x86_64' },
     { name: 'redis-01', uuid: 'bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee', runtime: 'qemu', hypervisor: 'node-07', pid: 21010, taps: ['tap2'], comm: 'qemu-system-x86_64' },
   ],

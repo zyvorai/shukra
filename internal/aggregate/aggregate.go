@@ -7,7 +7,12 @@ import (
 	"github.com/zyvorai/shukra/internal/identity"
 )
 
-const Host = "_host"
+// SlowBlockNS and SlowWakeupNS match bpf/event.h. A row below these lines is not called slow.
+const (
+	Host         = "_host"
+	SlowBlockNS  = 10_000_000
+	SlowWakeupNS = 20_000_000
+)
 
 // Counters are scraped from maps, or supplied by tests. They are not guest metrics.
 type Counters struct {

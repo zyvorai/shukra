@@ -16,8 +16,10 @@ jobs:
         with:
           node-version: "22"
       - name: Go tests
-        run: go test ./...
+        run: go test -count=1 ./...
       - name: Generate CO-RE objects when clang and BTF exist
         run: make generate
-      - name: Web
-        run: make web
+      - name: Console tests
+        run: npm --prefix web ci && npm --prefix web test
+      - name: Console build
+        run: npm --prefix web run build

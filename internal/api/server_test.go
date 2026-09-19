@@ -58,4 +58,19 @@ func TestEventShapeAndIsolate(t *testing.T) {
 	if got.Applied || got.Enforcement != "not_attached" || got.Audit.Result != "recorded_only" {
 		t.Fatalf("%+v", got)
 	}
+
+	exp := httptest.NewRequest(http.MethodGet, "/api/v1/export", nil)
+	exp.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, exp)
+	if rec.Code != 200 {
+		t.Fatalf("export %d %s", rec.Code, rec.Body.String())
+	}
+	var doc state.Export
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Status.Product != "shukra" || len(doc.Events) != 1 || doc.Events[0].GuestAttributed || len(doc.Net) != 1 || doc.Net[0].Connects != 1 {
+		t.Fatalf("%+v", doc)
+	}
 }

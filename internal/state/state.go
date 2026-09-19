@@ -218,7 +218,41 @@ func (s *State) Block(vm string) []aggregate.BlockRow {
 func (s *State) Net(vm string) []aggregate.NetRow {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return aggregate.Net(s.vms, s.byPID, vm)
+	rows := aggregate.Net(s.vms, s.byPID, vm)
+	counts := map[string]uint64{}
+	for _, e := range s.events {
+		if e.Kind != event.KindTCPConnect {
+			continue
+		}
+		name := e.VM.Name
+		if name == "" {
+			name = aggregate.Host
+		}
+		if vm != "" && name != vm {
+			continue
+		}
+		counts[name]++
+	}
+	seen := map[string]bool{}
+	for i := range rows {
+		rows[i].Connects += counts[rows[i].VM]
+		seen[rows[i].VM] = true
+	}
+	for name, n := range counts {
+		if seen[name] || n == 0 {
+			continue
+		}
+		attr := event.AttributionUnattributed
+		note := "Not a QEMU thread. Not guest traffic."
+		if name != aggregate.Host {
+			attr = event.AttributionQEMU
+			note = "Connects and retransmits from the QEMU process, not the guest. Tap/TCX attribution is not attached."
+		}
+		rows = append(rows, aggregate.NetRow{
+			VM: name, Connects: n, Attribution: attr, GuestAttributed: false, Note: note,
+		})
+	}
+	return rows
 }
 
 func (s *State) FindVM(name string) (identity.VM, bool) {
@@ -254,6 +288,12 @@ func (s *State) Explain(name string, now time.Time) Explain {
 	}
 	if len(block) > 0 && block[0].Measured {
 		evidence = append(evidence, "Block latency histogram is present for the QEMU iothread, not the guest filesystem.")
+		if block[0].ReadP99Ns >= aggregate.SlowBlockNS || block[0].WriteP99Ns >= aggregate.SlowBlockNS {
+			evidence = append(evidence, "Block p99 is at least 10ms on the QEMU iothread.")
+		}
+	}
+	if len(sched) > 0 && sched[0].Measured && sched[0].WakeupCount > 0 && sched[0].WakeupDelayNs/sched[0].WakeupCount >= aggregate.SlowWakeupNS {
+		evidence = append(evidence, "Mean wakeup delay is at least 20ms.")
 	}
 	if len(net) > 0 && (net[0].Connects > 0 || net[0].Retransmits > 0) {
 		evidence = append(evidence, "TCP connects are from the QEMU process. They are not guest flows.")
@@ -267,5 +307,31 @@ func (s *State) Explain(name string, now time.Time) Explain {
 			"in-guest process identity",
 		},
 		Events: s.Recorder(name, 60*time.Second, now),
+	}
+}
+
+// Export is the document a downstream consumer can take. It does not add fields
+// this build did not measure.
+type Export struct {
+	Status   Status               `json:"status"`
+	VMs      []identity.VM        `json:"vms"`
+	Programs []Program            `json:"programs"`
+	KVM      []aggregate.KVMRow   `json:"kvm"`
+	Sched    []aggregate.SchedRow `json:"sched"`
+	Block    []aggregate.BlockRow `json:"block"`
+	Net      []aggregate.NetRow   `json:"net"`
+	Events   []event.Event        `json:"events"`
+}
+
+func (s *State) Export() Export {
+	return Export{
+		Status:   s.Status(),
+		VMs:      s.VMs(),
+		Programs: s.Programs(),
+		KVM:      s.KVM(""),
+		Sched:    s.Sched(""),
+		Block:    s.Block(""),
+		Net:      s.Net(""),
+		Events:   s.Events(""),
 	}
 }

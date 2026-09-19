@@ -3,6 +3,7 @@
 package observe
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/zyvorai/shukra/internal/bpfgen"
@@ -31,5 +32,19 @@ func programs() []Program {
 			loaded = append(loaded, Program{Name: p.Name, Status: p.Status, Detail: p.Detail})
 		}
 	})
-	return loaded
+	out := append([]Program(nil), loaded...)
+	if n := lostSamples(); n > 0 {
+		suffix := fmt.Sprintf("lost=%d", n)
+		for i := range out {
+			switch out[i].Name {
+			case "sched", "block", "net":
+				if out[i].Detail == "" {
+					out[i].Detail = suffix
+				} else {
+					out[i].Detail += "; " + suffix
+				}
+			}
+		}
+	}
+	return out
 }

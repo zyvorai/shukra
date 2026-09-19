@@ -33,3 +33,34 @@ func TestIngestWatchlist(t *testing.T) {
 		t.Fatalf("events %#v", st.Events("payment-prod-03"))
 	}
 }
+
+func TestUnexpectedExec(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "200"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "200", "status"), []byte("Name:\tcurl\nPPid:\t100\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "201"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "201", "status"), []byte("Name:\tqemu\nPPid:\t100\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st := state.New("node-07")
+	ag, err := New(st, root, "", "node-07")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.SetVMs([]identity.VM{{Name: "payment-prod-03", PID: 100, Threads: []int{100}}})
+	ag.Ingest(event.Event{Kind: event.KindExec, PID: 200, Comm: "curl"})
+	dets := st.Detections("payment-prod-03")
+	if len(dets) != 1 || dets[0].Message != "unexpected exec curl" || dets[0].GuestAttributed {
+		t.Fatalf("%+v", dets)
+	}
+	ag.Ingest(event.Event{Kind: event.KindExec, PID: 201, Comm: "qemu-system-x86"})
+	if len(st.Detections("payment-prod-03")) != 1 {
+		t.Fatalf("qemu binary was flagged: %+v", st.Detections("payment-prod-03"))
+	}
+}

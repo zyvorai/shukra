@@ -11,6 +11,7 @@ const (
 	KindTCPRetransmit Kind = "tcp_retransmit"
 	KindBlockSlow     Kind = "block_slow"
 	KindSchedDelay    Kind = "sched_delay"
+	KindExit          Kind = "exit"
 	KindDetection     Kind = "detection"
 )
 

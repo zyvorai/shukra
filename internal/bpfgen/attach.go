@@ -29,12 +29,23 @@ func Attach() ([]Status, error) {
 	}, nil
 }
 
+// Loaded is one attached collection. Sample and the ring reader use it.
+// Dropping Coll or Link closes the programs and the hooks detach.
+type Loaded struct {
+	Name string
+	Coll *ebpf.Collection
+}
+
 // pinnedColls and pinnedLinks stay referenced for the process lifetime.
-// Dropping them closes the programs and the hooks detach immediately.
 var (
-	pinnedColls []*ebpf.Collection
+	pinnedColls []Loaded
 	pinnedLinks []link.Link
 )
+
+// Collections returns the collections Attach kept alive. Nil before Attach.
+func Collections() []Loaded {
+	return pinnedColls
+}
 
 type specFunc func() (*ebpf.CollectionSpec, error)
 
@@ -47,7 +58,7 @@ func try(name string, load specFunc) Status {
 	if err != nil {
 		return Status{Name: name, Status: "detached", Detail: err.Error()}
 	}
-	pinnedColls = append(pinnedColls, coll)
+	pinnedColls = append(pinnedColls, Loaded{Name: name, Coll: coll})
 	var attached, total int
 	var last error
 	for progName, specProg := range spec.Programs {

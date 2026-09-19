@@ -60,6 +60,9 @@ func New(st *state.State, apiKey string) http.Handler {
 	mux.HandleFunc("GET /api/v1/explain", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, st.Explain(r.URL.Query().Get("vm"), time.Now().UTC()))
 	})
+	mux.HandleFunc("GET /api/v1/export", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, st.Export())
+	})
 	mux.HandleFunc("GET /api/v1/security", func(w http.ResponseWriter, r *http.Request) {
 		vm := r.URL.Query().Get("vm")
 		writeJSON(w, http.StatusOK, map[string]any{

@@ -20,7 +20,15 @@ type VM struct {
 	Comm       string   `json:"comm,omitempty"`
 	Taps       []string `json:"taps,omitempty"`
 	Threads    []int    `json:"threads,omitempty"`
+	ThreadInfo []Thread `json:"threadInfo,omitempty"`
 	Cmdline    string   `json:"cmdline,omitempty"`
+}
+
+// Thread is one QEMU task and the role inferred from its comm.
+type Thread struct {
+	TID  int    `json:"tid"`
+	Comm string `json:"comm,omitempty"`
+	Role string `json:"role"`
 }
 
 // SplitCmdline splits a /proc/<pid>/cmdline buffer on NUL.
@@ -161,30 +169,52 @@ func Scan(root, hypervisor string) ([]VM, error) {
 		}
 		vm.PID = pid
 		vm.Hypervisor = hypervisor
-		vm.Threads = threads(dir, pid)
+		vm.Threads, vm.ThreadInfo = threads(dir, pid)
 		out = append(out, vm)
 	}
 	return out, nil
 }
 
-func threads(dir string, pid int) []int {
+func threads(dir string, pid int) ([]int, []Thread) {
 	task := filepath.Join(dir, "task")
 	entries, err := os.ReadDir(task)
 	if err != nil {
-		return []int{pid}
+		return []int{pid}, []Thread{{TID: pid, Role: "other"}}
 	}
 	var ids []int
+	var info []Thread
 	for _, ent := range entries {
 		id, err := strconv.Atoi(ent.Name())
 		if err != nil || id <= 0 {
 			continue
 		}
 		ids = append(ids, id)
+		comm := ""
+		if b, err := os.ReadFile(filepath.Join(task, ent.Name(), "comm")); err == nil {
+			comm = strings.TrimSpace(string(b))
+		}
+		info = append(info, Thread{TID: id, Comm: comm, Role: Role(comm)})
 	}
 	if len(ids) == 0 {
-		return []int{pid}
+		return []int{pid}, []Thread{{TID: pid, Role: "other"}}
 	}
-	return ids
+	return ids, info
+}
+
+// Role labels a QEMU task comm. It is not an in-guest process.
+func Role(comm string) string {
+	c := strings.TrimSpace(comm)
+	low := strings.ToLower(c)
+	switch {
+	case strings.HasPrefix(c, "CPU") || strings.Contains(low, "kvm"):
+		return "vcpu"
+	case strings.HasPrefix(c, "IO") || strings.Contains(low, "iothread"):
+		return "iothread"
+	case strings.Contains(low, "vhost"):
+		return "vhost"
+	default:
+		return "other"
+	}
 }
 
 // Owns reports whether pid is the QEMU process or one of its threads.

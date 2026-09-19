@@ -44,6 +44,8 @@ func run(args []string, out io.Writer) error {
 		return getBoard(out, "/api/v1/recorder?vm="+args[1]+"&window="+window, has(args[2:], "--json"), formatRecorder)
 	case "watch":
 		return watchCmd(args[1:], out)
+	case "export":
+		return getBoard(out, "/api/v1/export", true, nil)
 	case "security":
 		if len(args) < 2 {
 			return fmt.Errorf("security <vm>")

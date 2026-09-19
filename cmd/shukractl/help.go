@@ -30,6 +30,7 @@ func helpSections() []helpSection {
 			{"explain <vm>", "Why this VM looks slow, from evidence on hand"},
 			{"recorder <vm> [--window 60s]", "Replay the flight recorder"},
 			{"watch [--json] [--once]", "Stream discrete events"},
+			{"export", "One JSON document: status, VMs, traces, events"},
 		}},
 		{title: "🛡️  Security", cmds: []helpCmd{
 			{"security <vm>", "Watchlist detections for one VM"},

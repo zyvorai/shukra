@@ -104,3 +104,37 @@ func TestScanMissingRoot(t *testing.T) {
 		t.Fatalf("vms=%v err=%v", vms, err)
 	}
 }
+
+func TestThreadRoles(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "10")
+	for _, tid := range []string{"10", "11", "12", "13"} {
+		if err := os.MkdirAll(filepath.Join(dir, "task", tid), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := []byte("qemu-system-x86_64\x00-name\x00guest=roles\x00")
+	if err := os.WriteFile(filepath.Join(dir, "cmdline"), cmd, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	comms := map[string]string{"10": "qemu-system-x86", "11": "CPU 0/KVM", "12": "IO iothread1", "13": "vhost-10"}
+	for tid, comm := range comms {
+		if err := os.WriteFile(filepath.Join(dir, "task", tid, "comm"), []byte(comm+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	vms, err := Scan(root, "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vms) != 1 || len(vms[0].ThreadInfo) != 4 {
+		t.Fatalf("%+v", vms)
+	}
+	got := map[int]string{}
+	for _, th := range vms[0].ThreadInfo {
+		got[th.TID] = th.Role
+	}
+	if got[10] != "other" || got[11] != "vcpu" || got[12] != "iothread" || got[13] != "vhost" {
+		t.Fatalf("%v", got)
+	}
+}
