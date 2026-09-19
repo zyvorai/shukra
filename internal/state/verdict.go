@@ -46,7 +46,7 @@ func dur(ns uint64) string {
 // diagnose ranks the host-side causes the counters support. Each input is the
 // rows for the one VM being explained.
 func diagnose(found bool, kvm []aggregate.KVMRow, sched []aggregate.SchedRow, threads []aggregate.ThreadRow,
-	block []aggregate.BlockRow, net []aggregate.NetRow, drops []DropTap) []Finding {
+	block []aggregate.BlockRow, net []aggregate.NetRow, drops []DropTap, conns *Outcomes) []Finding {
 	if !found {
 		return []Finding{{Cause: "unknown_vm", Confidence: "high", Summary: "No QEMU process with that name is in the current scan."}}
 	}
@@ -162,6 +162,17 @@ func diagnose(found bool, kvm []aggregate.KVMRow, sched []aggregate.SchedRow, th
 				Cause: "guest_not_reading_nic", Confidence: "medium",
 				Summary:  "The tap's queue is full, so the host cannot hand this VM the packets it is sent. The guest is not taking them: it is stalled, has no working NIC driver, or is overloaded.",
 				Evidence: []string{fmt.Sprintf("%d packets were dropped on tap %s because its queue was full.", d.QueueFull, d.Tap)},
+			})
+		}
+	}
+
+	// The guest's own connections, seen on its tap: most of them refused or never answered.
+	if conns != nil {
+		if failing, what := connectFailing(*conns); failing {
+			out = append(out, Finding{
+				Cause: "guest_connects_failing", Confidence: "medium",
+				Summary:  "Most of this VM's outbound TCP connections fail. Refused means nothing is listening on the destination port; never answered means something is dropping the SYN, such as blocked egress or an unreachable network. Many refusals to different ports looks like a scan.",
+				Evidence: []string{what + "."},
 			})
 		}
 	}

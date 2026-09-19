@@ -75,6 +75,7 @@ func (s *State) Doctor() []Check {
 		exists = hostLinkExists
 	}
 	dropTaps, dropsOver := s.DropTapsOver("", s.now(), DefaultExplainWindow)
+	connOutcomes, connOver := s.OutcomesOver("", s.now(), DefaultExplainWindow)
 
 	var out []Check
 	add := func(id, status, title, detail, fix string) {
@@ -240,6 +241,19 @@ func (s *State) Doctor() []Check {
 		add("vm-nic-not-consumed", "warn", strconv.Itoa(len(notReading))+" VMs are not reading their NIC",
 			briefList(notReading)+" packets were dropped over "+dropsOver+" because the tap's queue was full.",
 			"The guest is stalled, has no working network driver, or is overloaded. Look at the VM itself.")
+	}
+
+	// VMs whose own outbound connections mostly fail, as seen on their taps.
+	var failing []string
+	for _, vm := range vms {
+		if ok, what := connectFailing(connOutcomes[vm.Name]); ok {
+			failing = append(failing, vm.Name+" ("+what+")")
+		}
+	}
+	if len(failing) > 0 {
+		add("vm-connects-failing", "warn", strconv.Itoa(len(failing))+" VMs have outbound connections that mostly fail",
+			briefList(failing)+" over "+connOver+".",
+			"Refused: nothing listens on that port. Never answered: something drops the SYN, such as blocked egress or an unreachable network. Many refusals to different ports looks like a scan. shukractl trace tap --vm <vm> has the counts.")
 	}
 
 	// Isolation.

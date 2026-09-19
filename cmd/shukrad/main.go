@@ -133,6 +133,11 @@ func main() {
 			out = append(out, state.TapStat{
 				Name: t.Name, FromPkts: t.FromPkts, FromBytes: t.FromBytes, ToPkts: t.ToPkts, ToBytes: t.ToBytes,
 				DroppedPkts: t.DroppedPkts, DroppedBytes: t.DroppedBytes, Isolated: t.Isolated,
+				Outcomes: state.Outcomes{
+					OutSyn: t.OutSyn, OutOK: t.OutOK, OutRefused: t.OutRefused, OutTimeout: t.OutTimeout, OutRetrans: t.OutRetrans, OutBlocked: t.OutBlocked,
+					InSyn: t.InSyn, InOK: t.InOK, InRefused: t.InRefused, InIgnored: t.InIgnored, InRetrans: t.InRetrans, InBlocked: t.InBlocked,
+				},
+				HandshakeHist: t.HandshakeHist,
 			})
 		}
 		return out

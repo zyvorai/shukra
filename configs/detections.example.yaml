@@ -18,6 +18,8 @@ destinations:
 # Connect to a watched destination port, whatever the address.
 # proto is tcp (the default), udp or any. A rule with no proto has always meant a
 # TCP connect, so it still does. Destination rules above apply to every protocol.
+# dir is out (the default: the VM connected somewhere), in (a connection made TO the VM,
+# matched on the port it reached) or any. A rule with no dir has always meant out.
 # ports:
 #   - port: 25
 #     name: smtp-egress
@@ -25,6 +27,9 @@ destinations:
 #   - port: 53
 #     name: dns-out
 #     proto: udp
+#   - port: 22
+#     name: ssh-into-vm
+#     dir: in
 
 # Process names that may start under a QEMU process without an alert, matched as
 # a lowercase prefix. QEMU's own threads are always allowed.
@@ -40,6 +45,8 @@ destinations:
 #   block_read_bytes_per_sec, block_write_bytes_per_sec, block_iops
 #   kvm_exits_per_sec, tcp_retransmits_per_sec
 #   guest_drops_per_sec                      packets/s the kernel dropped on the VM's taps that Shukra did not
+#   guest_connect_refused_per_sec, guest_connect_timeouts_per_sec, guest_inbound_per_sec
+#                                            the guest's TCP connections that were refused or never answered, and connections made to it
 # Latency is read from a log2 histogram, so a p99 can read up to 2x high.
 # op is ">" (default) or ">=". severity defaults to medium.
 # thresholds:

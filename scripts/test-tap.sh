@@ -50,7 +50,7 @@ sleep 1
 printf '#!/bin/bash\nwhile true; do /bin/true; sleep 0.2; done\n' > "$D/loop.sh"; chmod +x "$D/loop.sh"
 bash -c "exec -a /usr/bin/qemu-system-x86_64 bash $D/loop.sh -name taptest -uuid 9999 -netdev tap,id=n0,ifname=vethh,script=no" >/dev/null 2>&1 &
 
-printf 'destinations:\n  - cidr: 10.99.0.3/32\n    name: watched-host\n    severity: high\nports:\n  - port: 5300\n    name: udp-watch\n    proto: udp\n' > $D/rules.yaml
+printf 'destinations:\n  - cidr: 10.99.0.3/32\n    name: watched-host\n    severity: high\nports:\n  - port: 5300\n    name: udp-watch\n    proto: udp\n  - port: 8090\n    name: guest-inbound-watch\n    dir: in\n' > $D/rules.yaml
 A="Authorization: Bearer k"; U=127.0.0.1:30990
 guest() { sudo ip netns exec g1 "$@"; }
 code4() { guest curl -s -o /dev/null -m 2 -w %{http_code} "http://$1:8080/"; }
@@ -245,6 +245,62 @@ OTHER3=$(dtap otherDrops); SHUK3=$(dtap shukraDropped)
 api -X POST -d '{"vm":"taptest"}' $U/api/v1/release >/dev/null; sleep 1
 check "isolation dropped the pings: Shukra's own count rose by at least twenty ($SHUK2 -> $SHUK3)" "[ $((SHUK3-SHUK2)) -ge 20 ]"
 check "and they are not blamed on another program: otherDrops did not move ($OTHER2 -> $OTHER3)" "[ $((OTHER3-OTHER2)) -le 3 ]"
+
+echo "== 11. TCP handshake outcomes, both ways, with exact counts"
+# One helper opens a connection and closes it: to an open port the handshake completes, to a closed port the
+# peer answers RST, and to a port that drops the SYN nobody answers at all. Every attempt must be exactly one of
+# accepted, refused, timed out or blocked, and a repeat of the same SYN is a retransmit and not an attempt.
+gconn() { guest python3 -c "import socket,sys;s=socket.socket(socket.AF_INET6 if ':' in sys.argv[1] else socket.AF_INET);s.settimeout(float(sys.argv[3]));s.connect_ex((sys.argv[1],int(sys.argv[2])));s.close()" "$@"; }
+hconn() { python3 -c "import socket,sys;s=socket.socket();s.settimeout(float(sys.argv[3]));s.connect_ex((sys.argv[1],int(sys.argv[2])));s.close()" "$@"; }
+oc() { api "$U/api/v1/trace/tap" | J "[r for r in d['rows'] if r['tap']=='vethh'][0]['$1']"; }
+FIELDS="outSyn outAccepted outRefused outTimedOut outRetransmits outBlocked inSyn inAccepted inRefused inIgnored"
+snapoc() { for f in $FIELDS; do echo "$1_$f=$(oc $f)"; done; }
+# a listener inside the guest, and a host rule and a guest rule that silently drop one port each
+( cd "$D" && exec sudo ip netns exec g1 python3 -m http.server 8090 --bind 0.0.0.0 >/dev/null 2>&1 ) &
+GLIS=$!
+sudo iptables -I INPUT -d 10.99.0.1 -p tcp --dport 8081 -j DROP
+sudo ip netns exec g1 iptables -I INPUT -p tcp --dport 8092 -j DROP
+sleep 5; oc outSyn >/dev/null   # let anything pending from earlier sections age out and be counted
+eval "$(snapoc B)"
+
+for i in 1 2 3; do gconn 10.99.0.1 8080 1; done          # open port: accepted x3
+for i in 1 2 3 4; do gconn 10.99.0.1 9 1; done           # closed port: refused x4
+for i in 1 2; do gconn fd99::1 8080 1; done              # IPv6 open: accepted x2
+gconn fd99::1 9 1                                         # IPv6 closed: refused x1
+gconn 10.99.0.1 8090 1                                    # the guest's OWN connect to the port the inbound rule watches: refused x1
+for i in 1 2 3; do gconn 10.99.0.1 8081 0.5; done        # the host drops the SYN: never answered x3
+gconn 10.99.0.1 8081 1.6                                  # ... held long enough for one retransmit
+api -X POST -d '{"vm":"taptest"}' $U/api/v1/isolate >/dev/null; sleep 1
+for i in 1 2; do gconn 10.99.0.3 8080 0.5; done          # isolation drops the SYN: blocked x2
+api -X POST -d '{"vm":"taptest"}' $U/api/v1/release >/dev/null; sleep 1
+for i in 1 2 3; do hconn 10.99.0.2 8090 1; done          # into the guest, listening: accepted x3
+for i in 1 2; do hconn 10.99.0.2 8091 1; done            # into the guest, closed: refused x2
+for i in 1 2; do hconn 10.99.0.2 8092 0.5; done          # into the guest, dropped: ignored x2
+sleep 5                                                   # more than the 3 s a SYN waits for an answer
+eval "$(snapoc A)"
+d() { echo $(( A_$1 - B_$1 )); }
+echo "  out: attempts $(d outSyn) = accepted $(d outAccepted) + refused $(d outRefused) + never answered $(d outTimedOut) + blocked $(d outBlocked)   retransmits $(d outRetransmits)"
+echo "  in:  attempts $(d inSyn) = accepted $(d inAccepted) + refused $(d inRefused) + ignored $(d inIgnored)"
+check "outbound: 5 connections were accepted (IPv4 and IPv6)" "[ \"\$(d outAccepted)\" = 5 ]"
+check "outbound: 6 were refused, by an RST (IPv4 and IPv6)" "[ \"\$(d outRefused)\" = 6 ]"
+check "outbound: the 4 SYNs nobody answered were counted as never answered" "[ \"\$(d outTimedOut)\" = 4 ]"
+check "outbound: the 2 SYNs isolation dropped are blocked, and are not also timeouts" "[ \"\$(d outBlocked)\" = 2 ]"
+check "outbound: the repeated SYN is one retransmit and not a new attempt" "[ \"\$(d outRetransmits)\" = 1 ]"
+check "outbound: attempts are exactly accepted + refused + never answered + blocked (17)" "[ \"\$(d outSyn)\" = 17 ] && [ \$(( $(d outAccepted) + $(d outRefused) + $(d outTimedOut) + $(d outBlocked) )) = 17 ]"
+check "inbound: 3 connections into the guest were accepted" "[ \"\$(d inAccepted)\" = 3 ]"
+check "inbound: 2 were refused by the guest's RST" "[ \"\$(d inRefused)\" = 2 ]"
+check "inbound: 2 SYNs the guest ignored were counted as ignored" "[ \"\$(d inIgnored)\" = 2 ]"
+check "inbound: attempts are exactly accepted + refused + ignored (7)" "[ \"\$(d inSyn)\" = 7 ]"
+check "each accepted outbound connection is in the handshake histogram, and it is fast on a veth" "api $U/api/v1/trace/tap | J \"[(sum(r['handshakeHist']), r['outAccepted'], r['handshakeP99Ns']) for r in d['rows'] if r['tap']=='vethh'][0]\" | awk -F'[(), ]+' '\$2==\$3 && \$4<100000000{f=1} END{exit !f}'"
+check "a connection made into the guest is a guest_inbound event naming the peer and the guest, guest-attributed" \
+  "api $U/api/v1/events | J \"any(e['guest_attributed'] and e['attribution']=='guest-tap' and e['vm']['name']=='taptest' and e.get('src')=='10.99.0.1' and e.get('dst')=='10.99.0.2' and e['dport']==8090 and e.get('proto')=='tcp' for e in d['events'] if e['kind']=='guest_inbound')\" | grep -q True"
+check "one event per inbound connection: 3 to 8090, 2 to 8091, 2 to 8092" "api $U/api/v1/events | J \"[sum(1 for e in d['events'] if e['kind']=='guest_inbound' and e['dport']==p) for p in (8090,8091,8092)]\" | grep -q '\[3, 2, 2\]'"
+check "an inbound port rule fires on the guest port, naming the peer" "api $U/api/v1/events | J \"any(e['guest_attributed'] and 'connected in from 10.99.0.1' in e['message'] for e in d['events'] if e['kind']=='detection' and e.get('rule')=='guest-inbound-watch')\" | grep -q True"
+check "the guest's own connect to that same port did happen, and the inbound rule did not fire on it" "api $U/api/v1/events | J \"any(e['kind']=='guest_connect' and e['dport']==8090 and e.get('dst')=='10.99.0.1' for e in d['events'])\" | grep -q True && api $U/api/v1/events | J \"[e for e in d['events'] if e['kind']=='detection' and e.get('rule')=='guest-inbound-watch' and 'connected in' not in e['message']]\" | grep -q '\[\]'"
+check "the outcomes are on /metrics" "api $U/metrics | grep -q 'shukra_tap_connect_outcomes_total{vm=\"taptest\",tap=\"vethh\",direction=\"out\",result=\"refused\"}'"
+sudo iptables -D INPUT -d 10.99.0.1 -p tcp --dport 8081 -j DROP 2>/dev/null
+sudo ip netns exec g1 iptables -D INPUT -p tcp --dport 8092 -j DROP 2>/dev/null
+kill $GLIS 2>/dev/null; sudo pkill -f 'http.server 8090' 2>/dev/null
 
 echo "== 8. enforcement outlives the daemon"
 ALLOW="-isolate-allow 10.99.0.1/32,fd99::1/128"

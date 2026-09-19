@@ -579,3 +579,71 @@ func TestDropMetricsExistOnlyWhileTheProgramMeasures(t *testing.T) {
 		t.Fatalf("a series with no measurement behind it:\n%s", off)
 	}
 }
+
+func withOutcomes() *state.State {
+	st := state.New("node-07")
+	st.SetVMs([]identity.VM{{Name: "db", Taps: []string{"tap0"}}})
+	st.SetPrograms([]state.Program{{Name: "tap", Status: "attached"}})
+	hist := make([]uint64, 64)
+	hist[17], hist[18] = 30, 10 // bucket 17 is 131 to 262 us, bucket 18 is 262 to 524 us
+	st.SetTapSource(func() []state.TapStat {
+		return []state.TapStat{{Name: "tap0", HandshakeHist: hist, Outcomes: state.Outcomes{
+			OutSyn: 50, OutOK: 40, OutRefused: 6, OutTimeout: 3, OutBlocked: 1, OutRetrans: 4,
+			InSyn: 9, InOK: 2, InRefused: 3, InIgnored: 4, InRetrans: 1,
+		}}}
+	})
+	return st
+}
+
+func TestTapRowsCarryTheHandshakeOutcomesAndTheirLatency(t *testing.T) {
+	rec := get(New(withOutcomes(), "k"), "/api/v1/trace/tap", "k")
+	var body struct {
+		Rows []map[string]json.RawMessage `json:"rows"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body.Rows) != 1 {
+		t.Fatalf("%v %s", err, rec.Body.String())
+	}
+	r := body.Rows[0]
+	for k, want := range map[string]string{
+		"outSyn": "50", "outAccepted": "40", "outRefused": "6", "outTimedOut": "3", "outBlocked": "1", "outRetransmits": "4",
+		"inSyn": "9", "inAccepted": "2", "inRefused": "3", "inIgnored": "4", "inRetransmits": "1",
+	} {
+		if string(r[k]) != want {
+			t.Errorf("%s = %s, want %s", k, r[k], want)
+		}
+	}
+	// Percentiles are a bucket's high edge: 30 of the 40 are in bucket 17, whose edge is 2^18 ns, and the
+	// slowest 10 are in bucket 18, whose edge is 2^19 ns.
+	if string(r["handshakeP50Ns"]) != "262144" || string(r["handshakeP99Ns"]) != "524288" {
+		t.Errorf("p50 = %s p99 = %s", r["handshakeP50Ns"], r["handshakeP99Ns"])
+	}
+	// A tap with no handshakes has [] and not null for the histogram.
+	empty := state.New("n")
+	empty.SetVMs([]identity.VM{{Name: "db", Taps: []string{"tap0"}}})
+	empty.SetTapSource(func() []state.TapStat { return []state.TapStat{{Name: "tap0"}} })
+	var eb struct {
+		Rows []map[string]json.RawMessage `json:"rows"`
+	}
+	if err := json.Unmarshal(get(New(empty, "k"), "/api/v1/trace/tap", "k").Body.Bytes(), &eb); err != nil || string(eb.Rows[0]["handshakeHist"]) != "[]" {
+		t.Fatalf("%v %s", err, eb.Rows[0]["handshakeHist"])
+	}
+}
+
+func TestOutcomeMetricsSplitByDirectionAndResultAndHaveALatencyHistogram(t *testing.T) {
+	text := get(New(withOutcomes(), "k"), "/metrics", "k").Body.String()
+	for _, want := range []string{
+		`shukra_tap_connect_attempts_total{vm="db",tap="tap0",direction="out"} 50`,
+		`shukra_tap_connect_attempts_total{vm="db",tap="tap0",direction="in"} 9`,
+		`shukra_tap_connect_outcomes_total{vm="db",tap="tap0",direction="out",result="accepted"} 40`,
+		`shukra_tap_connect_outcomes_total{vm="db",tap="tap0",direction="out",result="refused"} 6`,
+		`shukra_tap_connect_outcomes_total{vm="db",tap="tap0",direction="out",result="timed_out"} 3`,
+		`shukra_tap_connect_outcomes_total{vm="db",tap="tap0",direction="out",result="blocked"} 1`,
+		`shukra_tap_connect_outcomes_total{vm="db",tap="tap0",direction="in",result="ignored"} 4`,
+		`shukra_tap_connect_retransmits_total{vm="db",tap="tap0",direction="out"} 4`,
+		`shukra_tap_handshake_seconds_count{vm="db",tap="tap0"} 40`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+}

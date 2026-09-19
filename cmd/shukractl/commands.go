@@ -510,6 +510,10 @@ func formatTrace(w io.Writer, kind string, m map[string]any) {
 		case "tap":
 			fmt.Fprintf(w, "  tap=%s  from_guest=%s B/%s pkts  to_guest=%s B/%s pkts  dropped=%s pkts  isolated=%v",
 				str(row, "tap"), num(row, "fromGuestBytes"), num(row, "fromGuestPackets"), num(row, "toGuestBytes"), num(row, "toGuestPackets"), num(row, "droppedPackets"), row["isolated"])
+			fmt.Fprintf(w, "\n      connects out: %s attempts = %s accepted + %s refused + %s never answered + %s blocked  (%s retransmits, handshake p50 %sns p99 %sns)",
+				num(row, "outSyn"), num(row, "outAccepted"), num(row, "outRefused"), num(row, "outTimedOut"), num(row, "outBlocked"), num(row, "outRetransmits"), num(row, "handshakeP50Ns"), num(row, "handshakeP99Ns"))
+			fmt.Fprintf(w, "\n      connects in:  %s attempts = %s accepted + %s refused + %s ignored + %s blocked  (%s retransmits)",
+				num(row, "inSyn"), num(row, "inAccepted"), num(row, "inRefused"), num(row, "inIgnored"), num(row, "inBlocked"), num(row, "inRetransmits"))
 		}
 		fmt.Fprintln(w)
 	}

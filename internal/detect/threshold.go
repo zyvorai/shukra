@@ -27,8 +27,7 @@ type vmSnap struct {
 	exits, delayNs, wakeups, retrans uint64
 	readBytes, writeBytes, ops       uint64
 	read, write, kvmLat, schedHist   []uint64
-	foreignDrops                     uint64
-	foreignOK                        bool // the drops program was measuring when this was taken
+	tap                              aggregate.TapTotals
 }
 
 type snapshot struct {
@@ -42,18 +41,17 @@ type snapshot struct {
 // are the QEMU process's, not the guest's. Not safe for concurrent use.
 type Evaluator struct {
 	history []snapshot
-	foreign map[string]uint64
+	taps    map[string]aggregate.TapTotals
 }
 
-// SetForeignDrops gives, per VM, how many packets the kernel has dropped on its taps that Shukra did
-// not. Nil means the drops program is not measuring, and guest_drops_per_sec then says nothing.
-func (e *Evaluator) SetForeignDrops(m map[string]uint64) { e.foreign = m }
+// SetTapTotals gives, per VM, the counters that come from its taps: drops Shukra did not do, and what
+// became of its TCP connections. A rule that reads one says nothing for a VM whose measurement was not
+// on, at either end of its window.
+func (e *Evaluator) SetTapTotals(m map[string]aggregate.TapTotals) { e.taps = m }
 
 func (e *Evaluator) snapOf(name string, c aggregate.Counters) vmSnap {
 	s := snap(c)
-	if e.foreign != nil {
-		s.foreignDrops, s.foreignOK = e.foreign[name], true
-	}
+	s.tap = e.taps[name]
 	return s
 }
 
@@ -172,10 +170,23 @@ func metric(name string, old, cur vmSnap, span time.Duration) (float64, bool) {
 		d, ok := sub(cur.ops, old.ops)
 		return float64(d) / secs, ok
 	case MetricGuestDropsPerSec:
-		if !old.foreignOK || !cur.foreignOK {
+		if !old.tap.DropsOK || !cur.tap.DropsOK {
 			return 0, false // not measured then or now: say nothing, not zero
 		}
-		d, ok := sub(cur.foreignDrops, old.foreignDrops)
+		d, ok := sub(cur.tap.ForeignDrops, old.tap.ForeignDrops)
+		return float64(d) / secs, ok
+	case MetricConnectRefusedPerSec, MetricConnectTimeoutsPerSec, MetricInboundPerSec:
+		if !old.tap.OutcomesOK || !cur.tap.OutcomesOK {
+			return 0, false
+		}
+		o, c := old.tap.OutRefused, cur.tap.OutRefused
+		switch name {
+		case MetricConnectTimeoutsPerSec:
+			o, c = old.tap.OutTimeout, cur.tap.OutTimeout
+		case MetricInboundPerSec:
+			o, c = old.tap.InSyn, cur.tap.InSyn
+		}
+		d, ok := sub(c, o)
 		return float64(d) / secs, ok
 	}
 	return 0, false

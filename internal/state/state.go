@@ -528,9 +528,15 @@ func (s *State) ExplainOver(name string, now time.Time, window time.Duration) Ex
 		missing = append([]string{"guest tap attribution (TCX on the VM tap is not attached)"}, missing...)
 	}
 	dropTaps, _ := s.DropTapsOver(name, now, window)
+	var conns *Outcomes
+	if oc, _ := s.OutcomesOver(name, now, window); oc != nil {
+		if o, ok := oc[vm.Name]; ok {
+			conns = &o
+		}
+	}
 	return Explain{
 		VM: vm, Question: "why is this VM slow?", Window: over,
-		Findings: diagnose(vm.Name != "", dkvm, dsched, dthreads, dblock, dnet, dropTaps),
+		Findings: diagnose(vm.Name != "", dkvm, dsched, dthreads, dblock, dnet, dropTaps, conns),
 		Basis:    basis,
 		Evidence: evidence,
 		Missing:  missing,

@@ -34,6 +34,9 @@ ports:                 # a connect (or, with proto, a UDP flow) to this destinat
   - port: 25
     name: smtp-egress
     severity: medium
+  - port: 22
+    name: ssh-into-vm
+    dir: in            # out (the default: the VM connected), in (a connection made TO the VM), or any
   - port: 53
     name: dns-out
     proto: udp         # tcp (the default), udp or any
@@ -60,6 +63,8 @@ thresholds:            # per VM, over a window
 | `kvm_exit_latency_p99_ms` | p99 host time handling a KVM exit in the window. Halts are excluded, since they are guest idle |
 | `runqueue_delay_p99_ms` | p99 wait for a host CPU after a wakeup, across the VM's threads |
 | `block_read_bytes_per_sec`, `block_write_bytes_per_sec`, `block_iops` | Throughput and request rate on the QEMU I/O thread |
+| `guest_connect_refused_per_sec`, `guest_connect_timeouts_per_sec` | The guest's own TCP connections that were refused, or that nobody answered. Needs the tap program |
+| `guest_inbound_per_sec` | Connections per second attempted to the guest. Needs the tap program |
 | `guest_drops_per_sec` | Packets per second the kernel dropped on the VM's taps that Shukra did not (another program, not isolation). Needs the drops program; without it a rule says nothing |
 | `kvm_exits_per_sec` | KVM exits per second |
 | `tcp_retransmits_per_sec` | retransmits per second |
