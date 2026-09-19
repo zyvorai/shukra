@@ -102,6 +102,7 @@ type State struct {
 	config        ConfigInfo
 	rulesErr      string
 	kernelRelease func() string
+	linkExists    func(string) bool
 	history       []snapshot
 	clock         func() time.Time
 	enforcer      Enforcer
