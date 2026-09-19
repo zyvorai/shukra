@@ -26,7 +26,11 @@ jobs:
           if [ -z "$strip_bin" ] && [ -x /usr/lib/llvm-18/bin/llvm-strip ]; then
             strip_bin=/usr/lib/llvm-18/bin/llvm-strip
           fi
-          real="$(find /usr/lib/linux-tools -type f -name bpftool | head -1)"
+          real="$(find /usr/lib/linux-tools /usr/lib/linux-tools-* -name bpftool \( -type f -o -type l \) 2>/dev/null | head -1)"
+          if [ -z "$real" ]; then
+            dpkg -L "linux-tools-${ver}" | grep bpftool || true
+            real="$(dpkg -L "linux-tools-${ver}" | grep '/bpftool$' | head -1 || true)"
+          fi
           echo "clang=$clang_bin strip=$strip_bin bpftool=$real"
           test -n "$clang_bin"
           test -n "$strip_bin"
