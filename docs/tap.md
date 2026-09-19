@@ -73,6 +73,11 @@ Pinning needs a bpf filesystem at `/sys/fs/bpf` (present on any systemd host). W
 - VLAN-tagged frames and IPv6 extension headers are judged by their outer addresses only, and the SYN event needs the TCP header to follow the IPv6 header directly. Traffic that cannot be parsed is dropped while isolated.
 - ICMP and other protocols are counted and can be dropped, but do not produce events. UDP events carry addresses and ports, not the DNS name that was asked for.
 - Isolation blocks the VM's tap. It does not stop the guest talking to another guest on the same host bridge unless that traffic crosses this tap, and it does not touch vhost-user or SR-IOV interfaces.
+- A VM whose tap lives in another network namespace (a sandbox or container runtime that gives each VM its own) has no tap this daemon can attach to, since it runs in the host's namespace. Such a VM is listed with its tap name but has no tap counters, no guest events and cannot be isolated. Compare `taps` on `GET /api/v1/vms` with the rows of `GET /api/v1/trace/tap`. Found on a live host where one of ten VMs was like this.
+
+### What the counters count
+
+`to_guest` is what the host offered to the tap, counted before the tap's own driver runs. If the guest is not reading its NIC (a VM stopped at its firmware, or a guest whose NIC driver never came up), the tun driver drops those frames and the kernel's `tx_packets` stays put while `to_guest` keeps rising. Its `tx_dropped` climbs instead. `from_guest` is what the guest sent.
 
 ## How it was checked
 
