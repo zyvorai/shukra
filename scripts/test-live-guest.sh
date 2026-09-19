@@ -53,7 +53,10 @@ check "fluxctl, bpftool, python3 and curl are present" "command -v $FLUXCTL >/de
 check "the cloud image exists" "[ -r '$IMAGE' ]"
 check "the bridge $BRIDGE exists" "ip link show $BRIDGE >/dev/null 2>&1"
 check "the daemon answers with this key" "[ \"\$(curl -s -o /dev/null -w %{http_code} -H 'Authorization: Bearer $KEY' $URL/api/v1/status)\" = 200 ]"
-check "the tap program is attached" "api $URL/api/v1/programs | J \"[p['status'] for p in d['programs'] if p['name']=='tap'][0]\" | grep -q attached"
+# With no VM yet the program reports "detached: no VM tap interfaces to attach to yet", which is
+# fine: it attaches when the first tap appears. Any other detached reason (an old kernel, a
+# missing capability) is a real problem.
+check "the tap program is attached, or waiting for its first VM" "api $URL/api/v1/programs | J \"[p['status']+' '+p['detail'] for p in d['programs'] if p['name']=='tap'][0]\" | grep -qE '^attached|no VM tap'"
 [ $FAILN -eq 0 ] || { echo "preconditions failed"; exit 1; }
 TAPS0=$(shukra_taps); PROGS0=$(shukra_progs); PINS0=$(sudo ls /sys/fs/bpf/shukra/tap 2>/dev/null | wc -l)
 echo "  baseline: $TAPS0 taps traced, $PROGS0 shukra TCX programs"

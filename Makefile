@@ -1,4 +1,4 @@
-.PHONY: deps generate build test test-bpf test-kernel test-tap install web dist
+.PHONY: deps generate build test test-bpf test-kernel test-tap test-live-guest install web dist
 
 PREFIX ?= /usr/local
 
@@ -52,6 +52,11 @@ test-kernel:
 # 6.6+, root, and `make generate`.
 test-tap:
 	./scripts/test-tap.sh
+
+# A real KVM guest booted by fluxvm, seen by a running shukrad. Needs a hypervisor with
+# fluxvm and shukrad running; see scripts/test-live-guest.sh.
+test-live-guest:
+	./scripts/test-live-guest.sh
 
 web:
 	npm --prefix web ci
