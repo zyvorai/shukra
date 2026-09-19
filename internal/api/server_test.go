@@ -510,10 +510,13 @@ func withDrops(attached bool) *state.State {
 		status = "attached"
 	}
 	st.SetPrograms([]state.Program{{Name: "tap", Status: "attached"}, {Name: "drops", Status: status}})
-	st.SetTapSource(func() []state.TapStat { return []state.TapStat{{Name: "tap0", DroppedPkts: 3}} })
+	var isolated uint64
+	st.SetTapSource(func() []state.TapStat { return []state.TapStat{{Name: "tap0", DroppedPkts: isolated}} })
 	st.SetDropSource(func() []state.DropStat {
 		return []state.DropStat{{Tap: "tap0", Reason: "TC_INGRESS", Count: 40, Location: "__netif_receive_skb_core"}, {Tap: "tap9", Reason: "TC_INGRESS", Count: 7}}
 	})
+	st.Drops("") // the daemon's first look, before Shukra has dropped anything
+	isolated = 3
 	return st
 }
 

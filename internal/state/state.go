@@ -108,6 +108,7 @@ type State struct {
 	enforcer      Enforcer
 	tapSource     func() []TapStat
 	dropSource    func() []DropStat
+	shukraBase    map[string]uint64 // per tap: what Shukra had already dropped when this daemon first looked
 	cpuVendor     string
 	persist       Persister
 	hooks         []func(event.Event)

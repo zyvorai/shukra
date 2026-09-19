@@ -40,6 +40,7 @@ type DropReason struct {
 // Shukra's own isolation drops appear in the kernel's count as TC_INGRESS or TC_EGRESS, so what
 // the tap program says it dropped is subtracted, and so is a full tap queue, which is the guest not
 // reading its NIC and is reported on its own (QueueFull). What is left, OtherDrops, is something else.
+// Both sides count from when this daemon started: see sinceStartLocked.
 type DropTap struct {
 	VM            string       `json:"vm"`
 	Tap           string       `json:"tap"`
@@ -93,7 +94,35 @@ func (s *State) dropInputs() (vms []identity.VM, taps []TapStat, drops []DropSta
 	if tsrc != nil {
 		taps = tsrc()
 	}
-	return vms, taps, dsrc(), true
+	drops = dsrc()
+	s.mu.Lock()
+	taps = s.sinceStartLocked(taps)
+	s.mu.Unlock()
+	return vms, taps, drops, true
+}
+
+// sinceStartLocked says what Shukra dropped on each tap since this daemon first looked. The tap
+// program's counters are pinned and outlive a restart, but the kernel's drop counts start again from
+// zero with the daemon, so subtracting a lifetime figure from a fresh one would hide another
+// program's drops behind isolation that happened before the restart. A tap whose counter went
+// backwards was re-attached and starts again from zero. Caller holds s.mu.
+func (s *State) sinceStartLocked(taps []TapStat) []TapStat {
+	if s.shukraBase == nil {
+		s.shukraBase = map[string]uint64{}
+	}
+	out := make([]TapStat, len(taps))
+	for i, t := range taps {
+		base, seen := s.shukraBase[t.Name]
+		if !seen {
+			base = t.DroppedPkts
+		} else if t.DroppedPkts < base {
+			base = 0
+		}
+		s.shukraBase[t.Name] = base
+		t.DroppedPkts -= base
+		out[i] = t
+	}
+	return out
 }
 
 // snapsFrom is the drop counts per tap, with what Shukra itself dropped on it.

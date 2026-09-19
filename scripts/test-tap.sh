@@ -218,7 +218,7 @@ sudo tc qdisc add dev vethh clsact 2>/dev/null || true
 # on, the answer could never come and most pings would never leave the guest, so the entry is made permanent
 # first and only frames the guest really sends are counted.
 guest ping -c 1 -W 1 10.99.0.1 >/dev/null 2>&1
-HOSTMAC=$(sudo ip -n g1 neigh show 10.99.0.1 | awk '{print $3}' | head -1)
+HOSTMAC=$(sudo ip -n g1 neigh show 10.99.0.1 | awk '{for (i = 1; i < NF; i++) if ($i == "lladdr") print $(i + 1)}' | head -1)
 sudo ip -n g1 neigh replace 10.99.0.1 lladdr "$HOSTMAC" dev vethg nud permanent
 tcin() { api "$U/api/v1/trace/drops" | J "sum(r['count'] for r in d['rows'] if r['tap']=='vethh' and r['reason']=='TC_INGRESS')"; }
 TC0=$(tcin)
