@@ -50,6 +50,10 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm || true
+          # The rule applies asynchronously: testing -w straight after the trigger raced it, and failed a run
+          # whose /dev/kvm was crw-rw-rw- a line later. Wait for udev, then give the mode up to 20 s to change.
+          sudo udevadm settle --timeout=20 || true
+          for _ in $(seq 1 40); do [ -w /dev/kvm ] && break; sleep 0.5; done
           if [ ! -w /dev/kvm ]; then
             echo "::error::this runner has no usable /dev/kvm, so no guest can be booted"
             ls -l /dev/kvm || true

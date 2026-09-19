@@ -10,7 +10,7 @@ type Program struct {
 	Detail string
 }
 
-// Programs returns the four observation programs. In this build they are detached
+// Programs returns the observation programs. In this build they are detached
 // unless the binary was linked with -tags shukrabpf.
 func Programs() []Program {
 	return programs()
