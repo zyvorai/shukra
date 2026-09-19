@@ -111,6 +111,7 @@ func (a *Agent) Refresh() {
 // evaluate runs the threshold rules against the latest counters.
 func (a *Agent) evaluate(now time.Time, vms []identity.VM, byPID map[uint32]aggregate.Counters) {
 	cfg := a.cfg.Load()
+	a.eval.SetTapTotals(a.State.TapTotals())
 	fired := a.eval.Evaluate(now, aggregate.PerVM(vms, byPID), cfg.Thresholds)
 	for _, f := range fired {
 		var joined identity.VM
@@ -150,7 +151,7 @@ func (a *Agent) Ingest(e event.Event) {
 		e.TS = time.Now().UTC()
 	}
 	cfg := a.cfg.Load()
-	if e.Kind == event.KindGuestConnect || e.Kind == event.KindGuestFlow {
+	if e.Kind == event.KindGuestConnect || e.Kind == event.KindGuestFlow || e.Kind == event.KindGuestInbound {
 		a.ingestGuest(e, cfg)
 		return
 	}
@@ -221,6 +222,10 @@ func (a *Agent) connectRules(e event.Event, cfg *detect.Config, detection func(r
 	if proto == "" {
 		proto = "tcp" // a host connect is always TCP
 	}
+	if e.Kind == event.KindGuestInbound {
+		a.inboundRules(e, cfg, detection)
+		return
+	}
 	if e.Dst != "" {
 		if rule, ok := cfg.Watch.Match(net.ParseIP(e.Dst)); ok {
 			// TCP and UDP to the same address are different facts, so an alert for one
@@ -236,6 +241,23 @@ func (a *Agent) connectRules(e event.Event, cfg *detect.Config, detection func(r
 		}
 		a.raise(e.TS, cfg, fmt.Sprintf("port|%s|%s|%s|%s|%s:%d", rule.Name, e.VM.Name, e.Attribution, proto, e.Dst, e.DPort),
 			detection(rule.Name, rule.Severity, fmt.Sprintf("%s port %d%s to %s", rule.Name, e.DPort, note, e.Dst)))
+	}
+}
+
+// inboundRules applies the rules to a connection made TO a guest. The address that matters is the peer's
+// (e.Src), so a destinations rule fires when a watched network connects in, and a ports rule with
+// dir: in or any fires on the guest port it connected to. The direction is in the suppression key, so
+// a connect in and a connect out to the same address never hide one another.
+func (a *Agent) inboundRules(e event.Event, cfg *detect.Config, detection func(rule, severity, msg string) event.Event) {
+	if e.Src != "" {
+		if rule, ok := cfg.Watch.Match(net.ParseIP(e.Src)); ok {
+			a.raise(e.TS, cfg, "dest-in|"+rule.Name+"|"+e.VM.Name+"|"+e.Attribution+"|"+e.Src,
+				detection(rule.Name, rule.Severity, rule.Name+" connected in from "+e.Src))
+		}
+	}
+	if rule, ok := cfg.MatchPortDir(e.DPort, "tcp", "in"); ok {
+		a.raise(e.TS, cfg, fmt.Sprintf("port-in|%s|%s|%s|%s:%d", rule.Name, e.VM.Name, e.Src, e.Dst, e.DPort),
+			detection(rule.Name, rule.Severity, fmt.Sprintf("%s port %d connected in from %s", rule.Name, e.DPort, e.Src)))
 	}
 }
 

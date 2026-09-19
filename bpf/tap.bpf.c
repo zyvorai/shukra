@@ -146,7 +146,8 @@ struct tap_event {
 	__u8 family;    /* 16 */
 	__u8 dropped;   /* 17: 1 when isolation dropped this packet */
 	__u8 proto;     /* 18: 6 for a TCP connect, 17 for a new UDP flow */
-	__u8 pad[5];    /* 19 */
+	__u8 dir;       /* 19: 0 when the guest sent it, 1 when it was sent to the guest (src is then the peer) */
+	__u8 pad[4];    /* 20 */
 	__u8 src[16];   /* 24: IPv4 uses the first 4 bytes */
 	__u8 dst[16];   /* 40 */
 };                      /* 56 */
@@ -158,6 +159,83 @@ struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 18);
 } tap_events SEC(".maps");
+
+/* TCP handshake outcomes. A SYN is remembered until it is answered: a SYN-ACK means the connection was
+   accepted, an RST means it was refused, and one that is never answered is counted as a timeout by
+   userspace (BPF has no timers), which sweeps the pending table. dir says who started it. */
+#define DIR_OUT 0 /* the guest sent the SYN */
+#define DIR_IN 1  /* the SYN was sent to the guest */
+
+struct tap_outcome {
+	__u64 out_syn;
+	__u64 out_ok;
+	__u64 out_refused;
+	__u64 out_retrans;
+	__u64 out_blocked; /* a SYN isolation dropped: not pending, so never a timeout */
+	__u64 in_syn;
+	__u64 in_ok;
+	__u64 in_refused;
+	__u64 in_retrans;
+	__u64 in_blocked;
+};
+
+struct {
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+	__uint(type, BPF_MAP_TYPE_PERCPU_HASH);
+	__uint(max_entries, 1024);
+	__type(key, __u32); /* ifindex */
+	__type(value, struct tap_outcome);
+} tap_outcomes SEC(".maps");
+
+/* How long an outbound connection took to be answered, as a log2 histogram of nanoseconds. */
+struct hs_key {
+	__u32 ifindex;
+	__u32 bucket;
+};
+
+struct {
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+	__uint(type, BPF_MAP_TYPE_PERCPU_HASH);
+	__uint(max_entries, 8192);
+	__type(key, struct hs_key);
+	__type(value, __u64);
+} tap_handshake_hist SEC(".maps");
+
+/* Written only by userspace: SYNs that were never answered. A separate map, because a userspace
+   read-modify-write of a per-CPU value would race with this program's own increments. */
+struct tap_timeout {
+	__u64 out_timeout;
+	__u64 in_ignored;
+};
+
+struct {
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1024);
+	__type(key, __u32);
+	__type(value, struct tap_timeout);
+} tap_timeouts SEC(".maps");
+
+/* SYNs waiting for an answer. The key is made of values the guest controls, so it is an LRU of a fixed
+   size, and not pinned: a restart must not inherit handshakes that were in flight. Explicit padding, so
+   two keys for the same flow are byte-for-byte equal. Mirrored by internal/bpfgen/tap.go. */
+struct pend_key {
+	__u32 ifindex;
+	__u16 gport; /* the guest's port */
+	__u16 pport; /* the peer's port */
+	__u8 family;
+	__u8 dir;
+	__u8 pad[2];
+	__u8 g[16]; /* the guest's address */
+	__u8 p[16]; /* the peer's address */
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, 65536);
+	__type(key, struct pend_key);
+	__type(value, __u64); /* bpf_ktime_get_ns of the SYN */
+} pending_syn SEC(".maps");
 
 static __always_inline struct tap_stat *stat_for(__u32 ifindex) {
 	struct tap_stat *s = bpf_map_lookup_elem(&tap_stats, &ifindex);
@@ -186,7 +264,7 @@ static __always_inline int may_emit(__u32 ifindex) {
 }
 
 static __always_inline void emit_connect(__u32 ifindex, __u8 family, __u8 proto, const __u8 *src, const __u8 *dst,
-					 __u16 sport, __u16 dport, __u8 dropped) {
+					 __u16 sport, __u16 dport, __u8 dropped, __u8 dir) {
 	if (!may_emit(ifindex))
 		return;
 	struct tap_event *e = bpf_ringbuf_reserve(&tap_events, sizeof(*e), 0);
@@ -200,6 +278,7 @@ static __always_inline void emit_connect(__u32 ifindex, __u8 family, __u8 proto,
 	e->family = family;
 	e->proto = proto;
 	e->dropped = dropped;
+	e->dir = dir;
 	__u32 n = family == FAMILY_INET ? 4 : 16;
 	/* Constant-size copies so the verifier can bound them. */
 	if (n == 4) {
@@ -251,6 +330,110 @@ static __always_inline int allowed6(const __u8 *addr) {
 	return bpf_map_lookup_elem(&allow6, &k) != 0;
 }
 
+static __always_inline struct tap_outcome *outcome_for(__u32 ifindex) {
+	struct tap_outcome *o = bpf_map_lookup_elem(&tap_outcomes, &ifindex);
+	if (o)
+		return o;
+	struct tap_outcome zero = {};
+	bpf_map_update_elem(&tap_outcomes, &ifindex, &zero, BPF_NOEXIST);
+	return bpf_map_lookup_elem(&tap_outcomes, &ifindex);
+}
+
+/* Slot for a latency in ns: bits.Len64(v)-1. Mirrors internal/hist.Bucket and log2_bucket in event.h. */
+static __always_inline __u32 hs_bucket(__u64 v) {
+	__u32 r = 0;
+	if (v >> 32) { v >>= 32; r += 32; }
+	if (v >> 16) { v >>= 16; r += 16; }
+	if (v >> 8) { v >>= 8; r += 8; }
+	if (v >> 4) { v >>= 4; r += 4; }
+	if (v >> 2) { v >>= 2; r += 2; }
+	if (v >> 1) { r += 1; }
+	return r;
+}
+
+static __always_inline void hs_observe(__u32 ifindex, __u64 ns) {
+	struct hs_key k = {.ifindex = ifindex, .bucket = hs_bucket(ns)};
+	__u64 *c = bpf_map_lookup_elem(&tap_handshake_hist, &k);
+	if (c) {
+		(*c)++;
+		return;
+	}
+	__u64 one = 1;
+	bpf_map_update_elem(&tap_handshake_hist, &k, &one, BPF_NOEXIST);
+}
+
+/* Follows one TCP handshake packet. A SYN is remembered; a SYN-ACK or RST that answers a remembered SYN
+   is counted and forgets it. Returns 1 for a SYN sent TO the guest, which is the one that becomes an
+   event: a retransmit of the same SYN is counted, but is not announced again. */
+static __always_inline int track_handshake(__u32 ifindex, int from_guest, __u8 family, const __u8 *src, const __u8 *dst,
+					   __u16 sport, __u16 dport, int syn, int synack, int drop) {
+	struct tap_outcome *o = outcome_for(ifindex);
+	if (!o)
+		return 0;
+	struct pend_key k = {.ifindex = ifindex, .family = family};
+	const __u8 *guest = from_guest ? src : dst;
+	const __u8 *peer = from_guest ? dst : src;
+	k.gport = from_guest ? sport : dport;
+	k.pport = from_guest ? dport : sport;
+	if (family == FAMILY_INET) {
+		__builtin_memcpy(k.g, guest, 4);
+		__builtin_memcpy(k.p, peer, 4);
+	} else {
+		__builtin_memcpy(k.g, guest, 16);
+		__builtin_memcpy(k.p, peer, 16);
+	}
+
+	if (syn) {
+		k.dir = from_guest ? DIR_OUT : DIR_IN;
+		if (drop) { /* isolation dropped it: an attempt that will never be answered, so it is not left pending */
+			if (from_guest) {
+				o->out_syn++;
+				o->out_blocked++;
+			} else {
+				o->in_syn++;
+				o->in_blocked++;
+			}
+			return !from_guest;
+		}
+		if (bpf_map_lookup_elem(&pending_syn, &k)) {
+			/* The same SYN again: counted as a retransmit, not as a new attempt. */
+			if (from_guest)
+				o->out_retrans++;
+			else
+				o->in_retrans++;
+			return 0;
+		}
+		if (from_guest)
+			o->out_syn++;
+		else
+			o->in_syn++;
+		__u64 now = bpf_ktime_get_ns();
+		bpf_map_update_elem(&pending_syn, &k, &now, BPF_NOEXIST);
+		return !from_guest;
+	}
+
+	/* An answer: the guest's SYN-ACK or RST answers a SYN sent to it, and the peer's answers the guest's. */
+	k.dir = from_guest ? DIR_IN : DIR_OUT;
+	__u64 *ts = bpf_map_lookup_elem(&pending_syn, &k);
+	if (!ts)
+		return 0;
+	__u64 t0 = *ts;
+	bpf_map_delete_elem(&pending_syn, &k);
+	if (k.dir == DIR_OUT) {
+		if (synack) {
+			o->out_ok++;
+			hs_observe(ifindex, bpf_ktime_get_ns() - t0);
+		} else {
+			o->out_refused++;
+		}
+	} else if (synack) {
+		o->in_ok++;
+	} else {
+		o->in_refused++;
+	}
+	return 0;
+}
+
 static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 	/* Not a frame from the guest: the host's own, looped back. Leave it alone. */
 	if (from_guest && skb->pkt_type == PACKET_LOOPBACK)
@@ -273,7 +456,7 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 	__u8 family = 0;
 	const __u8 *src = 0, *dst = 0;
 	__u16 sport = 0, dport = 0;
-	int syn = 0;
+	int syn = 0, synack = 0, rst = 0;
 	__u8 l4 = 0;
 
 	if (proto == ETH_P_IP) {
@@ -294,6 +477,8 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 				sport = __builtin_bswap16(tcp->source);
 				dport = __builtin_bswap16(tcp->dest);
 				syn = tcp->syn && !tcp->ack;
+				synack = tcp->syn && tcp->ack;
+				rst = tcp->rst;
 				l4 = IPPROTO_TCP_;
 			}
 		} else if (ip->protocol == IPPROTO_UDP_ && ip->ihl >= 5) {
@@ -329,6 +514,8 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 				sport = __builtin_bswap16(tcp->source);
 				dport = __builtin_bswap16(tcp->dest);
 				syn = tcp->syn && !tcp->ack;
+				synack = tcp->syn && tcp->ack;
+				rst = tcp->rst;
 				l4 = IPPROTO_TCP_;
 			}
 		} else if (ip6->nexthdr == IPPROTO_UDP_) {
@@ -345,11 +532,19 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 		drop = 1;
 	}
 
+	/* Follow the TCP handshake: what was answered, refused, or is still waiting, either way round. */
+	int inbound_new = 0;
+	if (l4 == IPPROTO_TCP_ && src && dst && (syn || synack || rst))
+		inbound_new = track_handshake(ifindex, from_guest, family, src, dst, sport, dport, syn, synack, drop);
+
 	if (from_guest && src && dst) {
 		if (syn)
-			emit_connect(ifindex, family, IPPROTO_TCP_, src, dst, sport, dport, drop);
+			emit_connect(ifindex, family, IPPROTO_TCP_, src, dst, sport, dport, drop, DIR_OUT);
 		else if (l4 == IPPROTO_UDP_ && !is_multicast(family, dst) && new_udp_flow(ifindex, family, src, dst, sport, dport))
-			emit_connect(ifindex, family, IPPROTO_UDP_, src, dst, sport, dport, drop);
+			emit_connect(ifindex, family, IPPROTO_UDP_, src, dst, sport, dport, drop, DIR_OUT);
+	} else if (inbound_new) {
+		/* Someone connecting INTO the guest. src is the peer, dst is the guest. */
+		emit_connect(ifindex, family, IPPROTO_TCP_, src, dst, sport, dport, drop, DIR_IN);
 	}
 
 account:;

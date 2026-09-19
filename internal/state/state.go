@@ -107,6 +107,7 @@ type State struct {
 	clock         func() time.Time
 	enforcer      Enforcer
 	tapSource     func() []TapStat
+	dropSource    func() []DropStat
 	cpuVendor     string
 	persist       Persister
 	hooks         []func(event.Event)
@@ -132,6 +133,7 @@ func New(hostname string) *State {
 			{Name: "block", Status: "detached", Detail: "not attached yet"},
 			{Name: "net", Status: "detached", Detail: "not attached yet"},
 			{Name: "tap", Status: "detached", Detail: "not attached yet"},
+			{Name: "drops", Status: "detached", Detail: "not attached yet"},
 		},
 	}
 }
@@ -525,9 +527,16 @@ func (s *State) ExplainOver(name string, now time.Time, window time.Duration) Ex
 	if !tapAttached {
 		missing = append([]string{"guest tap attribution (TCX on the VM tap is not attached)"}, missing...)
 	}
+	dropTaps, _ := s.DropTapsOver(name, now, window)
+	var conns *Outcomes
+	if oc, _ := s.OutcomesOver(name, now, window); oc != nil {
+		if o, ok := oc[vm.Name]; ok {
+			conns = &o
+		}
+	}
 	return Explain{
 		VM: vm, Question: "why is this VM slow?", Window: over,
-		Findings: diagnose(vm.Name != "", dkvm, dsched, dthreads, dblock, dnet),
+		Findings: diagnose(vm.Name != "", dkvm, dsched, dthreads, dblock, dnet, dropTaps, conns),
 		Basis:    basis,
 		Evidence: evidence,
 		Missing:  missing,

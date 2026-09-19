@@ -74,6 +74,8 @@ func (s *State) Doctor() []Check {
 	if exists == nil {
 		exists = hostLinkExists
 	}
+	dropTaps, dropsOver := s.DropTapsOver("", s.now(), DefaultExplainWindow)
+	connOutcomes, connOver := s.OutcomesOver("", s.now(), DefaultExplainWindow)
 
 	var out []Check
 	add := func(id, status, title, detail, fix string) {
@@ -213,6 +215,45 @@ func (s *State) Doctor() []Check {
 				briefList(untraced)+". The interface exists here but has no counters: a tap that has just appeared is picked up on the next scan, and one that stays here means the attach failed.",
 				"Run shukractl programs and check the daemon log.")
 		}
+	}
+
+	// What the kernel dropped on the VMs' taps, that Shukra did not: another program on the tap, or a
+	// guest not reading its NIC. Nothing is said unless the drops program is measuring.
+	var foreign, notReading []string
+	for _, d := range dropTaps {
+		if d.OtherDrops >= dropFloor {
+			why := ""
+			if len(d.Reasons) > 0 {
+				why = d.Reasons[0].Reason + " "
+			}
+			foreign = append(foreign, fmt.Sprintf("%s (%s: %s%d)", d.VM, d.Tap, why, d.OtherDrops))
+		}
+		if d.QueueFull >= dropFloor {
+			notReading = append(notReading, fmt.Sprintf("%s (%s: %d)", d.VM, d.Tap, d.QueueFull))
+		}
+	}
+	if len(foreign) > 0 {
+		add("vm-drops-not-shukra", "warn", strconv.Itoa(len(foreign))+" VMs have traffic dropped on their tap by something other than Shukra",
+			briefList(foreign)+" over "+dropsOver+". Shukra's own isolation drops are already subtracted.",
+			"Something else attached to the tap is dropping it: Cilium, a network dataplane, a tc filter. Run bpftool net show dev <tap>, and see docs/tap.md, \"When guests cannot reach each other\".")
+	}
+	if len(notReading) > 0 {
+		add("vm-nic-not-consumed", "warn", strconv.Itoa(len(notReading))+" VMs are not reading their NIC",
+			briefList(notReading)+" packets were dropped over "+dropsOver+" because the tap's queue was full.",
+			"The guest is stalled, has no working network driver, or is overloaded. Look at the VM itself.")
+	}
+
+	// VMs whose own outbound connections mostly fail, as seen on their taps.
+	var failing []string
+	for _, vm := range vms {
+		if ok, what := connectFailing(connOutcomes[vm.Name]); ok {
+			failing = append(failing, vm.Name+" ("+what+")")
+		}
+	}
+	if len(failing) > 0 {
+		add("vm-connects-failing", "warn", strconv.Itoa(len(failing))+" VMs have outbound connections that mostly fail",
+			briefList(failing)+" over "+connOver+".",
+			"Refused: nothing listens on that port. Never answered: something drops the SYN, such as blocked egress or an unreachable network. Many refusals to different ports looks like a scan. shukractl trace tap --vm <vm> has the counts.")
 	}
 
 	// Isolation.

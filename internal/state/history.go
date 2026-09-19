@@ -24,8 +24,10 @@ const (
 )
 
 type snapshot struct {
-	at      time.Time
-	threads map[string]map[uint32]aggregate.Counters // VM name -> tid -> counters
+	at       time.Time
+	threads  map[string]map[uint32]aggregate.Counters // VM name -> tid -> counters
+	drops    map[string]dropSnap                      // tap name -> what the kernel dropped on it, when the drops program was measuring
+	outcomes map[string]Outcomes                      // tap name -> what became of its TCP handshakes, when the tap program was on
 }
 
 func (s *State) now() time.Time {
@@ -50,6 +52,19 @@ func (s *State) recordLocked(now time.Time) {
 		}
 		snap.threads[vm.Name] = m
 	}
+	if s.dropSource != nil && s.programAttachedLocked("drops") {
+		var taps []TapStat
+		if s.tapSource != nil {
+			taps = s.tapSource()
+		}
+		snap.drops = snapsFrom(taps, s.dropSource())
+	}
+	if s.tapSource != nil && s.programAttachedLocked("tap") {
+		snap.outcomes = map[string]Outcomes{}
+		for _, t := range s.tapSource() {
+			snap.outcomes[t.Name] = t.Outcomes
+		}
+	}
 	s.history = append(s.history, snap)
 	cut := 0
 	for cut < len(s.history)-1 && now.Sub(s.history[cut].at) > snapKeep {
@@ -64,6 +79,29 @@ func (s *State) recordLocked(now time.Time) {
 func (s *State) windowedInputs(vm identity.VM, now time.Time, window time.Duration) (map[uint32]aggregate.Counters, time.Duration, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if window <= 0 || len(s.history) == 0 {
+		return nil, 0, false
+	}
+	base, span, ok := s.baseLocked(now, window)
+	if !ok {
+		return nil, 0, false
+	}
+	old := base.threads[vm.Name]
+	out := make(map[uint32]aggregate.Counters, len(vm.Threads))
+	for _, tid := range vm.Threads {
+		cur, ok := s.byPID[uint32(tid)]
+		if !ok {
+			continue
+		}
+		out[uint32(tid)] = aggregate.Delta(cur, old[uint32(tid)]) // a thread new in the window has no base: all of it is the window's
+	}
+	return out, span, true
+}
+
+// baseLocked picks the snapshot a window is measured from: the newest one at least a window old, or
+// the oldest when the history is younger than the window, and only when it spans enough time to mean
+// something. Caller holds s.mu.
+func (s *State) baseLocked(now time.Time, window time.Duration) (*snapshot, time.Duration, bool) {
 	if window <= 0 || len(s.history) == 0 {
 		return nil, 0, false
 	}
@@ -83,14 +121,26 @@ func (s *State) windowedInputs(vm identity.VM, now time.Time, window time.Durati
 	if span < minSpan {
 		return nil, 0, false
 	}
-	old := base.threads[vm.Name]
-	out := make(map[uint32]aggregate.Counters, len(vm.Threads))
-	for _, tid := range vm.Threads {
-		cur, ok := s.byPID[uint32(tid)]
-		if !ok {
-			continue
-		}
-		out[uint32(tid)] = aggregate.Delta(cur, old[uint32(tid)]) // a thread new in the window has no base: all of it is the window's
+	return base, span, true
+}
+
+// dropBase is the drop counts a window is measured from. It says false when there is no snapshot
+// with drop counts old enough, and the caller reads the whole lifetime instead.
+func (s *State) dropBase(now time.Time, window time.Duration) (map[string]dropSnap, time.Duration, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	base, span, ok := s.baseLocked(now, window)
+	if !ok || base.drops == nil {
+		return nil, 0, false
 	}
-	return out, span, true
+	return base.drops, span, true
+}
+
+func (s *State) programAttachedLocked(name string) bool {
+	for _, p := range s.programs {
+		if p.Name == name {
+			return p.Status == "attached"
+		}
+	}
+	return false
 }

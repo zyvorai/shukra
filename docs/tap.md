@@ -16,9 +16,11 @@ Directions are named from the guest's side. Frames the guest sends are `from_gue
 - **Counters** per tap: packets and bytes each way, and packets and bytes dropped by isolation. Frames the host itself sent and the kernel looped back in (multicast) are not counted as the guest's. `shukractl trace tap`, `GET /api/v1/trace/tap`, and `shukra_tap_*` on `/metrics`.
 - **`guest_connect` events**: one per TCP SYN the guest sends (IPv4 and IPv6), with the guest's own source address, the destination and port, the tap, and `proto: "tcp"`. A connect isolation dropped has `blocked: true`.
 - **`guest_flow` events**: one per *new* UDP flow (`proto: "udp"`), so a guest's DNS, NTP or a UDP channel out is visible. A flow is announced when its first datagram is seen and again only after 60 seconds, so 20 datagrams on one flow are one event, and a new source port is a new flow. The flow table is a fixed-size LRU, so a guest cannot grow it, only turn it over. Multicast and broadcast (mDNS, SSDP, DHCP discovery) are counted in the tap's packets but produce no event.
-- Both kinds are capped at 200 events per tap per second, so a guest that floods SYNs or invents flows cannot flood the event ring. The counters still see every packet.
+- **`guest_inbound` events**: one per TCP connection made **to** the guest, the other way round from `guest_connect`. `src` is the peer that connected, `dst` is the guest, `dport` is the guest port it reached, and `blocked: true` means isolation dropped the SYN. A retransmit of the same SYN is not announced again. This is how you see a service inside a VM being probed, or a watched network reaching in.
+- **Handshake outcomes**, per tap and per direction (`shukractl trace tap`, `/api/v1/trace/tap`, `shukra_tap_connect_*`). The tap follows each SYN until it is answered: a SYN-ACK is **accepted**, an RST is **refused**, and a SYN nobody answers is **never answered** (`ignored`, for a connection made to the guest). Isolation's drops are **blocked**. A repeat of the same SYN is a **retransmit**, not a new attempt. So every attempt is exactly one of accepted, refused, never answered or blocked, or is still waiting, and the counts add up. The time from SYN to SYN-ACK of the guest's own connections is a log2 histogram (`handshakeP50Ns`, `handshakeP99Ns`, `shukra_tap_handshake_seconds`).
+- Both event kinds are capped at 200 events per tap per second, so a guest that floods SYNs or invents flows cannot flood the event ring. The counters still see every packet.
 
-The detection rules apply to these events as they do to host connects. A `destinations` rule fires on any protocol. A `ports` rule fires on TCP unless it says `proto: udp` or `proto: any`, so a rule written before UDP was visible means what it always did. A detection on guest traffic is itself `guest_attributed: true` with `attribution: "guest-tap"` and carries the `proto`. A host connect and a guest connect to the same address, and TCP and UDP to the same address, are separate alerts, so none of them hides another.
+The detection rules apply to these events as they do to host connects. A `destinations` rule fires on any protocol. A `ports` rule fires on TCP unless it says `proto: udp` or `proto: any`, and on the guest's own connects unless it says `dir: in` (a connection made to the guest, matched on the port it reached) or `dir: any`, so a rule written before either was visible means what it always did. A `destinations` rule also fires when a watched network connects **in**, naming the peer. A detection on guest traffic is itself `guest_attributed: true` with `attribution: "guest-tap"` and carries the `proto`. A host connect and a guest connect to the same address, and TCP and UDP to the same address, are separate alerts, so none of them hides another.
 
 ## What guest_attributed means now
 
@@ -69,6 +71,7 @@ Pinning needs a bpf filesystem at `/sys/fs/bpf` (present on any systemd host). W
 
 ### What isolation does not cover
 
+- A SYN is judged "never answered" after 3 seconds, counted when the counters are read, because BPF has no timers. A server that answers after that is counted as never answered and not as accepted. The table of pending SYNs has a fixed size, so under a SYN flood the oldest are forgotten uncounted; `attempts` still counts every one. A daemon restart forgets handshakes that were in flight.
 - DHCP: a guest that must renew a lease will fail unless the DHCP server is on the allow list.
 - VLAN-tagged frames and IPv6 extension headers are judged by their outer addresses only, and the SYN event needs the TCP header to follow the IPv6 header directly. Traffic that cannot be parsed is dropped while isolated.
 - ICMP and other protocols are counted and can be dropped, but do not produce events. UDP events carry addresses and ports, not the DNS name that was asked for.
@@ -81,7 +84,9 @@ Pinning needs a bpf filesystem at `/sys/fs/bpf` (present on any systemd host). W
 
 ## When guests cannot reach each other
 
-Shukra's program can only drop a frame on a tap that is **isolated**, and it counts every frame it drops (`dropped` in `trace tap`). So if traffic is being lost and `dropped` is 0, something else is dropping it, and the kernel will say where. Trace the packet drops while the traffic runs:
+Shukra's program can only drop a frame on a tap that is **isolated**, and it counts every frame it drops (`dropped` in `trace tap`). So if traffic is being lost and `dropped` is 0, something else is dropping it. **`shukractl trace drops` says so directly**: for each tap it gives what the kernel dropped by reason, how many of those were Shukra's, and how many were not (`other`). `shukractl doctor` warns (`vm-drops-not-shukra`) when another program is dropping a VM's traffic, and (`vm-nic-not-consumed`) when a guest is not reading its NIC; `explain` gives the same as a cause; and a `guest_drops_per_sec` rule can alert on it.
+
+Where the `drops` program is not attached (an older kernel, or a build without BPF), the kernel will still say where. Trace the packet drops by hand while the traffic runs:
 
 ```bash
 sudo bpftrace -e 'tracepoint:skb:kfree_skb /args->protocol == 0x800/ {
@@ -91,6 +96,8 @@ sudo bpftrace -e 'tracepoint:skb:kfree_skb /args->protocol == 0x800/ {
 ```
 
 The reason is a number; the names are in `/sys/kernel/tracing/events/skb/kfree_skb/format`. A `TC_INGRESS` drop on a guest's tap means a tc or TCX program attached to that tap returned "drop". `bpftool net show dev <tap>` lists the programs there, and only the tap program's own drops are counted by Shukra. `NETFILTER_DROP` points at iptables or nftables instead, and `iptables -L -v -n -x` shows which rule's counter moves.
+
+On a real host the drops program pinned this down: the test guests' taps showed `TC_INGRESS` drops, freed in `__netif_receive_skb_core`, with Shukra's own count at 0, and `bpftool net show dev <tap>` listed fluxvm's `fluxvm_egress` program at `clsact/ingress`. And the guests that never read their NIC showed `FULL_RING`, freed in `tun_net_xmit`.
 
 Three things a real host showed, all about fluxvm and none about Shukra:
 

@@ -25,6 +25,14 @@ const (
 	MetricBlockReadBPS      = "block_read_bytes_per_sec"
 	MetricBlockWriteBPS     = "block_write_bytes_per_sec"
 	MetricBlockIOPS         = "block_iops"
+	// MetricGuestDropsPerSec counts packets the kernel dropped on a VM's tap that Shukra did not: another
+	// program on the tap, not isolation. It needs the drops program, and says nothing without it.
+	MetricGuestDropsPerSec = "guest_drops_per_sec"
+	// The guest's TCP connections, from the handshakes seen on its tap. Refused is an RST, a timeout is a SYN
+	// nobody answered (blocked egress, a black hole), and inbound is connections attempted to the guest.
+	MetricConnectRefusedPerSec  = "guest_connect_refused_per_sec"
+	MetricConnectTimeoutsPerSec = "guest_connect_timeouts_per_sec"
+	MetricInboundPerSec         = "guest_inbound_per_sec"
 )
 
 var metrics = map[string]bool{
@@ -32,6 +40,7 @@ var metrics = map[string]bool{
 	MetricKVMExitsPerSec: true, MetricRetransmitsPerSec: true,
 	MetricKVMExitP99MS: true, MetricRunqueueP99MS: true,
 	MetricBlockReadBPS: true, MetricBlockWriteBPS: true, MetricBlockIOPS: true,
+	MetricGuestDropsPerSec: true, MetricConnectRefusedPerSec: true, MetricConnectTimeoutsPerSec: true, MetricInboundPerSec: true,
 }
 
 var severities = map[string]bool{"low": true, "medium": true, "high": true, "critical": true}
@@ -51,7 +60,10 @@ type PortRule struct {
 	Port uint16 `yaml:"port"`
 	// Proto is "tcp" (the default, so an existing rule means what it always did),
 	// "udp", or "any".
-	Proto    string `yaml:"proto"`
+	Proto string `yaml:"proto"`
+	// Dir is "out" (the default, so an existing rule means what it always did: a connect the VM made),
+	// "in" (a connect made TO the VM, matched on the port it connected to), or "any".
+	Dir      string `yaml:"dir"`
 	Severity string `yaml:"severity"`
 	Name     string `yaml:"name"`
 }
@@ -142,6 +154,13 @@ func Parse(b []byte) (*Config, error) {
 		default:
 			return nil, fmt.Errorf("ports: %q: proto %q is not tcp, udp or any", r.Name, r.Proto)
 		}
+		switch r.Dir {
+		case "":
+			r.Dir = "out"
+		case "out", "in", "any":
+		default:
+			return nil, fmt.Errorf("ports: %q: dir %q is not out, in or any", r.Name, r.Dir)
+		}
 		if r.Severity == "" {
 			r.Severity = "high"
 		}
@@ -200,14 +219,27 @@ func Parse(b []byte) (*Config, error) {
 // MatchPort returns the first port rule for a destination port and protocol. A
 // rule with no proto is a TCP rule, as it was before UDP was seen at all.
 func (c *Config) MatchPort(port uint16, proto string) (PortRule, bool) {
+	return c.MatchPortDir(port, proto, "out")
+}
+
+// MatchPortDir is MatchPort for a connect the VM made ("out") or one made to it ("in"). A rule with no dir
+// means "out", so a rule written before inbound connects were visible still means what it did.
+func (c *Config) MatchPortDir(port uint16, proto, dir string) (PortRule, bool) {
 	if c == nil || port == 0 {
 		return PortRule{}, false
 	}
 	if proto == "" {
 		proto = "tcp"
 	}
+	if dir == "" {
+		dir = "out"
+	}
 	for _, r := range c.Ports {
-		if r.Port == port && (r.Proto == "any" || r.Proto == proto || (r.Proto == "" && proto == "tcp")) {
+		rdir := r.Dir
+		if rdir == "" {
+			rdir = "out"
+		}
+		if r.Port == port && (r.Proto == "any" || r.Proto == proto || (r.Proto == "" && proto == "tcp")) && (rdir == "any" || rdir == dir) {
 			return r, true
 		}
 	}

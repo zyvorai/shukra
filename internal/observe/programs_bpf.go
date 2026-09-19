@@ -24,6 +24,7 @@ func programs() []Program {
 				{Name: "sched", Status: "detached", Detail: detail},
 				{Name: "block", Status: "detached", Detail: detail},
 				{Name: "net", Status: "detached", Detail: detail},
+				{Name: "drops", Status: "detached", Detail: detail},
 			}
 			return
 		}

@@ -6,12 +6,12 @@ import Overview from './pages/Overview';
 import VMs from './pages/VMs';
 import Recorder from './pages/Recorder';
 import Explain from './pages/Explain';
-import { Block, Connections, KVM, Programs, Sched } from './pages/Traces';
+import { Block, Connections, Drops, KVM, Programs, Sched } from './pages/Traces';
 import { Detections, Isolate } from './pages/Security';
 import { token, setToken } from './api';
 import { applyTheme, readStoredTheme, toggleTheme, type Theme } from './theme';
 
-const pages: Page[] = ['overview', 'vms', 'recorder', 'explain', 'kvm', 'sched', 'block', 'programs', 'connections', 'detections', 'isolate'];
+const pages: Page[] = ['overview', 'vms', 'recorder', 'explain', 'kvm', 'sched', 'block', 'programs', 'connections', 'drops', 'detections', 'isolate'];
 
 function readPage(): Page {
   const m = window.location.hash.match(/page=([a-z]+)/);
@@ -26,8 +26,9 @@ const heroes: Partial<Record<Page, { eyebrow: string; title: string; lede: strin
   kvm: { eyebrow: 'Diagnostics', title: 'KVM exits, counted.', lede: 'Exit counts, how long the host spends handling them, and which reasons cost the most. Not one event per exit.', tint: 'green' },
   sched: { eyebrow: 'Diagnostics', title: 'Scheduler delay.', lede: 'On-CPU time and run-queue delay for QEMU threads, and which thread is slow.', tint: 'amber' },
   block: { eyebrow: 'Diagnostics', title: 'Block latency.', lede: 'Requests, bytes, worst case and the latency distribution, from a log2 histogram on the QEMU I/O thread.', tint: 'amber' },
-  programs: { eyebrow: 'Diagnostics', title: 'What is attached.', lede: 'kvm, sched, block, and net. Detached is an honest state.', tint: 'green' },
+  programs: { eyebrow: 'Diagnostics', title: 'What is attached.', lede: 'kvm, sched, block, net, tap and drops. Detached is an honest state.', tint: 'green' },
   connections: { eyebrow: 'Network', title: 'Host connections.', lede: "QEMU's own connects, and the guest's own on its tap when the tap program is attached.", tint: 'purple' },
+  drops: { eyebrow: 'Network', title: 'Where packets die.', lede: "What the kernel dropped on each VM's tap and why, with Shukra's own isolation subtracted. Another program dropping traffic shows up here.", tint: 'red' },
   detections: { eyebrow: 'Security', title: 'New destinations.', lede: 'Rule hits. A detection only notices. Isolating is a separate, deliberate step.', tint: 'red' },
   isolate: { eyebrow: 'Security', title: 'Hold the VM.', lede: "Drops the VM's tap traffic except your management allow list. Nothing happens until you confirm.", tint: 'red' },
 };
@@ -76,6 +77,7 @@ export default function App() {
     block: <Block />,
     programs: <Programs />,
     connections: <Connections />,
+    drops: <Drops />,
     detections: <Detections />,
     isolate: <Isolate />,
   }[page];

@@ -168,9 +168,9 @@ func traceCmd(args []string, out io.Writer) error {
 	}
 	kind := args[0]
 	switch kind {
-	case "kvm", "sched", "block", "net", "tap":
+	case "kvm", "sched", "block", "net", "tap", "drops":
 	default:
-		return fmt.Errorf("trace kvm|sched|block|net|tap")
+		return fmt.Errorf("trace kvm|sched|block|net|tap|drops")
 	}
 	vm := flagValue(args[1:], "--vm", "")
 	path := "/api/v1/trace/" + kind
@@ -178,6 +178,10 @@ func traceCmd(args []string, out io.Writer) error {
 		path += "?vm=" + vm
 	}
 	return getBoard(out, path, has(args[1:], "--json"), func(w io.Writer, m map[string]any) {
+		if kind == "drops" {
+			formatDrops(w, m)
+			return
+		}
 		formatTrace(w, kind, m)
 	})
 }
@@ -406,6 +410,7 @@ func formatTraceList(w io.Writer, m map[string]any) {
 	fmt.Fprintln(w, "  block   block_rq_issue/complete log2 histogram. p50/p99 in userspace")
 	fmt.Fprintln(w, "  net     tcp_v4/v6_connect (exact) and sampled retransmits. QEMU process, not the guest")
 	fmt.Fprintln(w, "  tap     TCX on each VM tap: the guest's own traffic, and isolation")
+	fmt.Fprintln(w, "  drops   skb:kfree_skb on each VM tap: what the kernel dropped, why, and whether it was Shukra")
 	fmt.Fprintln(w)
 	formatPrograms(w, m)
 }
@@ -505,8 +510,45 @@ func formatTrace(w io.Writer, kind string, m map[string]any) {
 		case "tap":
 			fmt.Fprintf(w, "  tap=%s  from_guest=%s B/%s pkts  to_guest=%s B/%s pkts  dropped=%s pkts  isolated=%v",
 				str(row, "tap"), num(row, "fromGuestBytes"), num(row, "fromGuestPackets"), num(row, "toGuestBytes"), num(row, "toGuestPackets"), num(row, "droppedPackets"), row["isolated"])
+			fmt.Fprintf(w, "\n      connects out: %s attempts = %s accepted + %s refused + %s never answered + %s blocked  (%s retransmits, handshake p50 %sns p99 %sns)",
+				num(row, "outSyn"), num(row, "outAccepted"), num(row, "outRefused"), num(row, "outTimedOut"), num(row, "outBlocked"), num(row, "outRetransmits"), num(row, "handshakeP50Ns"), num(row, "handshakeP99Ns"))
+			fmt.Fprintf(w, "\n      connects in:  %s attempts = %s accepted + %s refused + %s ignored + %s blocked  (%s retransmits)",
+				num(row, "inSyn"), num(row, "inAccepted"), num(row, "inRefused"), num(row, "inIgnored"), num(row, "inBlocked"), num(row, "inRetransmits"))
 		}
 		fmt.Fprintln(w)
+	}
+}
+
+// formatDrops shows, per tap, how many packets the kernel dropped and whose drops they were, then
+// each reason with the kernel function that freed the last one.
+func formatDrops(w io.Writer, m map[string]any) {
+	if note := str(m, "note"); note != "" {
+		fmt.Fprintln(w, note)
+	}
+	fmt.Fprintln(w, "TRACE DROPS")
+	if measured, _ := m["measured"].(bool); !measured {
+		fmt.Fprintln(w, "  the drops program is not measuring, so nothing can be said about drops (shukractl programs says why)")
+		return
+	}
+	taps := list(m, "taps")
+	if len(taps) == 0 {
+		fmt.Fprintln(w, "  no VM tap has been seen yet")
+		return
+	}
+	rows := list(m, "rows")
+	for _, t := range taps {
+		fmt.Fprintf(w, "  vm=%s  tap=%s  kernel=%s  shukra=%s  other=%s  guest_not_reading=%s\n",
+			str(t, "vm"), str(t, "tap"), num(t, "kernelDrops"), num(t, "shukraDropped"), num(t, "otherDrops"), num(t, "guestNotReading"))
+		for _, r := range rows {
+			if str(r, "tap") != str(t, "tap") {
+				continue
+			}
+			where := ""
+			if loc := str(r, "location"); loc != "" {
+				where = "  freed in " + loc
+			}
+			fmt.Fprintf(w, "      %-14s %s%s\n", str(r, "reason"), num(r, "count"), where)
+		}
 	}
 }
 

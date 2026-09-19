@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zyvorai/shukra/internal/hist"
 	"github.com/zyvorai/shukra/internal/identity"
 )
 
@@ -24,6 +25,24 @@ type Enforcer interface {
 	Release(taps []string) ([]string, error)
 }
 
+// Outcomes is what became of the TCP handshakes on a tap. Out is the guest's own connections and In is
+// connections made to the guest. Every outbound attempt is exactly one of accepted, refused, timed out or
+// blocked by isolation (or still waiting), and a repeat of the same SYN is a retransmit, not a new attempt.
+type Outcomes struct {
+	OutSyn     uint64 `json:"outSyn"`
+	OutOK      uint64 `json:"outAccepted"`
+	OutRefused uint64 `json:"outRefused"`
+	OutTimeout uint64 `json:"outTimedOut"`
+	OutRetrans uint64 `json:"outRetransmits"`
+	OutBlocked uint64 `json:"outBlocked"`
+	InSyn      uint64 `json:"inSyn"`
+	InOK       uint64 `json:"inAccepted"`
+	InRefused  uint64 `json:"inRefused"`
+	InIgnored  uint64 `json:"inIgnored"`
+	InRetrans  uint64 `json:"inRetransmits"`
+	InBlocked  uint64 `json:"inBlocked"`
+}
+
 // TapStat is one tap interface's traffic from the guest's point of view.
 type TapStat struct {
 	Name                      string
@@ -31,6 +50,8 @@ type TapStat struct {
 	ToPkts, ToBytes           uint64
 	DroppedPkts, DroppedBytes uint64
 	Isolated                  bool
+	Outcomes
+	HandshakeHist []uint64 // how long the guest's connections took to be answered, log2 ns
 }
 
 // TapRow is a TapStat joined to the VM that owns the tap.
@@ -44,6 +65,10 @@ type TapRow struct {
 	DroppedPkts  uint64 `json:"droppedPackets"`
 	DroppedBytes uint64 `json:"droppedBytes"`
 	Isolated     bool   `json:"isolated"`
+	Outcomes
+	HandshakeP50Ns uint64   `json:"handshakeP50Ns"`
+	HandshakeP99Ns uint64   `json:"handshakeP99Ns"`
+	HandshakeHist  []uint64 `json:"handshakeHist"`
 }
 
 // SetEnforcer sets what carries out isolation. Without one, isolate is recorded and nothing more.
@@ -80,9 +105,14 @@ func (s *State) Taps(vm string) []TapRow {
 		if !ok || (vm != "" && name != vm) {
 			continue
 		}
+		h := t.HandshakeHist
+		if h == nil {
+			h = []uint64{} // [] and not null, so a client can loop over it
+		}
 		out = append(out, TapRow{
 			VM: name, Tap: t.Name, FromPkts: t.FromPkts, FromBytes: t.FromBytes, ToPkts: t.ToPkts, ToBytes: t.ToBytes,
 			DroppedPkts: t.DroppedPkts, DroppedBytes: t.DroppedBytes, Isolated: t.Isolated,
+			Outcomes: t.Outcomes, HandshakeP50Ns: hist.Percentile(h, 50), HandshakeP99Ns: hist.Percentile(h, 99), HandshakeHist: h,
 		})
 	}
 	return out

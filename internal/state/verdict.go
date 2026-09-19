@@ -46,7 +46,7 @@ func dur(ns uint64) string {
 // diagnose ranks the host-side causes the counters support. Each input is the
 // rows for the one VM being explained.
 func diagnose(found bool, kvm []aggregate.KVMRow, sched []aggregate.SchedRow, threads []aggregate.ThreadRow,
-	block []aggregate.BlockRow, net []aggregate.NetRow) []Finding {
+	block []aggregate.BlockRow, net []aggregate.NetRow, drops []DropTap, conns *Outcomes) []Finding {
 	if !found {
 		return []Finding{{Cause: "unknown_vm", Confidence: "high", Summary: "No QEMU process with that name is in the current scan."}}
 	}
@@ -141,6 +141,40 @@ func diagnose(found bool, kvm []aggregate.KVMRow, sched []aggregate.SchedRow, th
 			Summary:  "The QEMU process is retransmitting TCP segments. That is host traffic such as migration or a remote disk, not the guest's own connections.",
 			Evidence: []string{fmt.Sprintf("%d retransmits from the QEMU process.", net[0].Retransmits)},
 		})
+	}
+
+	// Packets the host kernel dropped on the VM's tap. Isolation's own drops are subtracted, so what
+	// is left is another program on the tap, or the guest not taking what it is sent.
+	for _, d := range drops {
+		if d.OtherDrops >= dropFloor {
+			ev := fmt.Sprintf("%d packets were dropped on tap %s by something other than Shukra (Shukra dropped %d).", d.OtherDrops, d.Tap, d.ShukraDropped)
+			if len(d.Reasons) > 0 {
+				ev += " Mostly " + d.Reasons[0].Reason + "."
+			}
+			out = append(out, Finding{
+				Cause: "guest_traffic_dropped", Confidence: "medium",
+				Summary:  "The host kernel is dropping this VM's packets, and Shukra's isolation is not the cause. Look for another program attached to the tap (Cilium, a network dataplane, a tc filter): bpftool net show dev " + d.Tap + ".",
+				Evidence: []string{ev},
+			})
+		}
+		if d.QueueFull >= dropFloor {
+			out = append(out, Finding{
+				Cause: "guest_not_reading_nic", Confidence: "medium",
+				Summary:  "The tap's queue is full, so the host cannot hand this VM the packets it is sent. The guest is not taking them: it is stalled, has no working NIC driver, or is overloaded.",
+				Evidence: []string{fmt.Sprintf("%d packets were dropped on tap %s because its queue was full.", d.QueueFull, d.Tap)},
+			})
+		}
+	}
+
+	// The guest's own connections, seen on its tap: most of them refused or never answered.
+	if conns != nil {
+		if failing, what := connectFailing(*conns); failing {
+			out = append(out, Finding{
+				Cause: "guest_connects_failing", Confidence: "medium",
+				Summary:  "Most of this VM's outbound TCP connections fail. Refused means nothing is listening on the destination port; never answered means something is dropping the SYN, such as blocked egress or an unreachable network. Many refusals to different ports looks like a scan.",
+				Evidence: []string{what + "."},
+			})
+		}
 	}
 
 	if len(out) == 0 {

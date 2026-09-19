@@ -174,6 +174,17 @@ func routes(st *state.State) *http.ServeMux {
 	}
 	mux.HandleFunc("POST /api/v1/isolate", act(st.Isolate))
 	mux.HandleFunc("POST /api/v1/release", act(st.Release))
+	mux.HandleFunc("GET /api/v1/trace/drops", func(w http.ResponseWriter, r *http.Request) {
+		rows, taps := st.Drops(r.URL.Query().Get("vm"))
+		writeJSON(w, http.StatusOK, map[string]any{
+			"attribution":     "guest-tap",
+			"guestAttributed": true,
+			"measured":        st.DropsMeasured(),
+			"note":            "Packets the kernel dropped on each VM tap, by the kernel's own reason. Shukra's isolation drops appear as TC_INGRESS or TC_EGRESS: shukraDropped says how many were Shukra's, and otherDrops is what is left, excluding a full queue (guestNotReading).",
+			"rows":            orEmpty(rows),
+			"taps":            orEmpty(taps),
+		})
+	})
 	mux.HandleFunc("GET /api/v1/trace/tap", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"attribution":     "guest-tap",

@@ -91,6 +91,33 @@ export function Block() {
   );
 }
 
+export function Drops() {
+  const { data, err } = useAPI<{ measured: boolean; taps: Row[]; rows: Row[] }>('/api/v1/trace/drops', { refreshMs: LIVE_MS });
+  if (data && !data.measured) {
+    return (
+      <section className="card">
+        <p className="eyebrow">TRACE</p>
+        <h3>Packets the kernel dropped on VM taps</h3>
+        <p className="empty-state">The drops program is not measuring, so nothing can be said about drops. The Programs page says why. Shukra does not show a zero it did not measure.</p>
+      </section>
+    );
+  }
+  return (
+    <>
+      <Trace
+        title="Packets the kernel dropped on VM taps"
+        err={err}
+        rows={data?.taps}
+        cols={['vm', 'tap', 'kernelDrops', 'shukraDropped', 'otherDrops', 'guestNotReading']}
+      />
+      <Trace title="By reason" err="" rows={data?.rows} cols={['vm', 'tap', 'reason', 'count', 'location']} />
+      <p className="hint">
+        Shukra&apos;s own isolation drops show up as TC_INGRESS or TC_EGRESS, and are subtracted: <b>other drops</b> is what something else did. A full queue means the guest is not reading its NIC.
+      </p>
+    </>
+  );
+}
+
 export function Programs() {
   const { data, err } = useAPI<{ programs: Row[] }>('/api/v1/programs', { refreshMs: LIVE_MS });
   return <Trace title="Programs" err={err} rows={data?.programs} cols={['name', 'status', 'detail']} />;
@@ -98,20 +125,30 @@ export function Programs() {
 
 export function Connections() {
   const { data, err } = useAPI<{ events: Row[] }>('/api/v1/events', { refreshMs: LIVE_MS });
+  const tap = useAPI<{ rows: Row[] }>('/api/v1/trace/tap', { refreshMs: LIVE_MS });
   const all = data?.events || [];
   const host = all.filter((e) => e.kind === 'tcp_connect' || e.kind === 'tcp_retransmit');
-  const guest = all.filter((e) => e.kind === 'guest_connect' || e.kind === 'guest_flow');
+  const guest = all.filter((e) => e.kind === 'guest_connect' || e.kind === 'guest_flow' || e.kind === 'guest_inbound');
   return (
     <div>
       <HostBanner />
       <Trace title="Host connections" err={err} rows={host} cols={['ts', 'kind', 'dst', 'dport', 'attribution', 'guest_attributed']} />
       {guest.length > 0 && (
         <Trace
-          title="Guest connections and UDP flows (seen on the VM tap)"
+          title="Guest connections, connections into the guest, and UDP flows (seen on the VM tap)"
           err=""
           rows={guest}
-          cols={['ts', 'vm', 'proto', 'src', 'dst', 'dport', 'blocked', 'attribution', 'guest_attributed']}
+          cols={['ts', 'vm', 'kind', 'proto', 'src', 'dst', 'dport', 'blocked', 'attribution', 'guest_attributed']}
           format={{ vm: (v) => String((v as { name?: string } | undefined)?.name ?? '—'), blocked: (v) => (v ? 'dropped' : '—') }}
+        />
+      )}
+      {tap.data && tap.data.rows.length > 0 && (
+        <Trace
+          title="Guest TCP connections: what became of them (per tap)"
+          err={tap.err}
+          rows={tap.data.rows}
+          cols={['vm', 'tap', 'outSyn', 'outAccepted', 'outRefused', 'outTimedOut', 'outBlocked', 'handshakeP50Ns', 'handshakeP99Ns', 'inSyn', 'inAccepted', 'inRefused', 'inIgnored']}
+          format={{ handshakeP50Ns: ns, handshakeP99Ns: ns }}
         />
       )}
     </div>

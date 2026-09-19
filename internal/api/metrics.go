@@ -152,6 +152,36 @@ func writeMetrics(w io.Writer, st *state.State) {
 		for _, t := range taps {
 			fmt.Fprintf(w, "shukra_tap_dropped_packets_total{%s,tap=%q} %d\n", lbl(t.VM), t.Tap, t.DroppedPkts)
 		}
+		// What became of the TCP handshakes. direction=out is the guest's own connections, in is made to it.
+		counter("shukra_tap_connect_attempts_total", "New TCP connection attempts seen on a VM tap. A repeat of the same SYN is a retransmit, not a new attempt.")
+		for _, t := range taps {
+			fmt.Fprintf(w, "shukra_tap_connect_attempts_total{%s,tap=%q,direction=\"out\"} %d\nshukra_tap_connect_attempts_total{%s,tap=%q,direction=\"in\"} %d\n",
+				lbl(t.VM), t.Tap, t.OutSyn, lbl(t.VM), t.Tap, t.InSyn)
+		}
+		counter("shukra_tap_connect_outcomes_total", "What became of them: accepted (SYN-ACK), refused (RST), timed_out or ignored (never answered), or blocked (dropped by isolation).")
+		for _, t := range taps {
+			for _, o := range []struct {
+				dir, result string
+				n           uint64
+			}{
+				{"out", "accepted", t.OutOK}, {"out", "refused", t.OutRefused}, {"out", "timed_out", t.OutTimeout}, {"out", "blocked", t.OutBlocked},
+				{"in", "accepted", t.InOK}, {"in", "refused", t.InRefused}, {"in", "ignored", t.InIgnored}, {"in", "blocked", t.InBlocked},
+			} {
+				fmt.Fprintf(w, "shukra_tap_connect_outcomes_total{%s,tap=%q,direction=%q,result=%q} %d\n", lbl(t.VM), t.Tap, o.dir, o.result, o.n)
+			}
+		}
+		counter("shukra_tap_connect_retransmits_total", "SYNs repeated on a connection that had not been answered yet.")
+		for _, t := range taps {
+			fmt.Fprintf(w, "shukra_tap_connect_retransmits_total{%s,tap=%q,direction=\"out\"} %d\nshukra_tap_connect_retransmits_total{%s,tap=%q,direction=\"in\"} %d\n",
+				lbl(t.VM), t.Tap, t.OutRetrans, lbl(t.VM), t.Tap, t.InRetrans)
+		}
+		var hs []histSeries
+		for _, t := range taps {
+			if len(t.HandshakeHist) > 0 {
+				hs = append(hs, histSeries{lbl(t.VM) + fmt.Sprintf(",tap=%q", t.Tap), t.HandshakeHist})
+			}
+		}
+		writeHistograms(w, "shukra_tap_handshake_seconds", "How long the guest's outbound TCP connections took to be answered, SYN to SYN-ACK, seen on the tap.", hs)
 		gauge("shukra_tap_isolated", "1 while the VM tap is isolated.")
 		for _, t := range taps {
 			v := 0
@@ -159,6 +189,15 @@ func writeMetrics(w io.Writer, st *state.State) {
 				v = 1
 			}
 			fmt.Fprintf(w, "shukra_tap_isolated{%s,tap=%q} %d\n", lbl(t.VM), t.Tap, v)
+		}
+	}
+	// Only while the drops program is measuring: a VM it cannot see has no series, never a zero. The
+	// per-reason counts only grow, so this is a counter. What is Shukra's and what is not is a difference
+	// of two counters read a moment apart, which can dip, so it is served on the API and not here.
+	if drops, _ := st.Drops(""); len(drops) > 0 {
+		counter("shukra_tap_kernel_drops_total", "Packets the kernel dropped on a VM tap, by the kernel's own reason. Shukra's isolation drops appear here as TC_INGRESS or TC_EGRESS.")
+		for _, d := range drops {
+			fmt.Fprintf(w, "shukra_tap_kernel_drops_total{%s,tap=%q,reason=%q} %d\n", lbl(d.VM), d.Tap, d.Reason, d.Count)
 		}
 	}
 	net := st.Net("")

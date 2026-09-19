@@ -37,6 +37,7 @@ func SyncTaps(names []string) {
 			log.Printf("tap program on %s: %v", name, e)
 		}
 	}
+	watchDrops()
 }
 
 // TapProgram is the state of the tap program: attached once at least one VM tap
@@ -72,9 +73,13 @@ func ShutdownTaps() {
 // how many links it detached. It works whether or not the daemon is running.
 func DetachAllTaps() int { return bpfgen.DetachAllTaps() }
 
-// TapSample reads the per-tap counters.
+// TapSample reads the per-tap counters. It first counts the TCP handshakes that were never answered,
+// which the kernel cannot do for itself.
 func TapSample() []TapCounters {
+	bpfgen.SweepPending()
 	stats := bpfgen.TapStats()
+	outcomes := bpfgen.TapOutcomes()
+	hs := bpfgen.TapHandshakeHist()
 	var out []TapCounters
 	for _, name := range bpfgen.TapAttached() {
 		iface, err := net.InterfaceByName(name)
@@ -82,11 +87,16 @@ func TapSample() []TapCounters {
 			continue
 		}
 		s := stats[uint32(iface.Index)]
-		out = append(out, TapCounters{
+		c := TapCounters{
 			Name: name, Ifindex: uint32(iface.Index),
 			FromPkts: s.FromPkts, FromBytes: s.FromBytes, ToPkts: s.ToPkts, ToBytes: s.ToBytes,
 			DroppedPkts: s.DroppedPkts, DroppedBytes: s.DroppedBytes, Isolated: bpfgen.TapIsolated(name),
-		})
+		}
+		o := outcomes[uint32(iface.Index)]
+		c.OutSyn, c.OutOK, c.OutRefused, c.OutTimeout, c.OutRetrans, c.OutBlocked = o.OutSyn, o.OutOK, o.OutRefused, o.OutTimeout, o.OutRetrans, o.OutBlocked
+		c.InSyn, c.InOK, c.InRefused, c.InIgnored, c.InRetrans, c.InBlocked = o.InSyn, o.InOK, o.InRefused, o.InIgnored, o.InRetrans, o.InBlocked
+		c.HandshakeHist = hs[uint32(iface.Index)]
+		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -147,6 +157,9 @@ func decodeTap(b []byte, name func(ifindex uint32) string) (event.Event, bool) {
 	switch b[18] {
 	case 0, 6:
 		e.Kind, e.Proto = event.KindGuestConnect, "tcp"
+		if b[19] == 1 { // a SYN sent to the guest: someone connecting in
+			e.Kind = event.KindGuestInbound
+		}
 	case 17:
 		e.Kind, e.Proto = event.KindGuestFlow, "udp"
 	default:

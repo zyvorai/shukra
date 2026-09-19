@@ -325,6 +325,7 @@ func detachTapLocked(name string) {
 	t.unpin()
 	t.close()
 	_ = tapMgr.coll.Maps["tap_policy"].Delete(t.ifindex)
+	clearOutcomesLocked(t.ifindex)
 	delete(tapMgr.taps, name)
 }
 

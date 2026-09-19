@@ -21,7 +21,7 @@ shukractl isolate payment-prod-03
 | `status [--json] [--wait]` | Daemon board: mode, programs, VMs, detections |
 | `doctor [--json] [--strict]` | Audit the daemon: exposure, what is attached, what it cannot see. Only findings that need attention are printed, worst first, each with a fix. `--strict` exits non-zero on a warning too |
 | `programs` | Which observation programs are attached, and why one is not |
-| `trace list`, `trace kvm\|sched\|block\|net\|tap [--vm NAME]` | Per-VM counters from the daemon |
+| `trace list`, `trace kvm\|sched\|block\|net\|tap\|drops [--vm NAME]` | Per-VM counters from the daemon. `drops` says what the kernel dropped on each tap and whether it was Shukra |
 | `vms [--json]` | QEMU virtual machines found on the host |
 | `explain <vm> [--window 5m\|lifetime]` | Why a VM looks slow, from the last minute by default |
 | `recorder <vm> [--window 60s]` | Replay the flight recorder |

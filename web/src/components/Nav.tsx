@@ -11,6 +11,7 @@ export type Page =
   | 'block'
   | 'programs'
   | 'connections'
+  | 'drops'
   | 'detections'
   | 'isolate';
 
@@ -40,6 +41,7 @@ const groups: NavGroup[] = [
     label: 'Network',
     children: [
       { page: 'connections', label: 'Host connections', blurb: 'tcp_v4_connect from the QEMU process. Not guest traffic.' },
+      { page: 'drops', label: 'Drops', blurb: 'Packets the kernel dropped on VM taps, and whether Shukra dropped them.' },
     ],
   },
   {
