@@ -79,6 +79,25 @@ Pinning needs a bpf filesystem at `/sys/fs/bpf` (present on any systemd host). W
 
 `to_guest` is what the host offered to the tap, counted before the tap's own driver runs. If the guest is not reading its NIC (a VM stopped at its firmware, or a guest whose NIC driver never came up), the tun driver drops those frames and the kernel's `tx_packets` stays put while `to_guest` keeps rising. Its `tx_dropped` climbs instead. `from_guest` is what the guest sent.
 
+## When guests cannot reach each other
+
+Shukra's program can only drop a frame on a tap that is **isolated**, and it counts every frame it drops (`dropped` in `trace tap`). So if traffic is being lost and `dropped` is 0, something else is dropping it, and the kernel will say where. Trace the packet drops while the traffic runs:
+
+```bash
+sudo bpftrace -e 'tracepoint:skb:kfree_skb /args->protocol == 0x800/ {
+  $skb = (struct sk_buff *)args->skbaddr;
+  $dev = $skb->dev->name;
+  @[args->reason, ksym(args->location), $dev] = count(); }'
+```
+
+The reason is a number; the names are in `/sys/kernel/tracing/events/skb/kfree_skb/format`. A `TC_INGRESS` drop on a guest's tap means a tc or TCX program attached to that tap returned "drop". `bpftool net show dev <tap>` lists the programs there, and only the tap program's own drops are counted by Shukra. `NETFILTER_DROP` points at iptables or nftables instead, and `iptables -L -v -n -x` shows which rule's counter moves.
+
+Three things a real host showed, all about fluxvm and none about Shukra:
+
+- **Two guests with the same MAC.** fluxvm gives a tap guest QEMU's default MAC unless the spec has `mac`, so a second guest on the same bridge takes the first one's frames. Set a unique `mac` on each.
+- **A dataplane policy.** With `[sandbox.dataplane]` in `/etc/fluxvm.toml`, fluxvm attaches its own eBPF program to each guest tap. `allow_cidrs` and `allow_ports` must both match, so a guest could reach private addresses only on ports 80, 443 and 53, and no public address at all: another guest on port 9000 was dropped at the sender's tap. `POST /v1/vms/<id>/network/policy` sets a policy for one VM, and an empty `allow_ports` means no port restriction.
+- **Another namespace.** With `"netns": true` (fluxvm's default) the tap is not in the namespace Shukra runs in. `shukractl doctor` names such a VM.
+
 ## How it was checked
 
 `scripts/test-tap.sh` builds a real network path with no KVM: a network namespace stands in for the guest, a veth pair's host end stands in for the tap, and a fake QEMU process names that interface. It checks refusal without an allow list; guest events and detections attributed to the VM; the tap counters; that an allowed address stays reachable and a non-allowed one is dropped, over IPv4, IPv6 and ping, with the same address reachable again after release; the blocked-connect event; re-application after a daemon restart; no re-isolation of a released VM; and detaching when the VM goes. It also proves enforcement outlives the daemon: a `kill -9` leaves the VM cut off, a restart adopts the links without adding a second pair, a graceful stop detaches a non-isolated tap and leaves an isolated one, and `-detach-all` reopens the VM and records the release. It runs on Linux 6.6 or newer as root and is part of CI.

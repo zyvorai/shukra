@@ -74,7 +74,7 @@ That rsyncs the tree, builds the console and the CO-RE objects, installs `shukra
 shukractl status
 shukractl vms
 shukractl trace kvm --vm osboxes-debian
-shukractl explain osboxes-debian
+shukractl explain osboxes-debian            # the last minute; --window 5m or lifetime to change it
 shukractl doctor
 shukractl recorder osboxes-debian --window 60s
 shukractl watch --json
@@ -87,7 +87,7 @@ shukractl  →  HTTP  →  shukrad  →  tracepoints / kprobes
                               ↘  /proc QEMU scan
 ```
 
-The CLI never attaches a program. Pin paths, if a later loader adds them, stay under `/sys/fs/bpf/shukra`.
+The CLI never attaches a program. The tap program pins its links and maps under `/sys/fs/bpf/shukra/tap`, so an isolation outlives the daemon: see [Guest traffic and isolation](docs/tap.md).
 
 ## Monitor the daemon
 
@@ -98,6 +98,9 @@ The CLI never attaches a program. Pin paths, if a later loader adds them, stay u
 | `GET /metrics` | bearer | Prometheus text. A VM with no measured counters has no series, not a zero |
 | `GET /api/v1/events?since=<seq>` | bearer | Events newer than `seq`. Every event carries a `seq` that only grows |
 | `GET /api/v1/stream` | bearer | Server-sent events. Resume with `Last-Event-ID` or `?since=` |
+| `GET /api/v1/vms`, `GET /api/v1/trace/{kvm,sched,block,net,tap}` | bearer | The VMs and their per-VM counters. An empty list is `[]`, never `null` |
+| `GET /api/v1/explain?vm=<name>&window=<dur>` | bearer | Ranked findings for one VM. `window` is 10s to 5m, or `0` for lifetime; the default is the last minute |
+| `GET /api/v1/doctor` | bearer, read-only key is enough | The same audit as `shukractl doctor`: what needs attention, worst first. It never contains a key |
 | `GET /api/v1/isolations` | bearer | Audit trail of isolate and release requests, and whether each took effect |
 | `POST /api/v1/isolate`, `POST /api/v1/release` | admin key | Isolate or release a VM. Refused without a management allow list |
 | `GET /api/v1/trace/tap` | bearer | Per-tap traffic from the guest's point of view |
@@ -122,7 +125,7 @@ Counters and the event list are not saved: they are read from the kernel or rebu
 ┌──────── hypervisor ────────┐
 │  qemu-system  qemu-system  │
 │         ▲          ▲       │
-│   kvm / sched / block / net│  eBPF, CO-RE, maps + ring
+│ kvm/sched/block/net/tap    │  eBPF, CO-RE, maps + ring
 │              │             │
 │           shukrad          │  identity, recorder, detections
 │         :30970 API         │
@@ -156,10 +159,19 @@ make web           # npm ci, unit tests, production build
 make generate      # no-op without clang and /sys/kernel/btf/vmlinux
 make test-kernel   # load the programs into this kernel and check the counters (root, Linux)
 make test-tap      # guest traffic and isolation in a network namespace (root, Linux 6.6+)
+make test-live-guest  # a real KVM guest booted by fluxvm, seen by a running daemon (a hypervisor with fluxvm)
 make dist          # release tarball and .deb for this architecture (Linux)
 ```
 
-Default `go build` does not link CO-RE objects, so CI and macOS stay green. The Linux tag is `shukrabpf`. A missing KVM tracepoint detaches only the `kvm` program.
+Default `go build` does not link CO-RE objects, so CI and macOS stay green. The Linux tag is `shukrabpf`. A missing KVM tracepoint detaches only the `kvm` program. Fixtures for tests live under `testdata/`.
+
+### Continuous integration
+
+| Workflow | Runs | What it proves |
+|---|---|---|
+| `CI` | every push and pull request | Go and console tests, the programs loaded into the runner's kernel, the tap rig, the installer |
+| `Live guest (fluxvm)` | weekly, by hand, and on changes to the tap code, identity code or the test | A real KVM guest booted by fluxvm on a runner with `/dev/kvm`: the tap is attached as a hot-plug, guest events are attributed, packet counts equal the kernel's, and the tap comes off when the VM is deleted. It fails, rather than skips, on a runner with no KVM |
+| `Release` | a `v*` tag | The tarball and `.deb` for each architecture |
 
 ```bash
 cd web && VITE_FIXTURE=1 npm run dev
