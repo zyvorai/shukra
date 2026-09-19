@@ -4,20 +4,11 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 
-/* skb:kfree_skb, as /sys/kernel/tracing/events/skb/kfree_skb/format lays it out on Linux 6.x.
-   The record is absent from vmlinux BTF on some kernels, so it is spelled out here, and the loader
-   (internal/bpfgen/drops.go) refuses to attach unless the running kernel's format file has these
-   fields at these offsets. A kernel without a drop reason (before 5.17) has no `reason` field. */
-struct shukra_kfree_skb {
-	__u16 common_type;          /* 0 */
-	__u8 common_flags;          /* 2 */
-	__u8 common_preempt_count;  /* 3 */
-	int common_pid;             /* 4 */
-	void *skbaddr;              /* 8 */
-	void *location;             /* 16: the kernel address that freed it */
-	__u16 protocol;             /* 24 */
-	__u32 reason;               /* 28: enum skb_drop_reason */
-};
+/* skb:kfree_skb is read through the kernel's own description of it, struct trace_event_raw_kfree_skb from
+   vmlinux BTF, so CO-RE finds skbaddr, location and reason wherever this kernel puts them. Linux 6.9 added a
+   field (rx_sk) in front of protocol and reason and moved them, which a hand-written layout would have read
+   wrongly. A kernel with no drop reason (before 5.17) has no such field and the program fails to load, which
+   internal/bpfgen/drops.go reports in words before it tries. */
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
@@ -56,8 +47,8 @@ struct {
 } drop_stats SEC(".maps");
 
 SEC("tracepoint/skb/kfree_skb")
-int drops_kfree_skb(struct shukra_kfree_skb *ctx) {
-	struct sk_buff *skb = ctx->skbaddr;
+int drops_kfree_skb(struct trace_event_raw_kfree_skb *ctx) {
+	struct sk_buff *skb = (struct sk_buff *)ctx->skbaddr;
 	if (!skb)
 		return 0;
 	struct net_device *dev = BPF_CORE_READ(skb, dev);
