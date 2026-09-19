@@ -55,8 +55,11 @@ type Isolation struct {
 
 // Explain is the evidence available for one VM, plus what this build cannot say.
 type Explain struct {
-	VM       identity.VM   `json:"vm"`
-	Question string        `json:"question"`
+	VM       identity.VM `json:"vm"`
+	Question string      `json:"question"`
+	// Findings are the host-side causes the counters support, best supported first.
+	Findings []Finding     `json:"findings"`
+	Basis    string        `json:"basis"`
 	Evidence []string      `json:"evidence"`
 	Missing  []string      `json:"missing"`
 	Events   []event.Event `json:"events"`
@@ -488,6 +491,8 @@ func (s *State) Explain(name string, now time.Time) Explain {
 	}
 	return Explain{
 		VM: vm, Question: "why is this VM slow?",
+		Findings: diagnose(vm.Name != "", kvm, sched, s.SchedThreads(name), block, net),
+		Basis:    Basis,
 		Evidence: evidence,
 		Missing: []string{
 			"guest tap attribution (TC/TCX on the VM tap is not attached)",

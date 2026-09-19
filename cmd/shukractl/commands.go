@@ -399,6 +399,18 @@ func formatVMs(w io.Writer, m map[string]any) {
 
 func formatExplain(w io.Writer, m map[string]any) {
 	fmt.Fprintf(w, "EXPLAIN  %s\n", str(m, "question"))
+	if fs := list(m, "findings"); len(fs) > 0 {
+		fmt.Fprintln(w, "findings (best supported first)")
+		for _, f := range fs {
+			fmt.Fprintf(w, "  [%s] %s: %s\n", str(f, "confidence"), str(f, "cause"), str(f, "summary"))
+			for _, e := range stringsOf(f["evidence"]) {
+				fmt.Fprintf(w, "      %s\n", e)
+			}
+		}
+		if b := str(m, "basis"); b != "" {
+			fmt.Fprintf(w, "  note: %s\n", b)
+		}
+	}
 	fmt.Fprintln(w, "evidence")
 	for _, e := range stringsOf(m["evidence"]) {
 		fmt.Fprintf(w, "  %s\n", e)

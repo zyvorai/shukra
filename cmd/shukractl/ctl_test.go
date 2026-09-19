@@ -342,3 +342,23 @@ func (s *safeWriter) Write(p []byte) (int, error) {
 	defer s.mu.Unlock()
 	return s.w.Write(p)
 }
+
+func TestExplainPrintsRankedFindingsBeforeEvidence(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"question":"why is this VM slow?","basis":"Latencies are lifetime.","evidence":["e1"],"missing":["m1"],
+			"findings":[{"cause":"storage_latency","confidence":"high","summary":"Block requests take long.","evidence":["Block write p99 is up to 60 ms."]},
+			{"cause":"no_host_cause","confidence":"low","summary":"Nothing crossed."}]}`))
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+	var buf bytes.Buffer
+	if err := run([]string{"explain", "db"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	i, j := strings.Index(out, "[high] storage_latency"), strings.Index(out, "\nevidence\n")
+	if i < 0 || j < 0 || i > j || !strings.Contains(out, "Block write p99 is up to 60 ms.") || !strings.Contains(out, "[low] no_host_cause") || !strings.Contains(out, "note: Latencies are lifetime.") {
+		t.Fatalf("%s", out)
+	}
+}

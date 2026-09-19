@@ -69,6 +69,11 @@ export function fixtureResponse(path: string, init?: RequestInit): unknown {
     return {
       vm: fixture.vms.find((v) => v.name === vm) || { name: vm || '', runtime: '' },
       question: 'why is this VM slow?',
+      basis: 'Latencies are since the daemon attached, from log2 buckets, so each can read up to 2x high. They are the QEMU process\'s, not the guest\'s.',
+      findings: [
+        { cause: 'storage_latency', confidence: 'high', summary: 'Block requests from QEMU take long. Look at the backing device, its queue depth and other writers.', evidence: ['Block write p99 is up to 33.6 ms (slowest 28 ms) across 940 requests.'] },
+        { cause: 'host_cpu_contention', confidence: 'medium', summary: "The VM's threads wait for a host CPU after being woken. Look at host CPU load, pinning and noisy neighbours.", evidence: ['Run-queue delay p99 is up to 2.1 ms on vCPU thread 19322 (CPU 0/KVM).'] },
+      ],
       evidence: [
         'Identity comes from the QEMU command line, not from inside the guest.',
         'KVM exit counters are present for this thread group.',

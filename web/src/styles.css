@@ -240,3 +240,13 @@ main { max-width: 1800px; margin: auto; padding: 28px clamp(20px, 3.5vw, 64px) 9
 .hist-table table { border-collapse: collapse; margin-top: 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
 .hist-table th { text-align: left; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; padding: 6px 16px 6px 0; }
 .hist-table td { padding: 6px 16px 6px 0; border-top: 1px solid var(--border); color: var(--text-primary); }
+
+/* Explain findings. Confidence is always spelled out in the badge text. */
+.findings { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.findings li { border-top: 1px solid var(--border); padding-top: 12px; }
+.findings li:first-child { border-top: 0; padding-top: 0; }
+.findings strong { color: var(--text-primary); text-transform: capitalize; margin-right: 10px; }
+.severity-badge.conf-high { color: #1d1d1f; background: var(--accent-amber); }
+.severity-badge.conf-medium, .severity-badge.conf-low { color: var(--text-secondary); background: var(--bg-elevated-2); border: 1px solid var(--border); }
+.finding-evidence { color: var(--text-primary); font-variant-numeric: tabular-nums; margin: 4px 0 0; }
+.finding-basis { color: var(--text-tertiary); font-size: 12px; margin: 14px 0 0; }
