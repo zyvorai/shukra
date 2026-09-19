@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/zyvorai/shukra/internal/aggregate"
 	"github.com/zyvorai/shukra/internal/event"
+	"github.com/zyvorai/shukra/internal/identity"
 	"github.com/zyvorai/shukra/internal/state"
 )
 
@@ -256,5 +259,121 @@ func TestSchedTraceThreadsAreOptIn(t *testing.T) {
 	}
 	if _, ok := body["threads"]; !ok {
 		t.Fatal("threads=1 did not return threads")
+	}
+}
+
+// bucketsOf returns the le -> cumulative count pairs of one histogram series, in
+// the order they were written, plus its _count.
+func bucketsOf(t *testing.T, text, family, labels string) (les []string, cum []uint64, count uint64) {
+	t.Helper()
+	prefix := family + "_bucket{" + labels + ",le=\""
+	for _, line := range strings.Split(text, "\n") {
+		if rest, ok := strings.CutPrefix(line, prefix); ok {
+			le, val, _ := strings.Cut(rest, "\"} ")
+			n, err := strconv.ParseUint(val, 10, 64)
+			if err != nil {
+				t.Fatalf("bad bucket line %q", line)
+			}
+			les, cum = append(les, le), append(cum, n)
+		}
+		if rest, ok := strings.CutPrefix(line, family+"_count{"+labels+"} "); ok {
+			count, _ = strconv.ParseUint(rest, 10, 64)
+		}
+	}
+	return
+}
+
+func hbuckets(pairs map[int]uint64) []uint64 {
+	h := make([]uint64, 64)
+	for i, n := range pairs {
+		h[i] = n
+	}
+	return h
+}
+
+func TestMetricsExposeValidCumulativeHistograms(t *testing.T) {
+	st := state.New("node-07")
+	st.SetVMs([]identity.VM{{Name: "db", PID: 100, Threads: []int{100, 101}}})
+	st.SetCounters(map[uint32]aggregate.Counters{
+		100: {
+			BlockIssues: 6, BlockReadOps: 4, BlockReadBytes: 16384, BlockWriteOps: 2, BlockWriteBytes: 8192,
+			BlockReadMax: 3_000_000, BlockWriteMax: 900_000,
+			// 3 fast (below the first le, so folded), 1 at ~1ms, and one 200s outlier.
+			BlockRead:  hbuckets(map[int]uint64{2: 1, 4: 2, 19: 1, 37: 1}),
+			BlockWrite: hbuckets(map[int]uint64{20: 2}),
+			SchedHist:  hbuckets(map[int]uint64{10: 9, 14: 1}), OnCPUNs: 1,
+			KVMLat: hbuckets(map[int]uint64{15: 5}), Entries: 5,
+			Exits: map[uint32]uint64{12: 7, 48: 3}, ExitNs: map[uint32]uint64{12: 9_000_000_000, 48: 30_000},
+		},
+	})
+	st.SetCPUVendor("GenuineIntel")
+	text := get(New(st, "k"), "/metrics", "k").Body.String()
+
+	les, cum, count := bucketsOf(t, text, "shukra_block_latency_seconds", `vm="db",op="read"`)
+	if len(les) != 32 || les[len(les)-1] != "+Inf" { // le 2^7 .. 2^37 ns is 31 buckets, plus +Inf
+		t.Fatalf("%d buckets, last %q: %v", len(les), les[len(les)-1], les)
+	}
+	for i := 1; i < len(cum); i++ {
+		if cum[i] < cum[i-1] {
+			t.Fatalf("cumulative counts went down at le=%s: %v", les[i], cum)
+		}
+	}
+	if cum[0] != 3 || cum[len(cum)-1] != 5 || count != 5 {
+		t.Fatalf("the three fast requests fold into the first bucket, and +Inf equals _count: first %d +Inf %d count %d", cum[0], cum[len(cum)-1], count)
+	}
+	// The 200 s request is beyond the last finite le, so only +Inf holds it.
+	if cum[len(cum)-2] != 4 {
+		t.Fatalf("outlier leaked into a finite bucket: %v", cum)
+	}
+	// Bucket 19 covers up to 2^20 ns = 1.048576 ms.
+	found := false
+	for i, le := range les {
+		if le == "0.001048576" {
+			found = true
+			if cum[i] != 4 {
+				t.Fatalf("le=%s has %d", le, cum[i])
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no le for 2^20 ns: %v", les)
+	}
+
+	if strings.Contains(text, "shukra_block_latency_seconds_sum") || strings.Contains(text, "_runqueue_delay_seconds_sum") {
+		t.Fatal("emitted a _sum the kernel histogram cannot support")
+	}
+	for _, fam := range []string{"shukra_block_latency_seconds", "shukra_sched_runqueue_delay_seconds", "shukra_kvm_exit_latency_seconds"} {
+		if n := strings.Count(text, "# TYPE "+fam+" histogram"); n != 1 {
+			t.Fatalf("%s: %d TYPE lines", fam, n)
+		}
+	}
+	// A VM with no measured requests gets no series at all.
+	for _, want := range []string{
+		`shukra_block_ops_total{vm="db",op="read"} 4`,
+		`shukra_block_ops_total{vm="db",op="write"} 2`,
+		`shukra_block_bytes_total{vm="db",op="write"} 8192`,
+		`shukra_block_latency_max_seconds{vm="db",op="read"} 0.003`,
+		`shukra_kvm_exit_latency_seconds_count{vm="db"} 5`,
+		`shukra_sched_runqueue_delay_seconds_count{vm="db"} 10`,
+		`shukra_kvm_exits_by_reason_total{vm="db",reason="12",name="hlt"} 7`,
+		`shukra_kvm_exits_by_reason_total{vm="db",reason="48",name="ept_violation"} 3`,
+		`shukra_kvm_exit_handling_seconds_total{vm="db",reason="12",name="hlt"} 9`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestMetricsDoNotNameKVMReasonsOnOtherVendors(t *testing.T) {
+	st := state.New("node-07")
+	st.SetVMs([]identity.VM{{Name: "db", PID: 100, Threads: []int{100}}})
+	st.SetCounters(map[uint32]aggregate.Counters{100: {Entries: 1, Exits: map[uint32]uint64{12: 7}}})
+	for _, vendor := range []string{"AuthenticAMD", ""} {
+		st.SetCPUVendor(vendor)
+		text := get(New(st, "k"), "/metrics", "k").Body.String()
+		if !strings.Contains(text, `shukra_kvm_exits_by_reason_total{vm="db",reason="12"} 7`) || strings.Contains(text, `name="hlt"`) {
+			t.Fatalf("vendor %q:\n%s", vendor, text)
+		}
 	}
 }

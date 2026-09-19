@@ -16,13 +16,15 @@ A wrong token does not open a fixture. Fixture data exists only when you start V
 | VMs | Name, UUID, runtime label, QEMU PID, tap names from the command line |
 | Flight recorder | Replay one VM for a window (60s) |
 | Explain | Why a VM looks the way it does, including what is missing |
-| KVM | Exit, entry, MMIO, PIO counters |
-| Scheduler | On-CPU and wakeup delay |
-| Block | Log2 histogram, p50 and p99 in the page, not in the kernel |
+| KVM | Exit, entry, MMIO, PIO counters, exit handling time, and the reasons that cost the most host time |
+| Scheduler | On-CPU time, run-queue delay, and a per-thread table to tell a slow vCPU from a slow iothread |
+| Block | Requests, bytes, worst case, p50 and p99, from a log2 histogram (percentiles are computed in userspace) |
 | Programs | Attached or detached, and the hook detail |
 | Host connections | TCP connects and sampled retransmits |
 | Detections | Rule hits: watchlist, port, exec and threshold detections |
 | Isolate | The recorded decision |
+
+KVM, Scheduler and Block draw the latency distribution under the table. Hover or focus a bar for its count and share; "Show as table" lists the same numbers. The buckets are powers of two, so a bar's edge can read up to 2x high, and the chart says so. Thread and reason names come from the daemon: exit reasons are named only on Intel hosts.
 
 Hash routes keep you on one origin. The mega-nav is the same set of pages.
 

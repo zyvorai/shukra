@@ -33,7 +33,7 @@ func ExitName(vendor string, reason uint32) string {
 // NameReasons fills in Name on every listed reason of rows.
 func NameReasons(rows []KVMRow, vendor string) {
 	for i := range rows {
-		for _, list := range [][]Reason{rows[i].Top, rows[i].TopByTime} {
+		for _, list := range [][]Reason{rows[i].Top, rows[i].TopByTime, rows[i].AllReasons} {
 			for j := range list {
 				list[j].Name = ExitName(vendor, list[j].Reason)
 			}

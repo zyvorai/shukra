@@ -3,8 +3,10 @@ package api
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
+	"github.com/zyvorai/shukra/internal/aggregate"
 	"github.com/zyvorai/shukra/internal/state"
 )
 
@@ -15,6 +17,8 @@ var labelEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`)
 // the QEMU command line and are escaped.
 func writeMetrics(w io.Writer, st *state.State) {
 	s := st.Status()
+	kvm := st.KVM("")
+	sched := st.Sched("")
 	gauge := func(name, help string) {
 		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n", name, help, name)
 	}
@@ -56,14 +60,12 @@ func writeMetrics(w io.Writer, st *state.State) {
 	}
 
 	counter("shukra_kvm_exits_total", "KVM exits for the QEMU thread group.")
-	kvm := st.KVM("")
 	for _, r := range kvm {
 		if r.Measured {
 			fmt.Fprintf(w, "shukra_kvm_exits_total{%s} %d\n", lbl(r.VM), r.Exits)
 		}
 	}
 	counter("shukra_sched_on_cpu_seconds_total", "On-CPU time of the QEMU thread group.")
-	sched := st.Sched("")
 	for _, r := range sched {
 		if r.Measured {
 			fmt.Fprintf(w, "shukra_sched_on_cpu_seconds_total{%s} %g\n", lbl(r.VM), float64(r.OnCPUNs)/1e9)
@@ -75,16 +77,65 @@ func writeMetrics(w io.Writer, st *state.State) {
 			fmt.Fprintf(w, "shukra_sched_wakeup_delay_seconds_total{%s} %g\n", lbl(r.VM), float64(r.WakeupDelayNs)/1e9)
 		}
 	}
-	gauge("shukra_block_latency_seconds", "Block request latency on the QEMU iothread, not the guest filesystem.")
-	for _, r := range st.Block("") {
+	block := st.Block("")
+	var readH, writeH []histSeries
+	counter("shukra_block_ops_total", "Completed block requests by the QEMU iothread, not the guest filesystem.")
+	for _, r := range block {
+		if r.Measured {
+			fmt.Fprintf(w, "shukra_block_ops_total{%s,op=\"read\"} %d\nshukra_block_ops_total{%s,op=\"write\"} %d\n", lbl(r.VM), r.ReadOps, lbl(r.VM), r.WriteOps)
+			readH = append(readH, histSeries{lbl(r.VM) + `,op="read"`, r.ReadHist})
+			writeH = append(writeH, histSeries{lbl(r.VM) + `,op="write"`, r.WriteHist})
+		}
+	}
+	counter("shukra_block_bytes_total", "Bytes completed by the QEMU iothread, not the guest filesystem.")
+	for _, r := range block {
+		if r.Measured {
+			fmt.Fprintf(w, "shukra_block_bytes_total{%s,op=\"read\"} %d\nshukra_block_bytes_total{%s,op=\"write\"} %d\n", lbl(r.VM), r.ReadBytes, lbl(r.VM), r.WriteBytes)
+		}
+	}
+	gauge("shukra_block_latency_max_seconds", "Slowest block request since the daemon attached. Racy across CPUs; it can miss a slightly smaller maximum.")
+	for _, r := range block {
+		if r.Measured {
+			fmt.Fprintf(w, "shukra_block_latency_max_seconds{%s,op=\"read\"} %g\nshukra_block_latency_max_seconds{%s,op=\"write\"} %g\n",
+				lbl(r.VM), float64(r.ReadMaxNs)/1e9, lbl(r.VM), float64(r.WriteMaxNs)/1e9)
+		}
+	}
+	writeHistograms(w, "shukra_block_latency_seconds", "Block request latency on the QEMU iothread, not the guest filesystem.", append(readH, writeH...))
+
+	var rq []histSeries
+	for _, r := range sched {
+		if r.Measured && len(r.WakeupHist) > 0 {
+			rq = append(rq, histSeries{lbl(r.VM), r.WakeupHist})
+		}
+	}
+	writeHistograms(w, "shukra_sched_runqueue_delay_seconds", "Delay from wakeup to running for the QEMU threads.", rq)
+
+	var kl []histSeries
+	counter("shukra_kvm_exits_by_reason_total", "KVM exits by reason. name is set only where the numbering is known for this CPU.")
+	for _, r := range kvm {
 		if !r.Measured {
 			continue
 		}
-		fmt.Fprintf(w, "shukra_block_latency_seconds{%s,op=\"read\",quantile=\"0.5\"} %g\n", lbl(r.VM), float64(r.ReadP50Ns)/1e9)
-		fmt.Fprintf(w, "shukra_block_latency_seconds{%s,op=\"read\",quantile=\"0.99\"} %g\n", lbl(r.VM), float64(r.ReadP99Ns)/1e9)
-		fmt.Fprintf(w, "shukra_block_latency_seconds{%s,op=\"write\",quantile=\"0.5\"} %g\n", lbl(r.VM), float64(r.WriteP50Ns)/1e9)
-		fmt.Fprintf(w, "shukra_block_latency_seconds{%s,op=\"write\",quantile=\"0.99\"} %g\n", lbl(r.VM), float64(r.WriteP99Ns)/1e9)
+		if len(r.LatencyHist) > 0 {
+			kl = append(kl, histSeries{lbl(r.VM), r.LatencyHist})
+		}
+		for _, re := range r.AllReasons {
+			fmt.Fprintf(w, "shukra_kvm_exits_by_reason_total{%s} %d\n", reasonLabels(r.VM, re), re.Count)
+		}
 	}
+	counter("shukra_kvm_exit_handling_seconds_total", "Host time spent handling KVM exits by reason. For a halt this is guest idle time.")
+	for _, r := range kvm {
+		if !r.Measured {
+			continue
+		}
+		for _, re := range r.AllReasons {
+			if re.TotalNs > 0 {
+				fmt.Fprintf(w, "shukra_kvm_exit_handling_seconds_total{%s} %g\n", reasonLabels(r.VM, re), float64(re.TotalNs)/1e9)
+			}
+		}
+	}
+	writeHistograms(w, "shukra_kvm_exit_latency_seconds", "KVM exit handling time, kvm_exit to the next kvm_entry. Halts are excluded.", kl)
+
 	net := st.Net("")
 	counter("shukra_tcp_connects_total", "tcp_v4_connect from the QEMU process. Not guest traffic.")
 	for _, r := range net {
@@ -93,5 +144,51 @@ func writeMetrics(w io.Writer, st *state.State) {
 	counter("shukra_tcp_retransmits_total", "tcp_retransmit_skb from the QEMU process. Not guest traffic.")
 	for _, r := range net {
 		fmt.Fprintf(w, "shukra_tcp_retransmits_total{%s} %d\n", lbl(r.VM), r.Retransmits)
+	}
+}
+
+func reasonLabels(vm string, r aggregate.Reason) string {
+	l := `vm="` + labelEscaper.Replace(vm) + `",reason="` + strconv.FormatUint(uint64(r.Reason), 10) + `"`
+	if r.Name != "" {
+		l += `,name="` + r.Name + `"`
+	}
+	return l
+}
+
+type histSeries struct {
+	labels string
+	counts []uint64 // log2 ns buckets, as in internal/hist
+}
+
+// The kernel histograms are log2 buckets, bucket i covering up to 2^(i+1) ns.
+// Everything below firstLE is folded into the first bucket. The set of le values
+// is fixed so a series keeps the same buckets from scrape to scrape.
+const (
+	firstLE = 6  // le = 2^7 ns
+	lastLE  = 36 // le = 2^37 ns, about 137 s. Anything slower is only in +Inf
+)
+
+// writeHistograms renders cumulative Prometheus histograms so histogram_quantile
+// over rate() gives windowed percentiles. There is no _sum: the kernel keeps
+// buckets, not a total, and one made up from bucket midpoints would be invented.
+func writeHistograms(w io.Writer, name, help string, series []histSeries) {
+	if len(series) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s histogram\n", name, help, name)
+	for _, s := range series {
+		var total uint64
+		for _, c := range s.counts {
+			total += c
+		}
+		var cum uint64
+		for i := 0; i <= lastLE && i < len(s.counts); i++ {
+			cum += s.counts[i]
+			if i >= firstLE {
+				le := float64(uint64(1)<<(i+1)) / 1e9
+				fmt.Fprintf(w, "%s_bucket{%s,le=\"%s\"} %d\n", name, s.labels, strconv.FormatFloat(le, 'g', -1, 64), cum)
+			}
+		}
+		fmt.Fprintf(w, "%s_bucket{%s,le=\"+Inf\"} %d\n%s_count{%s} %d\n", name, s.labels, total, name, s.labels, total)
 	}
 }

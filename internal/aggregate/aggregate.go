@@ -58,6 +58,9 @@ type KVMRow struct {
 	// TopByTime is the reasons that cost the most host time. It is not the same list
 	// as Top: a rare, slow exit can outweigh a common, fast one.
 	TopByTime []Reason `json:"topReasonsByTime"`
+	// AllReasons is every reason seen, most frequent first. It is not in the JSON:
+	// the metrics endpoint needs a stable set of series, and the top three change.
+	AllReasons []Reason `json:"-"`
 	// Handling latency, kvm_exit to the next kvm_entry, halts excluded. Percentiles
 	// are log2 bucket edges, so up to 2x high.
 	LatencyP50Ns uint64   `json:"exitLatencyP50Ns"`
@@ -245,6 +248,7 @@ func KVM(vms []identity.VM, byPID map[uint32]Counters, vm string) []KVMRow {
 		byTime := append([]Reason(nil), top...)
 		sortReasons(top)
 		sortReasonsByTime(byTime)
+		all := append([]Reason(nil), top...)
 		if len(top) > 3 {
 			top = top[:3]
 		}
@@ -253,7 +257,7 @@ func KVM(vms []identity.VM, byPID map[uint32]Counters, vm string) []KVMRow {
 		}
 		out = append(out, KVMRow{
 			VM: b.name, Runtime: b.runtime, Exits: exits, Entries: b.c.Entries,
-			MMIO: b.c.MMIO, PIO: b.c.PIO, Top: top, TopByTime: byTime,
+			MMIO: b.c.MMIO, PIO: b.c.PIO, Top: top, TopByTime: byTime, AllReasons: all,
 			LatencyP50Ns: hist.Percentile(b.c.KVMLat, 50), LatencyP99Ns: hist.Percentile(b.c.KVMLat, 99),
 			LatencyHist: b.c.KVMLat,
 			Measured:    exits+b.c.Entries+b.c.MMIO+b.c.PIO > 0,

@@ -29,7 +29,7 @@ CGO_ENABLED=0 go build -tags shukrabpf -o bin/shukrad ./cmd/shukrad
 CGO_ENABLED=0 go build -o bin/shukractl ./cmd/shukractl
 ```
 
-`make generate` runs bpf2go into `internal/bpfgen`. Those files are build products. Do not commit `bpf/vmlinux.h`.
+`make generate` runs bpf2go into `internal/bpfgen`, for the architecture you run it on (`go generate` sets `$GOARCH`). `bpf/vmlinux.h` is dumped from that machine's kernel BTF and differs per architecture, so generate on the host you will run on, or on one of the same architecture. Those files are build products. Do not commit `bpf/vmlinux.h`.
 
 If clang or BTF is missing, `make generate` exits 0 and prints that it skipped. The following `go build -tags shukrabpf` will then fail, because the loaders were never written. Build without the tag instead. Programs stay detached, which is the honest result.
 
@@ -49,8 +49,10 @@ You want `attached` and a hook count, not a counter you did not ask for:
 kvm       attached    4 hooks
 sched     attached    4 hooks
 block     attached    2 hooks
-net       attached    2 hooks
+net       attached    3 hooks
 ```
+
+`net` has three hooks: `tcp_v4_connect`, `tcp_v6_connect` and the retransmit tracepoint. On arm64 `kvm` reports `3/4 hooks` because `kvm_pio` does not exist there. What each program records, and where it is only bucketed or unproven, is in [signals](../signals.md).
 
 Confirm the kernel still has them after the CLI returns. The daemon keeps the links for the life of the process. A second `shukractl programs` a few seconds later should still say attached. If the process exits, the hooks go with it. This build does not pin into `/sys/fs/bpf`.
 

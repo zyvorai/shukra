@@ -1,23 +1,76 @@
 import HostBanner from '../components/HostBanner';
+import LatencyHist from '../components/LatencyHist';
+import { fmtBytes, fmtNs } from '../hist';
 import { useAPI } from '../useAPI';
 
 type Row = Record<string, unknown>;
 
 function ns(v: unknown) {
   const n = Number(v);
-  if (!Number.isFinite(n) || n === 0) return '—';
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} ms`;
-  return `${n} ns`;
+  return Number.isFinite(n) && n > 0 ? fmtNs(n) : '—';
+}
+
+function bytes(v: unknown) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? fmtBytes(n) : '—';
+}
+
+function buckets(row: Row, key: string): number[] | undefined {
+  const v = row[key];
+  return Array.isArray(v) ? (v as number[]) : undefined;
+}
+
+// Reasons come with a name only where the daemon knows the numbering for this CPU.
+function reasons(v: unknown) {
+  if (!Array.isArray(v) || v.length === 0) return '—';
+  return (v as Row[]).map((r) => `${r.name ?? '#' + String(r.reason)} ${ns(r.totalNs)}`).join(', ');
 }
 
 export function KVM() {
   const { data, err } = useAPI<{ rows: Row[] }>('/api/v1/trace/kvm');
-  return <Trace title="KVM exits" err={err} rows={data?.rows} cols={['vm', 'exits', 'entries', 'mmio', 'pio']} />;
+  return (
+    <div>
+      <Trace
+        title="KVM exits"
+        err={err}
+        rows={data?.rows}
+        cols={['vm', 'exits', 'entries', 'mmio', 'pio', 'exitLatencyP50Ns', 'exitLatencyP99Ns', 'topReasonsByTime']}
+        format={{ exitLatencyP50Ns: ns, exitLatencyP99Ns: ns, topReasonsByTime: reasons }}
+      >
+        {(data?.rows || []).map((r) => (
+          <LatencyHist key={String(r.vm)} title={`${String(r.vm)} · exit handling time`} buckets={buckets(r, 'exitLatencyHist')} unit="exits" />
+        ))}
+      </Trace>
+    </div>
+  );
 }
 
 export function Sched() {
-  const { data, err } = useAPI<{ rows: Row[] }>('/api/v1/trace/sched');
-  return <Trace title="Scheduler" err={err} rows={data?.rows} cols={['vm', 'onCpuNs', 'wakeupDelayNs', 'wakeupCount']} format={{ onCpuNs: ns, wakeupDelayNs: ns }} />;
+  const { data, err } = useAPI<{ rows: Row[]; threads?: Row[] }>('/api/v1/trace/sched?threads=1');
+  return (
+    <div>
+      <Trace
+        title="Scheduler"
+        err={err}
+        rows={data?.rows}
+        cols={['vm', 'onCpuNs', 'wakeupDelayNs', 'wakeupCount', 'wakeupDelayP50Ns', 'wakeupDelayP99Ns']}
+        format={{ onCpuNs: ns, wakeupDelayNs: ns, wakeupDelayP50Ns: ns, wakeupDelayP99Ns: ns }}
+      >
+        {(data?.rows || []).map((r) => (
+          <LatencyHist key={String(r.vm)} title={`${String(r.vm)} · run-queue delay`} buckets={buckets(r, 'wakeupHist')} unit="wakeups" />
+        ))}
+      </Trace>
+      {data?.threads && data.threads.length > 0 && (
+        <Trace
+          title="Threads"
+          err=""
+          rows={data.threads}
+          cols={['vm', 'role', 'comm', 'tid', 'onCpuNs', 'wakeupCount', 'wakeupDelayP99Ns']}
+          format={{ onCpuNs: ns, wakeupDelayP99Ns: ns }}
+        />
+      )}
+    </div>
+  );
 }
 
 export function Block() {
@@ -27,9 +80,14 @@ export function Block() {
       title="Block latency"
       err={err}
       rows={data?.rows}
-      cols={['vm', 'issues', 'readP50Ns', 'readP99Ns', 'writeP99Ns']}
-      format={{ readP50Ns: ns, readP99Ns: ns, writeP99Ns: ns }}
-    />
+      cols={['vm', 'readOps', 'writeOps', 'readBytes', 'writeBytes', 'readP50Ns', 'readP99Ns', 'readMaxNs', 'writeP99Ns', 'writeMaxNs']}
+      format={{ readBytes: bytes, writeBytes: bytes, readP50Ns: ns, readP99Ns: ns, readMaxNs: ns, writeP99Ns: ns, writeMaxNs: ns }}
+    >
+      {(data?.rows || []).flatMap((r) => [
+        <LatencyHist key={`${String(r.vm)}-r`} title={`${String(r.vm)} · read latency`} buckets={buckets(r, 'readHist')} unit="requests" />,
+        <LatencyHist key={`${String(r.vm)}-w`} title={`${String(r.vm)} · write latency`} buckets={buckets(r, 'writeHist')} unit="requests" />,
+      ])}
+    </Trace>
   );
 }
 
@@ -55,12 +113,14 @@ function Trace({
   rows,
   cols,
   format = {},
+  children,
 }: {
   title: string;
   err: string;
   rows?: Row[];
   cols: string[];
   format?: Record<string, (v: unknown) => string>;
+  children?: React.ReactNode;
 }) {
   return (
     <section className="card">
@@ -74,7 +134,7 @@ function Trace({
             <thead>
               <tr>
                 {cols.map((c) => (
-                  <th key={c}>{c}</th>
+                  <th key={c}>{c.replace(/([a-z0-9])([A-Z])/g, '$1 $2')}</th>
                 ))}
               </tr>
             </thead>
@@ -90,6 +150,7 @@ function Trace({
           </table>
         </div>
       )}
+      {children}
     </section>
   );
 }

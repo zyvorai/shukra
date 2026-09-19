@@ -219,3 +219,24 @@ main { max-width: 1800px; margin: auto; padding: 28px clamp(20px, 3.5vw, 64px) 9
   .mega-panel { position: fixed; left: 12px; right: 12px; top: 48px; min-width: 0; transform: none; }
   .mega-panel.open { transform: none; }
 }
+
+/* Latency histogram. Bars take the accent token, which already flips per theme. */
+.hist { margin: 22px 0 0; }
+.hist figcaption { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; margin-bottom: 8px; }
+.hist figcaption strong { color: var(--text-primary); font-size: 15px; }
+.hist figcaption span { color: var(--text-tertiary); font-size: 12px; }
+.hist-plot { position: relative; max-width: 100%; }
+.hist-grid { stroke: var(--border); stroke-width: 1; }
+.hist-axis { stroke: var(--border-strong); stroke-width: 1; }
+.hist-tick { fill: var(--text-tertiary); font-size: 11px; }
+.hist-bar { fill: var(--apple-blue); transition: filter 120ms var(--ease-apple); }
+.hist-bar.is-active { filter: brightness(1.3); }
+.hist-hit { fill: transparent; cursor: default; }
+.hist-hit:focus-visible { outline: 2px solid var(--apple-blue); outline-offset: -2px; }
+.hist-tip { position: absolute; transform: translate(-50%, -100%); pointer-events: none; display: flex; flex-direction: column; gap: 2px; background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: var(--radius-xs); padding: 6px 10px; box-shadow: var(--card-shadow); white-space: nowrap; }
+.hist-tip strong { color: var(--text-primary); font-size: 15px; }
+.hist-tip span { color: var(--text-secondary); font-size: 12px; }
+.hist-table summary { margin-top: 8px; color: var(--text-secondary); font-size: 12px; cursor: pointer; }
+.hist-table table { border-collapse: collapse; margin-top: 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.hist-table th { text-align: left; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; padding: 6px 16px 6px 0; }
+.hist-table td { padding: 6px 16px 6px 0; border-top: 1px solid var(--border); color: var(--text-primary); }

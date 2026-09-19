@@ -24,10 +24,12 @@ Four observation programs. Hot paths stay in maps. The ring buffer is only for d
 
 | Program | Hooks | What it records |
 |---|---|---|
-| `kvm` | `kvm_exit`, `kvm_entry`, `kvm_mmio`, `kvm_pio` | Exit-reason and MMIO/PIO counters |
-| `sched` | wakeup, switch, exec, exit | On-CPU time, wakeup delay, exec and exit events |
-| `block` | `block_rq_issue`, `block_rq_complete` | Log2 latency histogram. p50 and p99 are computed in userspace |
-| `net` | `tcp_v4_connect`, sampled `tcp_retransmit_skb` | Connects and 1-in-64 retransmits |
+| `kvm` | `kvm_exit`, `kvm_entry`, `kvm_mmio`, `kvm_pio` | Exit counts by reason, exit handling time (histogram, halts excluded) and time per reason |
+| `sched` | wakeup, switch, exec, exit | On-CPU time, run-queue delay (histogram, per thread), exec and exit events for QEMU children |
+| `block` | `block_rq_issue`, `block_rq_complete` | Latency histogram, requests, bytes and the slowest request, per direction |
+| `net` | `tcp_v4_connect`, `tcp_v6_connect`, sampled `tcp_retransmit_skb` | Exact connect counts (IPv4 and IPv6) and 1-in-64 retransmit samples |
+
+Percentiles come from log2 buckets and can read up to 2x high. See [What each program measures](docs/signals.md) for the caveats.
 
 Identity comes from the QEMU command line (`-name` / `guest=`, `-uuid`, `ifname=`). A PID that is not a QEMU thread group rolls up to `_host` as `unattributed`. It is never given a made-up VM name.
 
@@ -140,7 +142,7 @@ Events that leave the daemon carry `product: "shukra"`. A joined event has `attr
 | [Detection rules](docs/tutorials/06-watchlist.md) | Destinations, ports, thresholds, suppression, what a detection means |
 | [Alert sinks](docs/tutorials/07-alert-sinks.md) | Signed webhook, syslog, JSONL file |
 
-Reference: [shukractl](docs/shukractl.md) · [Attribution](docs/attribution.md) · [Tap/TCX roadmap](docs/roadmap-taptrace.md) · [Security](SECURITY.md)
+Reference: [shukractl](docs/shukractl.md) · [Signals](docs/signals.md) · [Attribution](docs/attribution.md) · [Tap/TCX roadmap](docs/roadmap-taptrace.md) · [Security](SECURITY.md)
 
 ## Development
 
