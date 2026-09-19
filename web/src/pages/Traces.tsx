@@ -53,8 +53,15 @@ export function Sched() {
         title="Scheduler"
         err={err}
         rows={data?.rows}
-        cols={['vm', 'onCpuNs', 'wakeupDelayNs', 'wakeupCount', 'wakeupDelayP50Ns', 'wakeupDelayP99Ns']}
-        format={{ onCpuNs: ns, wakeupDelayNs: ns, wakeupDelayP50Ns: ns, wakeupDelayP99Ns: ns }}
+        cols={['vm', 'onCpuNs', 'wakeupDelayNs', 'wakeupCount', 'wakeupDelayP50Ns', 'wakeupDelayP99Ns', 'vcpuPreemptedNs', 'vcpuPreemptions', 'topPreemptors']}
+        format={{
+          onCpuNs: ns,
+          wakeupDelayNs: ns,
+          wakeupDelayP50Ns: ns,
+          wakeupDelayP99Ns: ns,
+          vcpuPreemptedNs: ns,
+          topPreemptors: (v) => ((v as { who: string; ns: number }[] | undefined) || []).map((p) => `${p.who} ${ns(p.ns)}`).join(', ') || '—',
+        }}
       >
         {(data?.rows || []).map((r) => (
           <LatencyHist key={String(r.vm)} title={`${String(r.vm)} · run-queue delay`} buckets={buckets(r, 'wakeupHist')} unit="wakeups" />
@@ -65,8 +72,8 @@ export function Sched() {
           title="Threads"
           err=""
           rows={data.threads}
-          cols={['vm', 'role', 'comm', 'tid', 'onCpuNs', 'wakeupCount', 'wakeupDelayP99Ns']}
-          format={{ onCpuNs: ns, wakeupDelayP99Ns: ns }}
+          cols={['vm', 'role', 'comm', 'tid', 'onCpuNs', 'wakeupCount', 'wakeupDelayP99Ns', 'preemptedNs']}
+          format={{ onCpuNs: ns, wakeupDelayP99Ns: ns, preemptedNs: ns }}
         />
       )}
     </div>
@@ -129,6 +136,7 @@ export function Connections() {
   const all = data?.events || [];
   const host = all.filter((e) => e.kind === 'tcp_connect' || e.kind === 'tcp_retransmit');
   const guest = all.filter((e) => e.kind === 'guest_connect' || e.kind === 'guest_flow' || e.kind === 'guest_inbound');
+  const names = all.filter((e) => e.kind === 'guest_dns');
   return (
     <div>
       <HostBanner />
@@ -139,6 +147,15 @@ export function Connections() {
           err=""
           rows={guest}
           cols={['ts', 'vm', 'kind', 'proto', 'src', 'dst', 'dport', 'blocked', 'attribution', 'guest_attributed']}
+          format={{ vm: (v) => String((v as { name?: string } | undefined)?.name ?? '—'), blocked: (v) => (v ? 'dropped' : '—') }}
+        />
+      )}
+      {names.length > 0 && (
+        <Trace
+          title="Names the guest looked up (DNS over UDP port 53, seen on the VM tap)"
+          err=""
+          rows={names}
+          cols={['ts', 'vm', 'dns_name', 'qtype', 'src', 'dst', 'blocked']}
           format={{ vm: (v) => String((v as { name?: string } | undefined)?.name ?? '—'), blocked: (v) => (v ? 'dropped' : '—') }}
         />
       )}

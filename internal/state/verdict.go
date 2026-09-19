@@ -3,6 +3,7 @@ package state
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/zyvorai/shukra/internal/aggregate"
 )
@@ -27,9 +28,27 @@ const (
 	exitMediumNs = 1_000_000
 	exitHighNs   = 10_000_000
 	retransFloor = 10
+	// A vCPU is preempted when it is runnable and something else has its CPU. Less than this much in the window,
+	// or under 5% of the time the vCPUs wanted to run, is ordinary scheduling and not a finding.
+	preemptFloorNs = 200_000_000
+	preemptMedium  = 0.05
+	preemptHigh    = 0.20
 )
 
 var confRank = map[string]int{"high": 3, "medium": 2, "low": 1}
+
+// preemptorName names a preemptor for a person: a thread of another VM, of this VM (its own iothread or another
+// vCPU), or a host task.
+func preemptorName(label, self string) string {
+	name, isVM := strings.CutPrefix(label, "vm:")
+	switch {
+	case isVM && name == self:
+		return "this VM's own other threads"
+	case isVM:
+		return "VM " + name
+	}
+	return "host task " + label
+}
 
 func dur(ns uint64) string {
 	switch {
@@ -85,6 +104,39 @@ func diagnose(found bool, kvm []aggregate.KVMRow, sched []aggregate.SchedRow, th
 			Summary:  "The VM's threads wait for a host CPU after being woken. Look at host CPU load, pinning and noisy neighbours.",
 			Evidence: []string{fmt.Sprintf("Run-queue delay p99 is up to %s on %s.", dur(worst), who)},
 		})
+	}
+
+	// vCPU preemption: the host gave the CPU to something else while the vCPU wanted to run. This is what the
+	// guest sees as steal, from the host's side, and it says who took the CPU.
+	if len(sched) > 0 && sched[0].Measured && sched[0].PreemptedNs >= preemptFloorNs {
+		s := sched[0]
+		var on uint64
+		for _, t := range threads {
+			if t.Role == "vcpu" {
+				on += t.OnCPUNs
+			}
+		}
+		share := float64(s.PreemptedNs) / float64(on+s.PreemptedNs)
+		if share >= preemptMedium {
+			conf := "medium"
+			if share >= preemptHigh {
+				conf = "high"
+			}
+			ev := []string{fmt.Sprintf("The vCPU threads were runnable but off a host CPU for %s over %d preemptions, %.0f%% of the time they wanted to run.",
+				dur(s.PreemptedNs), s.PreemptedCount, share*100)}
+			if len(s.Preemptors) > 0 {
+				var parts []string
+				for _, p := range s.Preemptors {
+					parts = append(parts, fmt.Sprintf("%s (%s)", preemptorName(p.Who, s.VM), dur(p.Ns)))
+				}
+				ev = append(ev, "Taken by: "+strings.Join(parts, ", ")+".")
+			}
+			out = append(out, Finding{
+				Cause: "cpu_preempted", Confidence: conf,
+				Summary:  "The host took CPU away from this VM's vCPUs. Look at what else is running on those host CPUs: other VMs, host services, interrupt load, and CPU pinning.",
+				Evidence: ev,
+			})
+		}
 	}
 
 	// Storage: the QEMU I/O thread waiting on the block layer.

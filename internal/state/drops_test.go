@@ -30,6 +30,7 @@ func newDropsWorld(t *testing.T) *dropsWorld {
 		out = append(out, DropStat{Tap: "orphan", Reason: "TC_INGRESS", Count: 999}) // a tap no VM owns
 		return out
 	})
+	w.dropInputs() // the daemon's first look, with Shukra having dropped nothing yet
 	return w
 }
 
@@ -57,6 +58,41 @@ func TestShukrasOwnDropsAreSubtractedFromTheKernelsCount(t *testing.T) {
 	}
 	if len(rows) != 2 || rows[0].VM != "db" || rows[0].Location != "__netif_receive_skb_core" {
 		t.Fatalf("the orphan tap must not appear, and rows carry the location: %+v", rows)
+	}
+}
+
+// The tap program's counters are pinned and outlive a daemon restart; the kernel's drop counts do not.
+// If the lifetime figure were subtracted from the fresh one, isolation that happened before the restart
+// would hide another program's drops.
+func TestIsolationBeforeARestartDoesNotHideAnotherProgramsDrops(t *testing.T) {
+	w := &dropsWorld{clocked: newClocked(t), drops: map[string]uint64{}}
+	w.SetVMs([]identity.VM{{Name: "db", PID: 100, Threads: []int{100}, Taps: []string{"tap0"}}})
+	w.SetPrograms([]Program{{Name: "tap", Status: "attached"}, {Name: "drops", Status: "attached"}})
+	w.SetTapSource(func() []TapStat { return []TapStat{{Name: "tap0", DroppedPkts: w.tapDropped}} })
+	w.SetDropSource(func() []DropStat {
+		var out []DropStat
+		for r, n := range w.drops {
+			out = append(out, DropStat{Tap: "tap0", Reason: r, Count: n})
+		}
+		return out
+	})
+	w.tapDropped = 13 // isolation dropped these before this daemon started; the kernel counts none of them
+	if d := tapOf(t, mustTaps(w)); d.OtherDrops != 0 || d.ShukraDropped != 0 {
+		t.Fatalf("nothing has happened since the daemon started: %+v", d)
+	}
+	w.drops = map[string]uint64{"TC_INGRESS": 20} // a tc filter, not Shukra
+	if d := tapOf(t, mustTaps(w)); d.OtherDrops != 20 || d.ShukraDropped != 0 {
+		t.Fatalf("all 20 are another program's: %+v", d)
+	}
+	w.tapDropped = 18 // and isolation drops five more, which are the kernel's TC_INGRESS too
+	w.drops = map[string]uint64{"TC_INGRESS": 25}
+	if d := tapOf(t, mustTaps(w)); d.OtherDrops != 20 || d.ShukraDropped != 5 {
+		t.Fatalf("five are Shukra's and twenty are not: %+v", d)
+	}
+	w.tapDropped = 2 // the tap was detached and attached again: its counter starts over
+	w.drops = map[string]uint64{"TC_INGRESS": 27}
+	if d := tapOf(t, mustTaps(w)); d.ShukraDropped != 2 {
+		t.Fatalf("a counter that went backwards starts again from zero: %+v", d)
 	}
 }
 
@@ -170,7 +206,11 @@ func TestDoctorIsQuietWhenDropsAreShukrasOwnFewOrUnmeasured(t *testing.T) {
 	st.SetVMs([]identity.VM{{Name: "db", Taps: []string{"tap0"}}})
 	attached := []Program{{Name: "tap", Status: "attached", Detail: "1 taps"}, {Name: "drops", Status: "attached", Detail: "1 hooks"}}
 	st.SetPrograms(attached)
-	st.SetTapSource(func() []TapStat { return []TapStat{{Name: "tap0", DroppedPkts: 100}} })
+	var isolated uint64
+	st.SetTapSource(func() []TapStat { return []TapStat{{Name: "tap0", DroppedPkts: isolated}} })
+	st.SetDropSource(func() []DropStat { return nil })
+	st.dropInputs() // the daemon's first look, before anything is dropped
+	isolated = 100
 	st.SetDropSource(func() []DropStat { return []DropStat{{Tap: "tap0", Reason: "TC_INGRESS", Count: 103}} }) // 3 of skew
 	for _, c := range st.Doctor() {
 		if strings.HasPrefix(c.ID, "vm-drops") || c.ID == "vm-nic-not-consumed" {

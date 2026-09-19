@@ -284,7 +284,7 @@ func TestAVMWhoseTapIsInAnotherNamespaceIsNamedNotSilentlyUncovered(t *testing.T
 	st.linkExists = func(name string) bool { return name == "tap0" } // eph718bb58b is not in this namespace
 	checks := st.Doctor()
 	c := byID(checks, "vm-tap-other-netns")
-	if c == nil || c.Status != "warn" || !strings.HasPrefix(c.Title, "1 of 2 VMs") || !strings.Contains(c.Detail, "sandbox (eph718bb58b)") || strings.Contains(c.Detail, "db (") || !strings.Contains(c.Fix, "netns") {
+	if c == nil || c.Status != "warn" || !strings.HasPrefix(c.Title, "1 of 2 VMs") || !strings.Contains(c.Detail, "sandbox (eph718bb58b)") || strings.Contains(c.Detail, "db (") || !strings.Contains(c.Fix, "host veth") {
 		t.Fatalf("%+v", c)
 	}
 	if byID(checks, "vm-tap-untraced") != nil {

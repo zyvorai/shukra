@@ -510,10 +510,13 @@ func withDrops(attached bool) *state.State {
 		status = "attached"
 	}
 	st.SetPrograms([]state.Program{{Name: "tap", Status: "attached"}, {Name: "drops", Status: status}})
-	st.SetTapSource(func() []state.TapStat { return []state.TapStat{{Name: "tap0", DroppedPkts: 3}} })
+	var isolated uint64
+	st.SetTapSource(func() []state.TapStat { return []state.TapStat{{Name: "tap0", DroppedPkts: isolated}} })
 	st.SetDropSource(func() []state.DropStat {
 		return []state.DropStat{{Tap: "tap0", Reason: "TC_INGRESS", Count: 40, Location: "__netif_receive_skb_core"}, {Tap: "tap9", Reason: "TC_INGRESS", Count: 7}}
 	})
+	st.Drops("") // the daemon's first look, before Shukra has dropped anything
+	isolated = 3
 	return st
 }
 
@@ -645,5 +648,40 @@ func TestOutcomeMetricsSplitByDirectionAndResultAndHaveALatencyHistogram(t *test
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %s", want)
 		}
+	}
+}
+
+func TestMetricsExposeVCPUPreemptionByWhoTookTheCPU(t *testing.T) {
+	st := state.New("node-07")
+	st.SetVMs([]identity.VM{{Name: "db", PID: 100, Threads: []int{100, 101}}, {Name: "idle", PID: 200, Threads: []int{200}}})
+	st.SetCounters(map[uint32]aggregate.Counters{
+		101: {OnCPUNs: 5, PreemptNs: 3_500_000_000, Preemptors: map[string]uint64{"vm:web": 3_000_000_000, "kworker": 500_000_000, `we"ird`: 0}},
+	})
+	text := get(New(st, "k"), "/metrics", "k").Body.String()
+	for _, want := range []string{
+		`shukra_sched_vcpu_preempted_seconds_total{vm="db"} 3.5`,
+		`shukra_sched_vcpu_preempted_by_seconds_total{vm="db",by="kworker"} 0.5`,
+		`shukra_sched_vcpu_preempted_by_seconds_total{vm="db",by="vm:web"} 3`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, `vm="idle"`) && strings.Contains(text, `shukra_sched_vcpu_preempted_seconds_total{vm="idle"}`) {
+		t.Fatalf("a VM the sched program has not measured has no series, not a zero:\n%s", text)
+	}
+	if strings.Contains(text, "ird") {
+		t.Fatalf("a preemptor with no time is not a series:\n%s", text)
+	}
+}
+
+func TestTheSchedRowAlwaysHasAPreemptorListNotNull(t *testing.T) {
+	st := state.New("node-07")
+	st.SetVMs([]identity.VM{{Name: "db", PID: 100, Threads: []int{100}}})
+	st.SetCounters(map[uint32]aggregate.Counters{100: {OnCPUNs: 5}})
+	body := get(New(st, "k"), "/api/v1/trace/sched", "k").Body.String()
+	compact := strings.Join(strings.Fields(body), "")
+	if strings.Contains(compact, `"topPreemptors":null`) || !strings.Contains(compact, `"topPreemptors":[]`) {
+		t.Fatalf("an empty list must be [] and not null: %s", body)
 	}
 }

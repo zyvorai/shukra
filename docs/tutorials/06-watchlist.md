@@ -1,8 +1,14 @@
 # Detection rules
 
-The destination watchlist is a userspace check on `tcp_v4_connect`. When the destination matches, Shukra writes a `detection` event. It does not drop the packet, and it does not move the match into BPF.
+Rules are a userspace check on connects. When one matches, Shukra writes a `detection` event. It does not drop the packet, and it does not move the match into BPF. A rule can match three kinds of connect:
 
-The connect is still the QEMU process. A hit means that process opened a socket to an address you listed. It does not mean a process inside the guest did. Say that when you page someone.
+| Seen as | Where it comes from | `guest_attributed` |
+|---|---|---|
+| A host connect | `tcp_v4_connect` and `tcp_v6_connect`: a socket the **VMM** opened. `attribution` is `qemu-process` for QEMU and for every FluxVM backend | `false` |
+| A guest connect or UDP flow | The tap program, on the VM's host interface: what the **guest** sent. For FluxVM's default netns that interface is the host veth | `true` |
+| A connection made **to** the guest | The tap program: a `guest_inbound` event, matched on the peer and the guest port | `true` |
+
+A detection keeps the attribution of the event that caused it. A hit on a **host** connect means the VMM opened a socket to an address you listed, and does not mean a process inside the guest did: say that when you page someone. A hit on a **guest** event means that VM's guest sent (or received) that traffic, seen on its host interface, though still not which process inside it. Only a VM whose interface Shukra can attach to has guest events; `shukractl doctor` names the ones that do not. FluxVM's default netns is attached; see [FluxVM](../tap.md#fluxvm).
 
 ## File
 
@@ -20,6 +26,8 @@ destinations:
 | `cidr` | CIDR, or a single IP (treated as `/32` or `/128`) |
 | `name` | Shown on the detection |
 | `severity` | Optional. Default `high` |
+
+For a `destinations` rule, the address that matters is where the VM connected to, or, for a connection made **to** the VM, the peer that connected in, so a watched network reaching into a VM fires too and the message says "connected in from". `ports` rules take `proto` (`tcp` by default, `udp` or `any`) and `dir` (`out` by default, `in` for a connection made to the VM and matched on the port it reached, or `any`), so a rule written before either existed means what it always did.
 
 `configs/detections.example.yaml` is the sample. An empty file is an empty list, not an error. A bad CIDR refuses to start the daemon.
 
@@ -41,7 +49,15 @@ ports:                 # a connect (or, with proto, a UDP flow) to this destinat
     name: dns-out
     proto: udp         # tcp (the default), udp or any
 
-exec_allow:            # may start under QEMU without an alert; lowercase prefix
+dns:                   # names the guest looked up over DNS (UDP port 53), one of suffix / exact / contains per rule
+  - name: crypto-pool
+    suffix: nanopool.org      # the name and everything under it, on a label boundary
+    severity: high
+  - name: paste-site
+    contains: pastebin
+    severity: medium
+
+exec_allow:            # may start under a VMM without an alert; lowercase prefix
   - node_exporter
 
 thresholds:            # per VM, over a window
@@ -52,7 +68,9 @@ thresholds:            # per VM, over a window
     severity: medium   # default for thresholds
 ```
 
-**`exec_allow`** adds to the names that are always fine (`qemu-system*` and QEMU's own `cpu`, `io` and `vhost` threads). It does not replace them.
+**`dns`** rules match the name the guest asked for, in lower case (the rule is lower-cased too). `suffix: example.com` matches `example.com` and `a.b.example.com`, not `badexample.com`; `exact` is the whole name; `contains` is a substring. A rule takes exactly one of the three. The detection says the guest asked, is `guest_attributed`, and is held back for the suppression time per rule, VM and name. Names are only recorded while `shukrad` runs without `-dns-events=false`, so a `dns` rule says nothing on a daemon that has names off. See [DNS names](../tap.md#dns-names).
+
+**`exec_allow`** adds to the names that are always fine: `qemu-system*`, QEMU's own `cpu`, `io` and `vhost` threads, and the FluxVM VMMs `cloud-hypervisor`, `firecracker`, `fluxvm-hypervisor` and `jailer` (the kernel comm is 15 characters, so the first two long names match on `cloud-hypervis` and `fluxvm-hypervis`). It does not replace them. A boot of those binaries is not an unexpected-exec detection.
 
 **Thresholds** compare a metric against the counters one `window` ago, per VM:
 

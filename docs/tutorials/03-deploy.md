@@ -21,7 +21,7 @@ What it does:
 5. Installs `configs/detections.example.yaml` as `/etc/shukra/detections.yaml` only if there is none. Your edited rules are kept, and the current sample is always written beside them as `detections.example.yaml`.
 6. Writes the API key to `/etc/shukra/env` (root only, `0600`) for the service, and `~/.shukra/env` and `~/.shukra/api-key` for the SSH user. The key is not in the unit file, because `systemctl show` prints a unit's `Environment=` to every local user.
 7. Installs `shukra.service` from `deploy/shukra.service` (with `-data-dir /var/lib/shukra` and `ExecReload`), enables it, and restarts it. Detections, isolation requests and the flight recorder now survive that restart.
-8. Runs `shukractl status`, `programs`, `vms`, `trace list`, and `GET /api/v1/status`.
+8. Waits for the daemon to answer (`shukractl status --wait`, since it takes a couple of seconds to load its programs), then runs `status`, `programs`, `vms`, `trace list`, `doctor` and `GET /api/v1/status`. `doctor` is informational here: a fresh deploy on a lab host will list the dev key and plain HTTP, and the script says so without failing.
 
 The unit listens on `0.0.0.0:30970`. The token defaults to `shukra` unless you export `SHUKRA_API_KEY` before deploying. Set a real token on any host that is not a lab:
 
@@ -99,9 +99,9 @@ The first deploy with this script moves the API key out of the unit file into `/
 
 `systemctl is-active shukra` prints `active`.
 
-`shukractl programs` prints four lines of `attached` when BTF and clang were available. If generate failed, they are `detached` and the deploy log said `make generate failed`. Detached is a successful install of the control plane. It is not a successful trace.
+`shukractl programs` prints six lines: `kvm`, `sched`, `block`, `net` and `drops` `attached` with a hook count, and `tap` `attached` with how many VM taps it is on (or `detached: no VM tap interfaces to attach to yet` on a host with no VMs) when BTF and clang were available. If generate failed, they are `detached` and the deploy log said `make generate failed`. Detached is a successful install of the control plane.
 
-`shukractl vms` lists `qemu-system-*` processes. `runtime=libvirt` or `runtime=kubevirt` is a label from the command line, not a guest agent. `taps=-` means no `ifname=` was parsed. That tap name is recorded for a later slice. It is not traced.
+`shukractl vms` lists `qemu-system-*` processes and FluxVM VMMs (`cloud-hypervisor`, `firecracker`, `fluxvm-hypervisor`, and QEMU guests FluxVM launched). `runtime=libvirt` or `runtime=kubevirt` is a label from the QEMU command line, not a guest agent. `runtime=fluxvm` means the name, UUID and tap came from FluxVM's `vms.json`. `taps=` is the interface Shukra will attach to: `ifname=` or a libvirt tun fd for a plain QEMU guest, and for FluxVM the host veth `vh<8hex>` when the guest's tap is in a per-VM netns, or `tap_name` when it is already on the host. A VM with `taps=-` is on user-mode networking or its interface could not be mapped, and `shukractl doctor` says which, so its guest traffic is not seen and it cannot be isolated. The mapping is in [FluxVM](../tap.md#fluxvm).
 
 From your laptop, if the port is reachable:
 
@@ -114,6 +114,8 @@ curl -sf -H "Authorization: Bearer $SHUKRA_API_KEY" \
 
 ## After a reboot
 
-The unit is `WantedBy=multi-user.target` and `Restart=on-failure`. Hooks are not pinned. They come back when `shukrad` starts, not because something left them in `/sys/fs/bpf`.
+The unit is `WantedBy=multi-user.target` and `Restart=on-failure`. The kernel programs come back when `shukrad` starts. The tap program's links and maps are pinned under `/sys/fs/bpf/shukra/tap`, so an isolated VM stays isolated while the daemon is down and the restarted daemon adopts what is there: see [guest traffic and isolation](../tap.md). A graceful stop detaches every tap that is not isolated, so nothing of Shukra is left on an ordinary VM's interface.
+
+If you develop Shukra, this is also how a BPF change is verified: deploy to a real hypervisor and test there ([testing](../testing.md)).
 
 Next: [use the CLI](04-shukractl.md) against that URL.

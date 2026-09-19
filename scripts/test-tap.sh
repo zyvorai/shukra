@@ -50,7 +50,7 @@ sleep 1
 printf '#!/bin/bash\nwhile true; do /bin/true; sleep 0.2; done\n' > "$D/loop.sh"; chmod +x "$D/loop.sh"
 bash -c "exec -a /usr/bin/qemu-system-x86_64 bash $D/loop.sh -name taptest -uuid 9999 -netdev tap,id=n0,ifname=vethh,script=no" >/dev/null 2>&1 &
 
-printf 'destinations:\n  - cidr: 10.99.0.3/32\n    name: watched-host\n    severity: high\nports:\n  - port: 5300\n    name: udp-watch\n    proto: udp\n  - port: 8090\n    name: guest-inbound-watch\n    dir: in\n' > $D/rules.yaml
+printf 'destinations:\n  - cidr: 10.99.0.3/32\n    name: watched-host\n    severity: high\nports:\n  - port: 5300\n    name: udp-watch\n    proto: udp\n  - port: 8090\n    name: guest-inbound-watch\n    dir: in\ndns:\n  - name: dns-watch\n    suffix: watched.test\n    severity: high\n' > $D/rules.yaml
 A="Authorization: Bearer k"; U=127.0.0.1:30990
 guest() { sudo ip netns exec g1 "$@"; }
 code4() { guest curl -s -o /dev/null -m 2 -w %{http_code} "http://$1:8080/"; }
@@ -218,7 +218,7 @@ sudo tc qdisc add dev vethh clsact 2>/dev/null || true
 # on, the answer could never come and most pings would never leave the guest, so the entry is made permanent
 # first and only frames the guest really sends are counted.
 guest ping -c 1 -W 1 10.99.0.1 >/dev/null 2>&1
-HOSTMAC=$(sudo ip -n g1 neigh show 10.99.0.1 | awk '{print $3}' | head -1)
+HOSTMAC=$(sudo ip -n g1 neigh show 10.99.0.1 | awk '{for (i = 1; i < NF; i++) if ($i == "lladdr") print $(i + 1)}' | head -1)
 sudo ip -n g1 neigh replace 10.99.0.1 lladdr "$HOSTMAC" dev vethg nud permanent
 tcin() { api "$U/api/v1/trace/drops" | J "sum(r['count'] for r in d['rows'] if r['tap']=='vethh' and r['reason']=='TC_INGRESS')"; }
 TC0=$(tcin)
@@ -301,6 +301,76 @@ check "the outcomes are on /metrics" "api $U/metrics | grep -q 'shukra_tap_conne
 sudo iptables -D INPUT -d 10.99.0.1 -p tcp --dport 8081 -j DROP 2>/dev/null
 sudo ip netns exec g1 iptables -D INPUT -p tcp --dport 8092 -j DROP 2>/dev/null
 kill $GLIS 2>/dev/null; sudo pkill -f 'http.server 8090' 2>/dev/null
+
+echo "== 12. guest DNS names"
+# The program only recognises a plain query and copies its question; the name is decoded in the daemon. Queries are
+# built by hand and sent where nothing answers, since only what the guest asks matters.
+cat > "$D/dnsq.py" <<'PY'
+import socket, sys
+# dnsq.py DST NAME QTYPE COUNT [RAW-HEX]: RAW-HEX replaces the question, to send something malformed
+dst, name, qtype, n = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+q = bytes([0x12, 0x34, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0])
+if len(sys.argv) > 5:
+    q += bytes.fromhex(sys.argv[5])
+else:
+    for l in name.split("."):
+        q += bytes([len(l)]) + l.encode()
+    q += bytes([0]) + qtype.to_bytes(2, "big") + bytes([0, 1])
+s = socket.socket(socket.AF_INET6 if ":" in dst else socket.AF_INET, socket.SOCK_DGRAM)
+for _ in range(n):
+    s.sendto(q, (dst, 53))
+PY
+dq() { guest python3 "$D/dnsq.py" "$@"; sleep 1; }
+dnsn() { api "$U/api/v1/events" | J "len([e for e in d['events'] if e['kind']=='guest_dns' and e['dns_name']=='$1' and e.get('qtype','')=='$2'])"; }
+dnsall() { api "$U/api/v1/events" | J "len([e for e in d['events'] if e['kind']=='guest_dns'])"; }
+
+dq 10.99.0.1 WwW.ExAmPlE.CoM 1 3
+check "three lookups of a name in mixed case are ONE event, lower-cased, type A" "[ \"\$(dnsn www.example.com A)\" = 1 ]"
+check "it names the VM, the guest's address, the resolver, the tap, udp and port 53, and is guest-attributed" \
+  "api $U/api/v1/events | J \"any(e['guest_attributed'] and e['attribution']=='guest-tap' and e['vm']['name']=='taptest' and e.get('proto')=='udp' and e.get('src')=='10.99.0.2' and e.get('dst')=='10.99.0.1' and e.get('iface')=='vethh' and e['dport']==53 and not e.get('blocked') and not e.get('dns_truncated') for e in d['events'] if e['kind']=='guest_dns' and e['dns_name']=='www.example.com')\" | grep -q True"
+dq 10.99.0.1 www.example.com 1 2
+check "the same name again inside the minute is not announced again" "[ \"\$(dnsn www.example.com A)\" = 1 ]"
+dq 10.99.0.1 www.example.com 28 1
+check "the same name with another type is its own event (AAAA)" "[ \"\$(dnsn www.example.com AAAA)\" = 1 ]"
+dq fd99::1 v6.example.com 1 1
+check "a query over IPv6 is an event with the IPv6 addresses" "api $U/api/v1/events | J \"any(e['src']=='fd99::2' and e['dst']=='fd99::1' for e in d['events'] if e['kind']=='guest_dns' and e['dns_name']=='v6.example.com')\" | grep -q True"
+check "the flow to port 53 is still its own guest_flow event: names add to the flow, they do not replace it" "[ \"\$(udpev 10.99.0.1 53)\" -ge 1 ]"
+
+L63=$(python3 -c "print('a'*63)")
+dq 10.99.0.1 "$L63.$L63.$L63.test" 1 1
+check "a name too long for the copy is an event that says it is cut short, with no type invented" \
+  "api $U/api/v1/events | J \"any(e.get('dns_truncated') and e['dns_name'].startswith('aaaa') and not e.get('qtype') for e in d['events'] if e['kind']=='guest_dns')\" | grep -q True"
+
+N0=$(dnsall)
+dq 10.99.0.1 x 1 1 c00c00010001
+guest python3 -c "
+import socket
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+s.sendto(b'this is not a dns query at all', ('10.99.0.1',53))
+s.sendto(bytes([0x12,0x34,0x81,0x80,0,1,0,0,0,0,0,0,1,ord('r'),0,0,1,0,1]),('10.99.0.1',53))   # a response, QR=1
+s.sendto(bytes([0x12,0x34,1,0,0,2,0,0,0,0,0,0,1,ord('q'),0,0,1,0,1]),('10.99.0.1',53))          # two questions
+"; sleep 1
+check "a compression pointer, a non-DNS payload, a response and a two-question packet each produce no event" "[ \"\$(dnsall)\" = \"$N0\" ]"
+
+dq 10.99.0.1 c2.watched.test 1 1
+dq 10.99.0.1 quiet.example.org 1 1
+check "a dns rule fires on the name, guest-attributed, and names it" \
+  "api $U/api/v1/events | J \"any(e['guest_attributed'] and e['vm']['name']=='taptest' and 'c2.watched.test' in e['message'] for e in d['events'] if e['kind']=='detection' and e.get('rule')=='dns-watch')\" | grep -q True"
+check "and only on the names it matches" "api $U/api/v1/events | J \"len([e for e in d['events'] if e['kind']=='detection' and e.get('rule')=='dns-watch'])\" | grep -q '^1$'"
+
+api -X POST -d '{"vm":"taptest"}' $U/api/v1/isolate >/dev/null; sleep 1
+dq 10.99.0.3 blocked.example.com 1 1
+check "a query isolation dropped is still an event, marked blocked" "api $U/api/v1/events | J \"any(e.get('blocked') for e in d['events'] if e['kind']=='guest_dns' and e['dns_name']=='blocked.example.com')\" | grep -q True"
+api -X POST -d '{"vm":"taptest"}' $U/api/v1/release >/dev/null; sleep 1
+
+# The switch lives in a pinned map, so the daemon sets it on every start, whatever a previous run left there.
+stopd; start -isolate-allow 10.99.0.1/32,fd99::1/128 -dns-events=false
+dq 10.99.0.1 private.example.com 1 1
+check "-dns-events=false: the name is not recorded at all" "[ \"\$(dnsn private.example.com A)\" = 0 ]"
+check "but the flow to port 53 still is (the program is running, it just does not read DNS)" "[ \"\$(udpev 10.99.0.1 53)\" -ge 1 ]"
+stopd; start -isolate-allow 10.99.0.1/32,fd99::1/128
+dq 10.99.0.1 public.example.com 1 1
+check "and starting again without the flag turns names back on, whatever the last run left in the map" "[ \"\$(dnsn public.example.com A)\" = 1 ]"
 
 echo "== 8. enforcement outlives the daemon"
 ALLOW="-isolate-allow 10.99.0.1/32,fd99::1/128"

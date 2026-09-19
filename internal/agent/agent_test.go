@@ -66,6 +66,12 @@ func TestUnexpectedExec(t *testing.T) {
 	if len(st.Detections("payment-prod-03")) != 1 {
 		t.Fatalf("qemu binary was flagged: %+v", st.Detections("payment-prod-03"))
 	}
+	for _, comm := range []string{"cloud-hypervis", "firecracker", "fluxvm-hypervis", "jailer"} {
+		ag.Ingest(event.Event{Kind: event.KindExec, PID: 201, Comm: comm})
+	}
+	if len(st.Detections("payment-prod-03")) != 1 {
+		t.Fatalf("FluxVM VMM was flagged: %+v", st.Detections("payment-prod-03"))
+	}
 }
 
 func TestReloadKeepsPreviousListOnBadYAML(t *testing.T) {
@@ -699,6 +705,57 @@ func TestAConnectInAndAConnectOutToTheSameAddressAreSeparateAlerts(t *testing.T)
 		t.Fatalf("talking to a watched address and being talked to by it are different facts: %d detections", len(st.Detections("db")))
 	}
 	guestInbound(ag, "tapdb", "203.0.113.9", "10.0.0.5", 22, false) // the same again
+	if len(st.Detections("db")) != 2 || st.Suppressed() != 1 {
+		t.Fatalf("%d detections, %d suppressed", len(st.Detections("db")), st.Suppressed())
+	}
+}
+
+func guestDNS(ag *Agent, iface, name, qtype string, blocked bool) {
+	ag.Ingest(event.Event{Kind: event.KindGuestDNS, Proto: "udp", TS: time.Now().UTC(), Iface: iface, Src: "10.0.0.5", Dst: "10.0.0.1", DPort: 53, DNSName: name, QType: qtype, Blocked: blocked})
+}
+
+func TestAGuestDNSQueryIsAttributedToTheVMAndKeepsItsName(t *testing.T) {
+	ag, st := newTapAgent(t, "")
+	guestDNS(ag, "tapweb", "example.com", "AAAA", false)
+	got := kinds(st, event.KindGuestDNS)
+	if len(got) != 1 {
+		t.Fatalf("%+v", got)
+	}
+	e := got[0]
+	if e.VM.Name != "web" || !e.GuestAttributed || e.Attribution != event.AttributionGuestTap || e.DNSName != "example.com" || e.QType != "AAAA" {
+		t.Fatalf("%+v", e)
+	}
+	guestDNS(ag, "tap-nobody-owns", "example.com", "A", false)
+	for _, e := range kinds(st, event.KindGuestDNS) {
+		if e.Iface == "tap-nobody-owns" && (e.GuestAttributed || e.VM.Name != "") {
+			t.Fatalf("a tap no VM owns must stay unattributed: %+v", e)
+		}
+	}
+}
+
+func TestADNSRuleFiresOnTheNameNotOnTheResolversAddress(t *testing.T) {
+	ag, st := newTapAgent(t, `
+destinations:
+  - {cidr: 10.0.0.0/24, name: lan}
+ports:
+  - {port: 53, name: dns-out, proto: udp}
+dns:
+  - {name: pool, suffix: nanopool.org, severity: critical}
+`)
+	guestDNS(ag, "tapdb", "eth.nanopool.org", "A", false)
+	guestDNS(ag, "tapdb", "example.com", "A", false)
+	dets := st.Detections("db")
+	if len(dets) != 1 || dets[0].Rule != "pool" || dets[0].Severity != "critical" || !dets[0].GuestAttributed || dets[0].Iface != "tapdb" ||
+		!strings.Contains(dets[0].Message, "eth.nanopool.org") {
+		t.Fatalf("only the name rule may fire on a lookup; the resolver is not somewhere the guest connected: %+v", dets)
+	}
+}
+
+func TestTheSameNameIsHeldBackButADifferentOneIsNot(t *testing.T) {
+	ag, st := newTapAgent(t, "suppress: 5m\ndns:\n  - {name: pool, suffix: nanopool.org}\n")
+	guestDNS(ag, "tapdb", "a.nanopool.org", "A", false)
+	guestDNS(ag, "tapdb", "a.nanopool.org", "AAAA", false)
+	guestDNS(ag, "tapdb", "b.nanopool.org", "A", false)
 	if len(st.Detections("db")) != 2 || st.Suppressed() != 1 {
 		t.Fatalf("%d detections, %d suppressed", len(st.Detections("db")), st.Suppressed())
 	}

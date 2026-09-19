@@ -7,7 +7,8 @@
 - Linux with `/sys/kernel/btf/vmlinux` readable
 - `clang`
 - `bpftool` (so `make generate` can write `bpf/vmlinux.h`)
-- Root, or `CAP_BPF` + `CAP_PERFMON` + `CAP_SYS_ADMIN`
+- Root, or the capabilities the shipped unit grants: `CAP_BPF`, `CAP_PERFMON`, `CAP_SYS_RESOURCE`, `CAP_NET_ADMIN` (to attach the tap program) and, to read libvirt VMs' taps, `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`
+- A kernel new enough for what you want: any program needs `CAP_BPF` (Linux 5.8+); `drops` needs 5.17+; the `tap` program needs 6.6+ (TCX). A program the kernel cannot support reports itself `detached` with the reason, and the others still run
 
 Check:
 
@@ -17,7 +18,7 @@ command -v clang
 command -v bpftool
 ```
 
-KVM trace records are not in vmlinux BTF on Ubuntu 6.8. The `kvm` program uses the tracepoint format directly (`exit_reason` is the first field after the 8-byte common header). Scheduler, block, and TCP programs use the BTF types the kernel does export (`sched_wakeup_template`, `block_rq`, `block_rq_completion`, `tcp_event_sk_skb`). A missing KVM tracepoint detaches only `kvm`. The other three still attach.
+KVM trace records are not in vmlinux BTF on Ubuntu 6.8, so the `kvm` program uses the tracepoint format directly (`exit_reason` is the first field after the 8-byte common header). The scheduler, block and TCP programs use BTF types. The `drops` program reads `skb:kfree_skb` through the kernel's own BTF description of the record, so it survives layout changes between kernels (Linux 6.9 moved the fields).
 
 ## Generate and build
 
@@ -50,7 +51,11 @@ kvm       attached    4 hooks
 sched     attached    4 hooks
 block     attached    2 hooks
 net       attached    3 hooks
+drops     attached    1 hooks
+tap       attached    9 taps, enforcement survives a daemon restart
 ```
+
+`tap` reports `detached` with `no VM tap interfaces to attach to yet` until a VM with a tap is running, then `attached` with how many. That is a state of the host, not a fault.
 
 `net` has three hooks: `tcp_v4_connect`, `tcp_v6_connect` and the retransmit tracepoint. On arm64 `kvm` reports `3/4 hooks` because `kvm_pio` does not exist there. What each program records, and where it is only bucketed or unproven, is in [signals](../signals.md).
 

@@ -91,10 +91,12 @@ func readSched(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {
 	}
 	var pid uint32
 	var val struct {
-		OnCPU       uint64
-		WakeupDelay uint64
-		WakeupCount uint64
-		LastOn      uint64
+		OnCPU        uint64
+		WakeupDelay  uint64
+		WakeupCount  uint64
+		LastOn       uint64
+		PreemptNs    uint64
+		PreemptCount uint64
 	}
 	it := m.Iterate()
 	for it.Next(&pid, &val) {
@@ -102,8 +104,38 @@ func readSched(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {
 		c.OnCPUNs += val.OnCPU
 		c.WakeupDelayNs += val.WakeupDelay
 		c.WakeupCount += val.WakeupCount
+		// Only a vCPU thread's wait is preemption of the guest's CPU. An iothread that waited for a host CPU
+		// is not the guest losing its processor, and a thread that no VM owns is not counted at all.
+		if r, ok := threadRef(pid); ok && r.Role == "vcpu" {
+			c.PreemptNs += val.PreemptNs
+			c.PreemptCount += val.PreemptCount
+		}
 	}
 	readHist2(maps["sched_hist"], func(c *aggregate.Counters) *[]uint64 { return &c.SchedHist }, by)
+	readPreemptors(by, maps["preempt_by"])
+}
+
+// readPreemptors reads who took the CPU of each preempted vCPU thread.
+func readPreemptors(by map[uint32]*aggregate.Counters, m *ebpf.Map) {
+	if m == nil {
+		return
+	}
+	var key struct{ Victim, By uint32 }
+	var val struct {
+		Count, Ns uint64
+		Comm      [16]byte
+	}
+	it := m.Iterate()
+	for it.Next(&key, &val) {
+		if r, ok := threadRef(key.Victim); !ok || r.Role != "vcpu" {
+			continue
+		}
+		c := slot(by, key.Victim)
+		if c.Preemptors == nil {
+			c.Preemptors = map[string]uint64{}
+		}
+		c.Preemptors[preemptorLabel(key.By, commString(val.Comm), threadRef)] += val.Ns
+	}
 }
 
 // readHist2 reads a map keyed by {u32 pid, u32 bucket} into a log2 histogram.

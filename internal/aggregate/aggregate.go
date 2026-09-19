@@ -3,6 +3,8 @@
 package aggregate
 
 import (
+	"sort"
+
 	"github.com/zyvorai/shukra/internal/hist"
 	"github.com/zyvorai/shukra/internal/identity"
 )
@@ -16,16 +18,21 @@ const (
 
 // Counters are scraped from maps, or supplied by tests. They are not guest metrics.
 type Counters struct {
-	Exits                           map[uint32]uint64
-	ExitNs                          map[uint32]uint64 // handling time per exit reason, halts included
-	KVMLat                          []uint64          // exit handling time, log2 ns, halts left out
-	Entries                         uint64
-	MMIO                            uint64
-	PIO                             uint64
-	OnCPUNs                         uint64
-	WakeupDelayNs                   uint64
-	WakeupCount                     uint64
-	SchedHist                       []uint64 // run-queue delay, log2 ns
+	Exits         map[uint32]uint64
+	ExitNs        map[uint32]uint64 // handling time per exit reason, halts included
+	KVMLat        []uint64          // exit handling time, log2 ns, halts left out
+	Entries       uint64
+	MMIO          uint64
+	PIO           uint64
+	OnCPUNs       uint64
+	WakeupDelayNs uint64
+	WakeupCount   uint64
+	SchedHist     []uint64 // run-queue delay, log2 ns
+	// PreemptNs is time vCPU threads spent runnable but off a host CPU after being switched out, and
+	// PreemptCount how many times. Preemptors is that time by who took the CPU: "vm:<name>" for a thread
+	// of a QEMU process, otherwise a command name. Both count vCPU threads only.
+	PreemptNs, PreemptCount         uint64
+	Preemptors                      map[string]uint64
 	BlockRead                       []uint64
 	BlockWrite                      []uint64
 	BlockReadMax                    uint64
@@ -78,7 +85,44 @@ type SchedRow struct {
 	WakeupDelayP50Ns uint64   `json:"wakeupDelayP50Ns"`
 	WakeupDelayP99Ns uint64   `json:"wakeupDelayP99Ns"`
 	WakeupHist       []uint64 `json:"wakeupHist,omitempty"`
-	Measured         bool     `json:"measured"`
+	// Host-side preemption of the VM's vCPU threads: time they were runnable but off a CPU because something
+	// else was running, and who that was, most time first. It is the host's view of losing the CPU, not the
+	// guest's steal counter.
+	PreemptedNs    uint64      `json:"vcpuPreemptedNs"`
+	PreemptedCount uint64      `json:"vcpuPreemptions"`
+	Preemptors     []Preemptor `json:"topPreemptors"`
+	// AllPreemptors is every preemptor, by name. It is not in the JSON: the metrics endpoint needs a set of
+	// series that does not change as the top five do.
+	AllPreemptors []Preemptor `json:"-"`
+	Measured      bool        `json:"measured"`
+}
+
+// Preemptor is who took a vCPU's CPU, and for how long in total. Who is "vm:<name>" for a thread of a QEMU
+// process (possibly the same VM) or a command name such as "kworker" or "ksoftirqd".
+type Preemptor struct {
+	Who string `json:"who"`
+	Ns  uint64 `json:"ns"`
+}
+
+// TopPreemptors is the preemptors that took the most time, most first, at most n. It is never nil, so a
+// JSON consumer can always loop over it.
+func TopPreemptors(m map[string]uint64, n int) []Preemptor {
+	out := []Preemptor{}
+	for who, ns := range m {
+		if ns > 0 {
+			out = append(out, Preemptor{Who: who, Ns: ns})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Ns != out[j].Ns {
+			return out[i].Ns > out[j].Ns
+		}
+		return out[i].Who < out[j].Who
+	})
+	if len(out) > n {
+		out = out[:n]
+	}
+	return out
 }
 
 type BlockRow struct {
@@ -134,6 +178,16 @@ func add(dst, src *Counters) {
 	dst.WakeupDelayNs += src.WakeupDelayNs
 	dst.WakeupCount += src.WakeupCount
 	dst.SchedHist = addHist(dst.SchedHist, src.SchedHist)
+	dst.PreemptNs += src.PreemptNs
+	dst.PreemptCount += src.PreemptCount
+	if src.Preemptors != nil {
+		if dst.Preemptors == nil {
+			dst.Preemptors = map[string]uint64{}
+		}
+		for k, v := range src.Preemptors {
+			dst.Preemptors[k] += v
+		}
+	}
 	dst.BlockRead = addHist(dst.BlockRead, src.BlockRead)
 	dst.BlockWrite = addHist(dst.BlockWrite, src.BlockWrite)
 	if src.BlockReadMax > dst.BlockReadMax {
@@ -296,6 +350,8 @@ func Sched(vms []identity.VM, byPID map[uint32]Counters, vm string) []SchedRow {
 			WakeupDelayP50Ns: hist.Percentile(b.c.SchedHist, 50),
 			WakeupDelayP99Ns: hist.Percentile(b.c.SchedHist, 99),
 			WakeupHist:       b.c.SchedHist,
+			PreemptedNs:      b.c.PreemptNs, PreemptedCount: b.c.PreemptCount,
+			Preemptors: TopPreemptors(b.c.Preemptors, 5), AllPreemptors: TopPreemptors(b.c.Preemptors, len(b.c.Preemptors)),
 		})
 	}
 	return out
@@ -312,6 +368,9 @@ type ThreadRow struct {
 	WakeupDelayNs    uint64 `json:"wakeupDelayNs"`
 	WakeupCount      uint64 `json:"wakeupCount"`
 	WakeupDelayP99Ns uint64 `json:"wakeupDelayP99Ns"`
+	// PreemptedNs is how long this thread was runnable but off a CPU after being preempted. Only a vCPU
+	// thread has it.
+	PreemptedNs uint64 `json:"preemptedNs,omitempty"`
 }
 
 // SchedThreads breaks the scheduler counters down by QEMU thread. A thread with
@@ -336,7 +395,7 @@ func SchedThreads(vms []identity.VM, byPID map[uint32]Counters, vm string) []Thr
 			out = append(out, ThreadRow{
 				VM: v.Name, TID: t.TID, Comm: t.Comm, Role: t.Role,
 				OnCPUNs: c.OnCPUNs, WakeupDelayNs: c.WakeupDelayNs, WakeupCount: c.WakeupCount,
-				WakeupDelayP99Ns: hist.Percentile(c.SchedHist, 99),
+				WakeupDelayP99Ns: hist.Percentile(c.SchedHist, 99), PreemptedNs: c.PreemptNs,
 			})
 		}
 	}
@@ -389,6 +448,8 @@ func Delta(cur, base Counters) Counters {
 		Entries: sub(cur.Entries, base.Entries), MMIO: sub(cur.MMIO, base.MMIO), PIO: sub(cur.PIO, base.PIO),
 		OnCPUNs: sub(cur.OnCPUNs, base.OnCPUNs), WakeupDelayNs: sub(cur.WakeupDelayNs, base.WakeupDelayNs),
 		WakeupCount:     sub(cur.WakeupCount, base.WakeupCount),
+		PreemptNs:       sub(cur.PreemptNs, base.PreemptNs),
+		PreemptCount:    sub(cur.PreemptCount, base.PreemptCount),
 		BlockIssues:     sub(cur.BlockIssues, base.BlockIssues),
 		BlockReadOps:    sub(cur.BlockReadOps, base.BlockReadOps),
 		BlockWriteOps:   sub(cur.BlockWriteOps, base.BlockWriteOps),
@@ -401,6 +462,7 @@ func Delta(cur, base Counters) Counters {
 	}
 	d.Exits = subMap(cur.Exits, base.Exits)
 	d.ExitNs = subMap(cur.ExitNs, base.ExitNs)
+	d.Preemptors = subLabels(cur.Preemptors, base.Preemptors)
 	d.KVMLat = subHist(cur.KVMLat, base.KVMLat)
 	d.SchedHist = subHist(cur.SchedHist, base.SchedHist)
 	d.BlockRead = subHist(cur.BlockRead, base.BlockRead)
@@ -420,6 +482,17 @@ func subMap(cur, base map[uint32]uint64) map[uint32]uint64 {
 		return nil
 	}
 	out := make(map[uint32]uint64, len(cur))
+	for k, v := range cur {
+		out[k] = sub(v, base[k])
+	}
+	return out
+}
+
+func subLabels(cur, base map[string]uint64) map[string]uint64 {
+	if cur == nil {
+		return nil
+	}
+	out := make(map[string]uint64, len(cur))
 	for k, v := range cur {
 		out[k] = sub(v, base[k])
 	}
@@ -446,6 +519,7 @@ func (c Counters) Clone() Counters {
 	out := c
 	out.Exits = subMap(c.Exits, nil)
 	out.ExitNs = subMap(c.ExitNs, nil)
+	out.Preemptors = subLabels(c.Preemptors, nil)
 	out.KVMLat = append([]uint64(nil), c.KVMLat...)
 	out.SchedHist = append([]uint64(nil), c.SchedHist...)
 	out.BlockRead = append([]uint64(nil), c.BlockRead...)

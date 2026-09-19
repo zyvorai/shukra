@@ -216,3 +216,28 @@ func TestAnUnknownVMIsNeverWindowed(t *testing.T) {
 		t.Fatalf("%+v", ex.Findings)
 	}
 }
+
+func TestCPUPreemptionUsesTheWindowsPreemptionNotTheLifetimes(t *testing.T) {
+	c := newClocked(t)
+	// Long ago the vCPU lost 40 s of CPU to a neighbour. In this window it lost 6 s, mostly to web.
+	base := map[uint32]aggregate.Counters{101: {OnCPUNs: 20_000 * ms, WakeupCount: 1, PreemptNs: 40_000 * ms, PreemptCount: 400,
+		Preemptors: map[string]uint64{"vm:web": 40_000 * ms}}}
+	cur := map[uint32]aggregate.Counters{101: {OnCPUNs: 40_000 * ms, WakeupCount: 2, PreemptNs: 46_000 * ms, PreemptCount: 460,
+		Preemptors: map[string]uint64{"vm:web": 45_000 * ms, "ksoftirqd": 1_000 * ms}}}
+	c.at(0, base)
+	c.at(30*time.Second, cur)
+	c.at(60*time.Second, cur)
+	f := causeOf(c.ExplainOver("db", t0.Add(60*time.Second), time.Minute), "cpu_preempted")
+	if f == nil {
+		t.Fatal("no finding")
+	}
+	all := strings.Join(f.Evidence, " ")
+	if !strings.Contains(all, "6 s") || !strings.Contains(all, "60 preemptions") || !strings.Contains(all, "VM web (5 s)") || strings.Contains(all, "46 s") {
+		t.Fatalf("it must report the window's own numbers: %s", all)
+	}
+	// Over the lifetime it is everything since the daemon attached.
+	f = causeOf(c.ExplainOver("db", t0.Add(60*time.Second), 0), "cpu_preempted")
+	if f == nil || !strings.Contains(strings.Join(f.Evidence, " "), "46 s") {
+		t.Fatalf("%+v", f)
+	}
+}

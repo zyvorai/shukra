@@ -288,7 +288,11 @@ func printEvent(e map[string]any, asJSON bool, out io.Writer) error {
 	if asJSON {
 		return json.NewEncoder(out).Encode(e)
 	}
-	_, err := fmt.Fprintf(out, "%v  %v  %v  vm=%v  dst=%v\n", e["ts"], e["kind"], e["attribution"], nested(e, "vm", "name"), e["dst"])
+	extra := ""
+	if n, ok := e["dns_name"].(string); ok {
+		extra = fmt.Sprintf("  name=%v  qtype=%v", n, e["qtype"])
+	}
+	_, err := fmt.Fprintf(out, "%v  %v  %v  vm=%v  dst=%v%s\n", e["ts"], e["kind"], e["attribution"], nested(e, "vm", "name"), e["dst"], extra)
 	return err
 }
 
@@ -419,7 +423,7 @@ func formatVMs(w io.Writer, m map[string]any) {
 	fmt.Fprintln(w, "VMS")
 	rows := list(m, "vms")
 	if len(rows) == 0 {
-		fmt.Fprintln(w, "  none — no qemu-system process in the proc scan")
+		fmt.Fprintln(w, "  none — no qemu-system or FluxVM VMM process in the proc scan")
 		return
 	}
 	for _, row := range rows {
@@ -503,6 +507,9 @@ func formatTrace(w io.Writer, kind string, m map[string]any) {
 			fmt.Fprintf(w, "  exits=%s  entries=%s  mmio=%s  pio=%s", num(row, "exits"), num(row, "entries"), num(row, "mmio"), num(row, "pio"))
 		case "sched":
 			fmt.Fprintf(w, "  oncpu_ns=%s  wakeup_ns=%s  wakeups=%s", num(row, "onCpuNs"), num(row, "wakeupDelayNs"), num(row, "wakeupCount"))
+			if str(row, "vm") != "_host" { // the rest of the host has no vCPUs
+				fmt.Fprintf(w, "\n      vCPU preempted: %sns over %s preemptions%s", num(row, "vcpuPreemptedNs"), num(row, "vcpuPreemptions"), preemptors(row))
+			}
 		case "block":
 			fmt.Fprintf(w, "  issues=%s  read_p50=%s  read_p99=%s  write_p99=%s", num(row, "issues"), num(row, "readP50Ns"), num(row, "readP99Ns"), num(row, "writeP99Ns"))
 		case "net":
@@ -517,6 +524,18 @@ func formatTrace(w io.Writer, kind string, m map[string]any) {
 		}
 		fmt.Fprintln(w)
 	}
+}
+
+// preemptors renders "  (taken by: vm:web 3500000000ns, kworker 500000000ns)" from a sched row, or nothing.
+func preemptors(row map[string]any) string {
+	var parts []string
+	for _, p := range list(row, "topPreemptors") {
+		parts = append(parts, fmt.Sprintf("%s %sns", str(p, "who"), num(p, "ns")))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "  (taken by: " + strings.Join(parts, ", ") + ")"
 }
 
 // formatDrops shows, per tap, how many packets the kernel dropped and whose drops they were, then

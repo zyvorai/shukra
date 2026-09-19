@@ -25,6 +25,9 @@ func TapProgram() (status, detail string) {
 // TapSample is nil here. The daemon must not invent counters.
 func TapSample() []TapCounters { return nil }
 
+// SetDNSEvents has no program to tell in this build.
+func SetDNSEvents(bool) {}
+
 // StartTap reads no ring in this build.
 func StartTap(func(event.Event)) {}
 

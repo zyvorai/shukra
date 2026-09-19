@@ -118,6 +118,23 @@ def udp(ip, port, n, sport=0):
 tcp("203.0.113.9", 443)
 udp("203.0.113.53", 5301, 20, 40000)
 udp("224.0.0.251", 5353, 3)
+# DNS queries, built by hand and sent to an address nothing answers: only the question matters. The same
+# name in two spellings and repeated is one A event per cycle; AAAA is its own.
+def dnsq(name, qtype, n):
+    q = bytes([0x12, 0x34, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0])
+    for l in name.split("."):
+        q += bytes([len(l)]) + l.encode()
+    q += bytes([0]) + qtype.to_bytes(2, "big") + bytes([0, 1])
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        for _ in range(n):
+            s.sendto(q, ("203.0.113.53", 53))
+    except Exception:
+        pass
+    s.close()
+dnsq("live-probe.shukra-test.invalid", 1, 3)
+dnsq("Live-Probe.Shukra-Test.INVALID", 1, 2)
+dnsq("live-probe.shukra-test.invalid", 28, 1)
 # and talk to the peer guest, which may still be booting
 for i in range(20):
     try:
@@ -174,10 +191,17 @@ check "fluxvm created both VMs" "[ -n '$ID' ] && [ -n '$IDB' ]"
 if sudo grep -q '^\[sandbox.dataplane\]' "$FLUXVM_TOML" 2>/dev/null; then
   FTOKEN=$(sudo sed -n 's/^token = "\(.*\)"/\1/p' "$FLUXVM_TOML" 2>/dev/null | head -1)
   POLICY=200
+  # A VM that has only just been created may not have its network up yet, so the request is repeated for up to
+  # a minute. The body of a refusal is kept (it does not contain the token) so the reason can be read.
   for pid in $ID $IDB; do
-    c=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $FTOKEN" -H 'Content-Type: application/json' \
-      -d '{"default_allow": true, "allow_cidrs": ["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16"], "allow_ports": []}' "$FLUXVM_URL/v1/vms/$pid/network/policy")
-    [ "$c" = 200 ] || POLICY=$c
+    c=000
+    for _ in $(seq 1 30); do
+      c=$(curl -s -o "$D/policy.body" -w '%{http_code}' -X POST -H "Authorization: Bearer $FTOKEN" -H 'Content-Type: application/json' \
+        -d '{"default_allow": true, "allow_cidrs": ["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16"], "allow_ports": []}' "$FLUXVM_URL/v1/vms/$pid/network/policy")
+      [ "$c" = 200 ] && break
+      sleep 2
+    done
+    [ "$c" = 200 ] || { POLICY=$c; echo "  fluxvm refused the policy for $pid ($c): $(head -c 300 "$D/policy.body")"; }
   done
   unset FTOKEN
   echo "  this host's fluxvm has a dataplane: the two test guests got their own policy (private CIDRs, no port limit)"
@@ -224,7 +248,7 @@ while time.time() < end:
         last = max([last] + [e["seq"] for e in d["events"]])
         with open(out, "a") as f:
             for e in d["events"]:
-                if e["kind"] in ("guest_connect", "guest_flow") and e.get("iface") == tap and e["seq"] not in seen:
+                if e["kind"] in ("guest_connect", "guest_flow", "guest_dns") and e.get("iface") == tap and e["seq"] not in seen:
                     seen[e["seq"]] = 1
                     f.write(json.dumps(e) + "\n")
     except Exception:
@@ -279,6 +303,11 @@ print("tcpproto", int(bool(tcp) and all(e.get("proto") == "tcp" for e in tcp)))
 print("udpproto", int(bool(udp) and all(e.get("proto") == "udp" for e in udp)))
 print("srcs", int(bool(ev) and all(str(e.get("src", "")).startswith("192.168.") or str(e.get("src", "")).startswith("10.") or str(e.get("src", "")).startswith("172.") for e in ev)))
 print("notblocked", int(all(not e.get("blocked") for e in ev)))
+dns = [e for e in ev if e["kind"] == "guest_dns"]
+dna = [e for e in dns if e.get("dns_name") == "live-probe.shukra-test.invalid" and e.get("qtype") == "A"]
+dnaaaa = [e for e in dns if e.get("dns_name") == "live-probe.shukra-test.invalid" and e.get("qtype") == "AAAA"]
+print("dnsA", len(dna), "dnsAAAA", len(dnaaaa), "dnsall", len(dns))
+print("dnsok", int(bool(dna) and all(e.get("dst") == "203.0.113.53" and e.get("dport") == 53 and e.get("proto") == "udp" and e["guest_attributed"] and e["vm"]["name"] == vm and not e.get("dns_truncated") for e in dna)))
 for e in ev[:8]:
     print("show %-13s %-4s %s -> %s:%s attributed=%s attr=%s" % (e["kind"], e.get("proto"), e.get("src"), e.get("dst"), e.get("dport"), e["guest_attributed"], e["attribution"]))
 PY
@@ -294,6 +323,10 @@ check "every guest event is guest_attributed, attribution guest-tap, and names t
 check "the source is the guest's own address, not the host's" "[ \"\$(val srcs)\" = 1 ]"
 check "twenty datagrams on one flow per cycle are one event per cycle, not twenty (udp events $NU, cycles $NT)" "[ '$NU' -ge 1 ] && [ \$(( $NT - $NU )) -ge 0 ] && [ \$(( $NT - $NU )) -le 1 ]"
 check "multicast is counted but produces no event" "[ '$NM' = 0 ]"
+NDA=$(sed -n 's/^dnsA \([0-9]*\) .*/\1/p' "$D/verify.out")
+NDAAAA=$(sed -n 's/^dnsA .* dnsAAAA \([0-9]*\) .*/\1/p' "$D/verify.out")
+check "the guest's DNS lookup arrives as a guest_dns event with exactly the name it asked for, lower-cased, and its type (A events $NDA, AAAA $NDAAAA)" "[ '$NDA' -ge 1 ] && [ '$NDAAAA' -ge 1 ] && [ \"\$(val dnsok)\" = 1 ]"
+check "five lookups of one name in two spellings are one event per cycle, not five (A events $NDA, cycles $NT)" "[ \$(( $NT - $NDA )) -ge 0 ] && [ \$(( $NT - $NDA )) -le 1 ]"
 check "no event on an ordinary run is marked blocked (nothing is isolated)" "[ \"\$(val notblocked)\" = 1 ]"
 check "host tcp_connect events are still not guest-attributed" "api $URL/api/v1/events | J \"any(e['guest_attributed'] for e in d['events'] if e['kind']=='tcp_connect')\" | grep -q False"
 check "shukra still traces the KVM exits of this VM" "api $URL/api/v1/trace/kvm | J \"sum(r['exits'] for r in d['rows'])\" | awk '\$1>0{f=1} END{exit !f}'"

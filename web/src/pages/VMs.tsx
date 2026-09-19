@@ -23,7 +23,7 @@ export default function VMs() {
   const { data, err } = useAPI<{ vms: VM[] }>('/api/v1/vms', { refreshMs: LIVE_MS });
   const vms = data?.vms || [];
   if (err) return <p className="warning">{err}</p>;
-  if (data && vms.length === 0) return <p className="empty-state">No qemu-system process in the proc scan.</p>;
+  if (data && vms.length === 0) return <p className="empty-state">No qemu-system or FluxVM VMM process in the proc scan.</p>;
   return (
     <div className="grid">
       {vms.map((vm) => (
@@ -36,7 +36,7 @@ export default function VMs() {
           <p>{roleLine(vm.threadInfo)}</p>
           <p className="uuid">{vm.uuid}</p>
           <div className="metrics">
-            <div><b>—</b><span>CPU steal · not measured</span></div>
+            <div><b>—</b><span>guest CPU steal · not measured</span></div>
             <div><b>—</b><span>guest tap flows · not measured</span></div>
             <div><b>—</b><span>in-guest processes · not measured</span></div>
           </div>

@@ -57,7 +57,7 @@ func (s *State) recordLocked(now time.Time) {
 		if s.tapSource != nil {
 			taps = s.tapSource()
 		}
-		snap.drops = snapsFrom(taps, s.dropSource())
+		snap.drops = snapsFrom(s.sinceStartLocked(taps), s.dropSource())
 	}
 	if s.tapSource != nil && s.programAttachedLocked("tap") {
 		snap.outcomes = map[string]Outcomes{}

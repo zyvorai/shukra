@@ -160,6 +160,63 @@ struct {
 	__uint(max_entries, 1 << 18);
 } tap_events SEC(".maps");
 
+/* Guest DNS queries. The program only recognises a plain query (QR=0, OPCODE=0, one question) and hands the
+   question section to userspace as raw wire bytes; the name is decoded there, where it can be tested and
+   cannot upset the verifier. A repeat of the same name and type on the same tap is announced once a minute,
+   and queries are rate-limited per tap on their own, so a resolver storm cannot starve the connect events.
+   dns_cfg[0] is 1 when the operator turned name events off (shukrad -dns-events=false): the program then
+   does not look at DNS at all. An array starts as zero, so "on" is the default. */
+#define DNS_RAW 128
+#define DNS_REFRESH_NS 60000000000ull
+#define DNS_PER_SEC 200
+
+struct dns_event {
+	__u64 ts_ns;      /* 0 */
+	__u32 ifindex;    /* 8 */
+	__u8 family;      /* 12 */
+	__u8 flags;       /* 13: 1 when isolation dropped this query, 2 when the name did not end inside raw */
+	__u16 rawlen;     /* 14: how many bytes of raw are the packet's */
+	__u8 src[16];     /* 16 */
+	__u8 dst[16];     /* 32 */
+	__u8 raw[DNS_RAW]; /* 48: the question section, wire format */
+};                        /* 176 */
+
+_Static_assert(sizeof(struct dns_event) == 176, "dns_event layout changed: update internal/observe/dns.go");
+
+struct {
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 1 << 18);
+} tap_dns SEC(".maps");
+
+struct {
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} dns_cfg SEC(".maps");
+
+struct dns_seen_key {
+	__u32 ifindex;
+	__u32 pad;
+	__u64 hash;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, 16384);
+	__type(key, struct dns_seen_key);
+	__type(value, __u64);
+} dns_seen SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1024);
+	__type(key, __u32);
+	__type(value, struct rate);
+} dns_rate SEC(".maps");
+
 /* TCP handshake outcomes. A SYN is remembered until it is answered: a SYN-ACK means the connection was
    accepted, an RST means it was refused, and one that is never answered is counted as a timeout by
    userspace (BPF has no timers), which sweeps the pending table. dir says who started it. */
@@ -434,6 +491,121 @@ static __always_inline int track_handshake(__u32 ifindex, int from_guest, __u8 f
 	return 0;
 }
 
+static __always_inline int dns_may_emit(__u32 ifindex) {
+	__u64 now = bpf_ktime_get_ns();
+	struct rate *r = bpf_map_lookup_elem(&dns_rate, &ifindex);
+	if (!r) {
+		struct rate fresh = {.window_ns = now, .count = 0};
+		bpf_map_update_elem(&dns_rate, &ifindex, &fresh, BPF_NOEXIST);
+		r = bpf_map_lookup_elem(&dns_rate, &ifindex);
+		if (!r)
+			return 0;
+	}
+	if (now - r->window_ns >= 1000000000ull) {
+		r->window_ns = now;
+		r->count = 0;
+	}
+	return __sync_fetch_and_add(&r->count, 1) < DNS_PER_SEC;
+}
+
+/* A DNS query the guest sent to UDP port 53. off is where the UDP payload starts. */
+static __always_inline void dns_query(struct __sk_buff *skb, __u32 ifindex, __u8 family, const __u8 *src,
+				      const __u8 *dst, __u32 off, __u8 dropped) {
+	__u32 zero = 0;
+	__u32 *off_flag = bpf_map_lookup_elem(&dns_cfg, &zero);
+	if (off_flag && *off_flag)
+		return;
+
+	__u8 hdr[12] = {};
+	if (bpf_skb_load_bytes(skb, off, hdr, sizeof(hdr)) < 0)
+		return;
+	/* QR=0 (a query), OPCODE=0 (standard), and exactly one question. Anything else is not a name lookup. */
+	if ((hdr[2] & 0xF8) != 0 || hdr[4] != 0 || hdr[5] != 1)
+		return;
+
+	__u64 plen = skb->len, start = off + 12;
+	if (plen <= start)
+		return;
+	__u64 have = plen - start;
+	/* The verifier must be able to prove 1 <= have <= DNS_RAW. A comparison against zero is not enough for it
+	   (it keeps the lower bound only for a 32-bit view), so the bound is built by arithmetic: m is 0 to
+	   DNS_RAW - 1 and have is m + 1. */
+	__u64 m = have - 1;
+	if (m > DNS_RAW - 1)
+		m = DNS_RAW - 1;
+	have = m + 1;
+
+	__u8 raw[DNS_RAW] = {};
+	if (bpf_skb_load_bytes(skb, off + 12, raw, have) < 0)
+		return;
+
+	/* Walk the name, to hash it (case-folded, with the type) and to know where it ends. A length byte above
+	   63 is a compression pointer or an extension, neither of which a plain first question has. */
+	__u64 h = 1469598103934665603ull ^ ifindex;
+	__u32 stage = 0, left = 0, tail = 0;
+	int done = 0, bad = 0;
+	for (int i = 0; i < DNS_RAW; i++) {
+		if (i >= have)
+			break;
+		__u8 c = raw[i];
+		if (stage == 0) {
+			if (c == 0) {
+				stage = 2;
+			} else if (c > 63) {
+				bad = 1;
+				break;
+			} else {
+				left = c;
+				stage = 1;
+			}
+			h = (h ^ c) * 1099511628211ull;
+		} else if (stage == 1) {
+			if (c >= 'A' && c <= 'Z')
+				c += 32;
+			h = (h ^ c) * 1099511628211ull;
+			if (--left == 0)
+				stage = 0;
+		} else {
+			if (tail < 2)
+				h = (h ^ c) * 1099511628211ull;
+			if (++tail >= 4) {
+				done = 1;
+				break;
+			}
+		}
+	}
+	if (bad)
+		return;
+
+	__u64 now = bpf_ktime_get_ns();
+	struct dns_seen_key k = {.ifindex = ifindex, .hash = h};
+	__u64 *last = bpf_map_lookup_elem(&dns_seen, &k);
+	if (last && now - *last < DNS_REFRESH_NS)
+		return;
+	if (!dns_may_emit(ifindex))
+		return;
+	bpf_map_update_elem(&dns_seen, &k, &now, BPF_ANY);
+
+	struct dns_event *e = bpf_ringbuf_reserve(&tap_dns, sizeof(*e), 0);
+	if (!e)
+		return;
+	__builtin_memset(e, 0, sizeof(*e));
+	e->ts_ns = now;
+	e->ifindex = ifindex;
+	e->family = family;
+	e->flags = (dropped ? 1 : 0) | (done ? 0 : 2);
+	e->rawlen = (__u16)have;
+	if (family == FAMILY_INET) {
+		__builtin_memcpy(e->src, src, 4);
+		__builtin_memcpy(e->dst, dst, 4);
+	} else {
+		__builtin_memcpy(e->src, src, 16);
+		__builtin_memcpy(e->dst, dst, 16);
+	}
+	__builtin_memcpy(e->raw, raw, DNS_RAW);
+	bpf_ringbuf_submit(e, 0);
+}
+
 static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 	/* Not a frame from the guest: the host's own, looped back. Leave it alone. */
 	if (from_guest && skb->pkt_type == PACKET_LOOPBACK)
@@ -458,6 +630,7 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 	__u16 sport = 0, dport = 0;
 	int syn = 0, synack = 0, rst = 0;
 	__u8 l4 = 0;
+	__u32 l4off = 0; /* where a UDP payload starts */
 
 	if (proto == ETH_P_IP) {
 		struct iphdr *ip = (void *)(eth + 1);
@@ -487,6 +660,7 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 				sport = __builtin_bswap16(udp->source);
 				dport = __builtin_bswap16(udp->dest);
 				l4 = IPPROTO_UDP_;
+				l4off = sizeof(*eth) + ip->ihl * 4 + sizeof(*udp);
 			}
 		}
 	} else if (proto == ETH_P_IPV6) {
@@ -524,6 +698,7 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 				sport = __builtin_bswap16(udp->source);
 				dport = __builtin_bswap16(udp->dest);
 				l4 = IPPROTO_UDP_;
+				l4off = sizeof(*eth) + sizeof(*ip6) + sizeof(*udp);
 			}
 		}
 	} else if (isolated && proto != ETH_P_ARP) {
@@ -542,6 +717,8 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 			emit_connect(ifindex, family, IPPROTO_TCP_, src, dst, sport, dport, drop, DIR_OUT);
 		else if (l4 == IPPROTO_UDP_ && !is_multicast(family, dst) && new_udp_flow(ifindex, family, src, dst, sport, dport))
 			emit_connect(ifindex, family, IPPROTO_UDP_, src, dst, sport, dport, drop, DIR_OUT);
+		if (l4 == IPPROTO_UDP_ && dport == 53 && l4off)
+			dns_query(skb, ifindex, family, src, dst, l4off, drop);
 	} else if (inbound_new) {
 		/* Someone connecting INTO the guest. src is the peer, dst is the guest. */
 		emit_connect(ifindex, family, IPPROTO_TCP_, src, dst, sport, dport, drop, DIR_IN);

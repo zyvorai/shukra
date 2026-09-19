@@ -25,6 +25,8 @@ func (f Fired) Message() string {
 // vmSnap is the slice of a VM's cumulative counters that rules read.
 type vmSnap struct {
 	exits, delayNs, wakeups, retrans uint64
+	preemptNs                        uint64
+	schedOn                          bool // the sched program is measuring this VM
 	readBytes, writeBytes, ops       uint64
 	read, write, kvmLat, schedHist   []uint64
 	tap                              aggregate.TapTotals
@@ -127,6 +129,7 @@ func (e *Evaluator) base(now time.Time, window time.Duration) (snapshot, bool) {
 func snap(c aggregate.Counters) vmSnap {
 	return vmSnap{
 		exits: c.TotalExits(), delayNs: c.WakeupDelayNs, wakeups: c.WakeupCount, retrans: c.Retransmits,
+		preemptNs: c.PreemptNs, schedOn: c.OnCPUNs+c.WakeupCount > 0,
 		readBytes: c.BlockReadBytes, writeBytes: c.BlockWriteBytes, ops: c.BlockReadOps + c.BlockWriteOps,
 		read: append([]uint64(nil), c.BlockRead...), write: append([]uint64(nil), c.BlockWrite...),
 		kvmLat: append([]uint64(nil), c.KVMLat...), schedHist: append([]uint64(nil), c.SchedHist...),
@@ -152,6 +155,12 @@ func metric(name string, old, cur vmSnap, span time.Duration) (float64, bool) {
 			return 0, false
 		}
 		return float64(dn) / float64(dc) / 1e6, true
+	case MetricVCPUPreemptedMSPerSec:
+		if !old.schedOn || !cur.schedOn {
+			return 0, false // the sched program was not measuring this VM: say nothing, not zero
+		}
+		d, ok := sub(cur.preemptNs, old.preemptNs)
+		return float64(d) / 1e6 / secs, ok
 	case MetricBlockReadP99MS:
 		return p99ms(old.read, cur.read)
 	case MetricBlockWriteP99MS:
