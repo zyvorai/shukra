@@ -65,6 +65,16 @@ func resolveLocation(addr uint64) string {
 	return label
 }
 
+// dropLocation is the function that freed the packets. The kernel names it itself when the program
+// first sees a reason on a tap, and that needs no capability. Failing that, /proc/kallsyms is tried
+// (which needs CAP_SYSLOG to show real addresses), and failing that the address is shown.
+func dropLocation(v bpfgen.DropSum) string {
+	if v.Symbol != "" {
+		return v.Symbol
+	}
+	return resolveLocation(v.Location)
+}
+
 // watchDrops points the drops program at the interfaces the tap program is on.
 func watchDrops() {
 	var idx []uint32
@@ -91,7 +101,7 @@ func DropSample() []DropCounters {
 		}
 		out = append(out, DropCounters{
 			Tap: tap, Ifindex: k.Ifindex, Code: k.Reason, Reason: dropReasonLabel(names, k.Reason),
-			Count: v.Count, Location: resolveLocation(v.Location),
+			Count: v.Count, Location: dropLocation(v),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {

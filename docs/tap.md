@@ -94,6 +94,8 @@ sudo bpftrace -e 'tracepoint:skb:kfree_skb /args->protocol == 0x800/ {
 
 The reason is a number; the names are in `/sys/kernel/tracing/events/skb/kfree_skb/format`. A `TC_INGRESS` drop on a guest's tap means a tc or TCX program attached to that tap returned "drop". `bpftool net show dev <tap>` lists the programs there, and only the tap program's own drops are counted by Shukra. `NETFILTER_DROP` points at iptables or nftables instead, and `iptables -L -v -n -x` shows which rule's counter moves.
 
+On a real host the drops program pinned this down: the test guests' taps showed `TC_INGRESS` drops, freed in `__netif_receive_skb_core`, with Shukra's own count at 0, and `bpftool net show dev <tap>` listed fluxvm's `fluxvm_egress` program at `clsact/ingress`. And the guests that never read their NIC showed `FULL_RING`, freed in `tun_net_xmit`.
+
 Three things a real host showed, all about fluxvm and none about Shukra:
 
 - **Two guests with the same MAC.** fluxvm gives a tap guest QEMU's default MAC unless the spec has `mac`, so a second guest on the same bridge takes the first one's frames. Set a unique `mac` on each.

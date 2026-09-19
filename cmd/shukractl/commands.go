@@ -541,7 +541,7 @@ func formatDrops(w io.Writer, m map[string]any) {
 			}
 			where := ""
 			if loc := str(r, "location"); loc != "" {
-				where = "  last freed in " + loc
+				where = "  freed in " + loc
 			}
 			fmt.Fprintf(w, "      %-14s %s%s\n", str(r, "reason"), num(r, "count"), where)
 		}

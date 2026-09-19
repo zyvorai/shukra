@@ -597,7 +597,7 @@ func TestTraceDropsSaysWhoseDropsTheyAreAndWhereTheyHappened(t *testing.T) {
 	if err := run([]string{"trace", "drops"}, &buf); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"vm=db", "tap=tap0", "kernel=60", "shukra=2", "other=58", "TC_INGRESS", "60", "last freed in __netif_receive_skb_core"} {
+	for _, want := range []string{"vm=db", "tap=tap0", "kernel=60", "shukra=2", "other=58", "TC_INGRESS", "60", "freed in __netif_receive_skb_core"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Fatalf("missing %q:\n%s", want, buf.String())
 		}

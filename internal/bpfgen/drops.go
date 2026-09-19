@@ -92,10 +92,19 @@ type DropKey struct {
 type DropVal struct {
 	Count    uint64
 	Location uint64
+	Sym      [48]byte
+}
+
+// DropSum is a key's per-CPU values folded into one: the count, the last address, and the function
+// the kernel named for the first free it saw (empty if it could not).
+type DropSum struct {
+	Count    uint64
+	Location uint64
+	Symbol   string
 }
 
 // DropStats sums the per-CPU counts: what the kernel dropped on each watched tap, by reason.
-func DropStats() map[DropKey]DropVal {
+func DropStats() map[DropKey]DropSum {
 	c := dropsColl()
 	if c == nil {
 		return nil
@@ -104,15 +113,18 @@ func DropStats() map[DropKey]DropVal {
 	if m == nil {
 		return nil
 	}
-	out := map[DropKey]DropVal{}
+	out := map[DropKey]DropSum{}
 	var k DropKey
 	var vals []DropVal
 	for it := m.Iterate(); it.Next(&k, &vals); {
-		var sum DropVal
+		var sum DropSum
 		for _, v := range vals {
 			sum.Count += v.Count
 			if v.Location != 0 {
 				sum.Location = v.Location
+			}
+			if sum.Symbol == "" {
+				sum.Symbol = symbolText(v.Sym[:])
 			}
 		}
 		out[k] = sum

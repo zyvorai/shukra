@@ -308,6 +308,12 @@ check "and nothing was dropped on the sender's tap either" "[ \"\$(tap_row | cut
 # public address), so this asserts that it is measuring and names both taps, and prints the numbers.
 check "the drops program is measuring and lists both guests' taps" "api $URL/api/v1/trace/drops | J \"d['measured'] and {'$TAP','$TAPB'} <= {t['tap'] for t in d['taps']}\" | grep -q True"
 echo "  kernel drops on the two taps (tap, kernel, shukra's, someone else's, guest not reading): $(api "$URL/api/v1/trace/drops" | J "[(t['tap'],t['kernelDrops'],t['shukraDropped'],t['otherDrops'],t['guestNotReading']) for t in d['taps'] if t['tap'] in ('$TAP','$TAPB')]")"
+echo "  by reason, and the function that freed them: $(api "$URL/api/v1/trace/drops" | J "[(r['tap'],r['reason'],r['count'],r.get('location','')) for r in d['rows'] if r['tap'] in ('$TAP','$TAPB')]")"
+# If something other than Shukra dropped packets, say what else is attached to the tap: that is the suspect.
+for tp in $TAP $TAPB; do
+  echo "  attached to $tp besides Shukra's programs: $(sudo bpftool net show dev "$tp" 2>/dev/null | grep -E 'clsact|tcx|xdp' | grep -v shukra_tap | tr -s ' ' | sed 's/^ //' | tr '\n' ';')"
+done
+
 
 echo "== 6. delete both VMs: the tap programs come off"
 sudo "$FLUXCTL" delete "$ID" >/dev/null 2>&1; ID=""
