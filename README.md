@@ -4,11 +4,37 @@
   <img src="docs/shukra-social.png" alt="Shukra — eBPF runtime intelligence for KVM" width="100%">
 </p>
 
+<p align="center">
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-ff5a15"></a>
+  <img alt="Go 1.25+" src="https://img.shields.io/badge/go-1.25%2B-0d0d0c">
+  <img alt="Linux 6.6+ for guest traffic and isolation" src="https://img.shields.io/badge/linux-6.6%2B%20for%20the%20tap-0d0d0c">
+  <img alt="x86_64 and arm64" src="https://img.shields.io/badge/arch-x86__64%20%C2%B7%20arm64-0d0d0c">
+</p>
+
+<p align="center">
+  <a href="docs/sales/brochure/Zyvor-Shukra-Product-Brochure.pdf"><b>Product brochure (PDF)</b></a> ·
+  <a href="docs/tutorials/README.md">Tutorials</a> ·
+  <a href="docs/api.md">API</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
+
 **eBPF-powered runtime intelligence and security for KVM.**
 
 Shukra sits on the hypervisor and watches every QEMU/KVM workload from outside the guest. There is no agent to install in the VM. The daemon attaches kernel traces, joins them to the QEMU process, and gives an operator a console and a CLI that say what they know, how they know it, and what they cannot see.
 
 Observe. Protect. Explain.
+
+**6** eBPF programs · **16** kernel attach points · **0** agents in the guest · **13** console pages · **25** HTTP routes · **15** `shukractl` commands
+
+<table>
+  <tr>
+    <td width="33%"><img src="docs/sales/brochure/shots/readme-overview.png" alt="The overview page"><br><sub>Overview: what is attached, which VMs, what fired</sub></td>
+    <td width="33%"><img src="docs/sales/brochure/shots/readme-explain.png" alt="The Explain page"><br><sub>Explain: ranked host-side causes with evidence</sub></td>
+    <td width="33%"><img src="docs/sales/brochure/shots/readme-contention.png" alt="The Contention page"><br><sub>Contention: who took whose CPU</sub></td>
+  </tr>
+</table>
+
+<sub>The screenshots are the console in fixture mode (`web/src/fixtures.ts`), not a live host. The [brochure](docs/sales/brochure/Zyvor-Shukra-Product-Brochure.pdf) walks a slow VM, a noisy neighbour, a past incident and lost traffic from start to finish.</sub>
 
 | | |
 |---|---|
@@ -167,6 +193,10 @@ A detection keeps the attribution of the event that caused it, so a rule that fi
 | `GET /api/v1/explain?vm=<name>&window=<dur>&at=<time>` | bearer | Ranked findings for one VM. `window` is 10s to 5m, or `0`; the default is the last minute. With `at` it is a past time, from stored snapshots (`window` is then 5m to 6h) |
 | `GET /api/v1/advice?vm=<name>&window=<dur>` | bearer | Is each VM the right size: idle and busy shares, preemption, run-queue wait, and the advice with evidence. `window` is 1m to 5m (default 5m) |
 | `GET /api/v1/incident?vm=<name>&at=<time>&window=<dur>` | bearer | One bundle about a VM around a moment: verdict, detections, recorder events, isolate requests, allow list |
+| `GET /api/v1/recorder?vm=<name>&window=<dur>` | bearer | The bounded per-VM flight recorder: default 60 s, at most 4096 events |
+| `GET /api/v1/detections?vm=<name>` | bearer | Rule hits, capped like events |
+| `GET /api/v1/security?vm=<name>` | bearer | Detections, whether isolation is enforced (`tcx` or `not_attached`), the allow list, and whether isolation survives the daemon |
+| `GET /api/v1/export` | bearer | One document (status, VMs, traces, events) for a bug report |
 | `GET /api/v1/events?since=<seq>` | bearer | Events newer than `seq`. Every event carries a `seq` that only grows |
 | `GET /api/v1/stream` | bearer | Server-sent events. Resume with `Last-Event-ID` or `?since=` |
 | `GET /api/v1/isolations` | bearer | Audit trail of isolate and release requests, and whether each took effect |
@@ -234,6 +264,7 @@ Events that leave the daemon carry `product: "shukra"`. A joined host event has 
 | [Tap: what is left](docs/roadmap-taptrace.md) | What is not built yet |
 | [Security](SECURITY.md) | What it reads, what it can do, what a hostile guest can do to it |
 | [Changelog](CHANGELOG.md) | What changed |
+| [Product brochure](docs/sales/brochure/Zyvor-Shukra-Product-Brochure.pdf) | Fourteen pages for a buyer: the scenarios, the limits, and a checklist. [Source and claims table](docs/sales/brochure/README.md) |
 
 ## Development
 
@@ -264,6 +295,18 @@ cd web && VITE_FIXTURE=1 npm run dev
 ```
 
 Fixture mode is a local console with no daemon. It is not live data.
+
+### Brochure and social image
+
+Both are generated, so they can be regenerated when the product changes.
+
+```bash
+python3 docs/sales/brochure/build.py --check   # the brochure PDF; fails if a page overflows
+docs/sales/brochure/capture.sh                 # re-shoot the console pages from fixture mode
+docs/social/build-social-card.sh               # docs/shukra-social.png and web/public/og.png, byte-identical
+```
+
+The brochure and the social card need Google Chrome (the card also needs macOS `sips`). Every number in the brochure has a source in [its claims table](docs/sales/brochure/README.md).
 
 ## License
 

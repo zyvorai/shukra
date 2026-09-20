@@ -1,0 +1,100 @@
+<section class="page" data-title="The six programs"><div class="body">
+<h1>The six eBPF programs</h1>
+<p class="lede">Each program is a separate object with its own hooks and its own switch. A host that cannot run one loses only that program, and says why. Hot paths stay in maps; every source of events is sampled or rate-limited.</p>
+<table>
+<tr><th>Program</th><th>Hooks</th><th>What it records</th><th>Needs</th></tr>
+<tr><td class="k">kvm</td><td><code>kvm_exit</code>, <code>kvm_entry</code>, <code>kvm_mmio</code>, <code>kvm_pio</code></td><td>exit counts by reason, exit handling time as a histogram (halts excluded) and time per reason</td><td>BTF, Linux 5.8+</td></tr>
+<tr><td class="k">sched</td><td>wakeup, switch, exec, exit</td><td>on-CPU time, run-queue delay per thread, <b>vCPU preemption</b> (runnable but off a host CPU, and who had it), exec and exit of QEMU children</td><td>BTF, Linux 5.8+</td></tr>
+<tr><td class="k">block</td><td><code>block_rq_issue</code>, <code>block_rq_complete</code></td><td>latency histogram, requests, bytes and the slowest request, per direction</td><td>BTF, Linux 5.8+</td></tr>
+<tr><td class="k">net</td><td><code>tcp_v4_connect</code>, <code>tcp_v6_connect</code>, sampled <code>tcp_retransmit_skb</code></td><td>exact connect counts (IPv4 and IPv6) and 1-in-64 retransmit samples: <b>the QEMU process's</b> sockets</td><td>BTF, Linux 5.8+</td></tr>
+<tr><td class="k">tap</td><td>TCX ingress and egress on each VM tap</td><td>the guest's own traffic: per-tap counters, one event per TCP connect, new UDP flow, connection made <i>to</i> the guest, the name in each plain DNS query, what became of each handshake, and isolation</td><td>Linux 6.6+, <code>CAP_NET_ADMIN</code></td></tr>
+<tr><td class="k">drops</td><td><code>skb:kfree_skb</code> on each VM tap</td><td>what the kernel dropped on the tap, by its own reason and the function that freed it, with Shukra's own isolation subtracted</td><td>Linux 5.17+</td></tr>
+</table>
+<div class="cards c2">
+<div class="card on"><h3>Never in the way of other tools</h3><p>The tap program returns <code>TCX_NEXT</code>, never <code>TCX_PASS</code>, so any other program on the same tap (Cilium, FluxVM's egress program, a <code>tc</code> filter) still runs after it. Its links and maps are pinned under <code>/sys/fs/bpf/shukra/tap</code>.</p></div>
+<div class="card warm"><h3>Kernel baselines</h3><p>Any program needs BTF at <code>/sys/kernel/btf/vmlinux</code> and <code>CAP_BPF</code> (Linux 5.8+). Drop reasons need 5.17, TCX and isolation need 6.6. On arm64, <code>kvm_pio</code> does not exist, so <code>kvm</code> attaches 3 of its 4 hooks.</p></div>
+</div>
+<h2>Identity comes from the host</h2>
+<p>Shukra names a VM from the QEMU command line (<code>-name</code> or <code>guest=</code>, <code>-uuid</code>, <code>ifname=</code>) and, for libvirt taps passed as file descriptors, the process's <code>fdinfo</code>. A FluxVM guest (QEMU, Cloud Hypervisor, Firecracker or <code>fluxvm-hypervisor</code>) is named from FluxVM's own record and traced on its host veth. A PID that is not a VMM rolls up to <code>_host</code> as <code>unattributed</code>. It is never given a made-up VM name.</p>
+<h2>What a host reports when a program cannot run</h2>
+<table>
+<tr><th>Host</th><th>Program</th><th>Reported</th></tr>
+<tr><td>hv-1</td><td>tap</td><td>attached, one tap per running VM</td></tr>
+<tr><td>hv-2</td><td>tap</td><td>detached, with the reason: the kernel is older than 6.6</td></tr>
+</table>
+<p class="tiny">Illustrative. <code>shukractl programs</code> shows this per host, and a VM with no measurement has no series at all: "not measured" is never rendered as zero. Percentiles come from log2 buckets and can read up to 2x high.</p>
+</div></section>
+
+<section class="page" data-title="Scenario 1"><div class="body">
+<div class="eyebrow">Slow-VM scenario &middot; part 1 of 4</div>
+<h1>A VM turns slow</h1>
+<p class="lede">It is 03:12. A user says <b>payment-prod-03</b> is slow. Nothing inside the guest looks wrong, and the host graphs are flat. The counters that would explain it are already in Shukra's maps, so the operator asks.</p>
+<figure class="dia" style="width:90%;margin:6px auto 4px">{{dia:explain}}</figure>
+<div class="step"><div class="b">1</div><div><b>The programs count, always.</b> Exits, preemption, disk requests, connects and tap drops are recorded before anyone asks.</div></div>
+<div class="step"><div class="b">2</div><div><b>shukrad joins them to the VM.</b> It rescans <code>/proc</code> every two seconds, so counters land on the right process and thread: a vCPU, an iothread or a vhost worker.</div></div>
+<div class="step"><div class="b">3</div><div><b>The operator runs <code>shukractl explain payment-prod-03</code></b> (or opens the Explain page). It weighs the last minute; <code>--window</code> takes 10 s to 5 min.</div></div>
+<h2>Nine host-side causes, best supported first</h2>
+<table>
+<tr><th>Cause</th><th>What it points at</th></tr>
+<tr><td class="k">host_cpu_contention</td><td>the VM's threads wait for a host CPU after being woken: host load, pinning, neighbours</td></tr>
+<tr><td class="k">cpu_preempted</td><td>the host took CPU away from the vCPUs while they wanted to run</td></tr>
+<tr><td class="k">noisy_neighbour</td><td>one other VM accounts for at least half of that preempted time</td></tr>
+<tr><td class="k">storage_latency</td><td>block requests from QEMU take long: the backing device, queue depth, other writers</td></tr>
+<tr><td class="k">kvm_exit_handling</td><td>the host is slow to service KVM exits, often device emulation</td></tr>
+<tr><td class="k">tcp_retransmits</td><td>the QEMU process retransmits: host traffic such as migration or a remote disk, not the guest's</td></tr>
+<tr><td class="k">guest_traffic_dropped</td><td>the kernel drops this VM's packets and Shukra's isolation is not the cause: another program on the tap</td></tr>
+<tr><td class="k">guest_not_reading_nic</td><td>the tap's queue is full: the guest is stalled, has no working NIC driver or is overloaded</td></tr>
+<tr><td class="k">guest_connects_failing</td><td>most outbound connections fail: refused means nothing listens, never answered means something drops the SYN</td></tr>
+</table>
+<div class="callout"><b>A finding says where to look, not what is wrong inside the guest.</b> Each carries a cause, a confidence (high, medium or low), a summary and the evidence behind it. When nothing crossed a threshold the answer is <code>no_host_cause</code>: look inside the guest, which Shukra does not measure.</div>
+</div></section>
+
+<section class="page" data-title="Scenario 2"><div class="body">
+<div class="eyebrow">Slow-VM scenario &middot; part 2 of 4</div>
+<h1>Who took my vCPU's CPU?</h1>
+<p class="lede">The finding is <code>cpu_preempted</code>: the host took CPU away from the VM's vCPUs. On a busy hypervisor the next question is who. Shukra answers it from the scheduler's own switch events, without touching either guest.</p>
+<figure class="dia" style="width:90%;margin:6px auto 4px">{{dia:contention}}</figure>
+<p class="caption" style="margin-top:0">Illustrative numbers. The percentages are shares of the VM's preempted time.</p>
+<h2>How it is measured</h2>
+<p><code>sched_switch</code> fires when a thread leaves a CPU. If a QEMU thread leaves while still <b>runnable</b>, it was taken off while it wanted to run: the program remembers who took the CPU and, when the thread next runs, adds the wait to the pair (this thread, that thread). A thread that goes to sleep is dequeued first, so sleeping is never counted.</p>
+<div class="row">
+<div class="col"><h2 style="margin-top:6px">What the answer names</h2>
+<ul>
+<li>Another VM, as <code>vm:&lt;name&gt;</code>, or the VM's own other threads.</li>
+<li>Or a host command with its instance suffix removed: <code>kworker/3:1</code> and <code>kworker/u16:2</code> are both <code>kworker</code>.</li>
+<li>For each culprit VM, what it was doing over the same window: its on-CPU time and KVM exits.</li>
+</ul></div>
+<div class="col"><h2 style="margin-top:6px">What it is not</h2>
+<ul>
+<li>Not the steal counter a guest reads. It is the host's view of the guest losing its processor.</li>
+<li>vCPU threads only. An iothread that waited for a CPU is not the guest losing its processor.</li>
+</ul></div>
+</div>
+<pre class="term"><span class="p">$</span> shukractl trace contention --window 5m
+  vm=osboxes-debian  preempted=1882612ns over 12 preemptions  (other VMs 0ns, its own threads 0ns, host tasks 1882612ns)
+      taken by host tasks: cilium-agent 1031780ns, kubectl 321523ns, hubble-relay 188161ns, containerd-shim 103092ns
+<span class="d">as printed in the after-the-fact tutorial: here the culprit was the host's own tasks, not another VM</span></pre>
+<figure style="width:100%;margin-top:6px"><div class="crop" style="height:1.52in"><img style="margin-top:-20.8%" src="shots/contention.png" alt=""></div><figcaption>Illustrative: the Contention page, rendered from fixture data.</figcaption></figure>
+</div></section>
+
+<section class="page" data-title="Scenario 3"><div class="body">
+<div class="eyebrow">Slow-VM scenario &middot; part 3 of 4</div>
+<h1>Why <i>was</i> it slow at 03:12?</h1>
+<p class="lede">It is half past five. The last minute, which Explain weighs by default, is no help. With a data directory, the daemon has been storing a coarse snapshot every five minutes, so the operator can ask about a past time and say how far to trust the answer.</p>
+<figure class="dia">{{dia:pasttime}}</figure>
+<div class="step"><div class="b">1</div><div><b>Ask for the verdict at that time.</b> <code>shukractl explain payment-prod-03 --at -2h30m</code>, or an RFC 3339 time. The window is 5 minutes to 6 hours, 15 minutes by default.</div></div>
+<div class="step"><div class="b">2</div><div><b>Read the resolution line first.</b> Snapshots are five minutes apart, so this is an average around the time, not the second it happened. A short burst can be diluted into nothing, and the answer says so.</div></div>
+<div class="step"><div class="b">3</div><div><b>Find who was involved</b> with <code>shukractl trace contention</code> if the finding is <code>cpu_preempted</code> or <code>noisy_neighbour</code>.</div></div>
+<div class="step"><div class="b">4</div><div><b>Attach one file to the ticket:</b> <code>shukractl incident payment-prod-03 --at -2h30m --out bundle.json</code>, written with mode 0600.</div></div>
+<pre class="term"><span class="p">$</span> shukractl explain osboxes-mint --at -2h30m
+EXPLAIN  why was this VM slow?  (window: 5m0s)  (at: 2026-09-20T04:50:27Z)
+  resolution: 5m0s snapshots: the verdict stands on 2026-09-20T04:40:53Z and 2026-09-20T04:45:53Z
+findings (best supported first)
+  [low] no_host_cause: Nothing host-side crossed a threshold. If the guest is slow, the cause may be inside it, which this build does not measure.
+<span class="d">as printed in the after-the-fact tutorial. A calm host is a real answer: it says the host was fine.</span></pre>
+<div class="cards c2">
+<div class="card"><h3>What the incident bundle holds</h3><p>The verdict; the window's detections; what the flight recorder saw of that VM (at most 500 events); isolate and release requests; whether isolation is available and the management networks an isolated VM keeps; and which programs were attached. Nothing else from the daemon's configuration: no key, no listen address.</p></div>
+<div class="card warm"><h3>What it cannot tell you</h3><p>The second it happened. Anything before the daemon first stored a snapshot, or while it was not running. Anything inside the guest. And with nothing stored, it says <code>no_history</code> and why, instead of guessing. Retention is set by size: about a day or two at ten VMs.</p></div>
+</div>
+<div class="callout red"><b>The bundle is as sensitive as the event list.</b> It names your VMs, the addresses they connected to and the DNS names they looked up. Treat it like the event list.</div>
+</div></section>
