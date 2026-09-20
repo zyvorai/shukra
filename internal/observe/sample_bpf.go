@@ -41,15 +41,6 @@ func Sample() map[uint32]aggregate.Counters {
 	return out
 }
 
-func slot(by map[uint32]*aggregate.Counters, pid uint32) *aggregate.Counters {
-	c := by[pid]
-	if c == nil {
-		c = &aggregate.Counters{}
-		by[pid] = c
-	}
-	return c
-}
-
 func readKVM(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {
 	if m := maps["kvm_exits"]; m != nil {
 		var key struct {
@@ -78,7 +69,7 @@ func readKVM(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {
 			c.ExitNs[key.Reason] += val
 		}
 	}
-	readHist2(maps["kvm_lat"], func(c *aggregate.Counters) *[]uint64 { return &c.KVMLat }, by)
+	readHist2(maps["kvm_lat"], func(c *aggregate.Counters) *[]uint64 { return &c.KVMLat }, by, slot)
 	readU32(maps["kvm_entries"], func(pid uint32, v uint64) { slot(by, pid).Entries += v })
 	readU32(maps["kvm_mmio"], func(pid uint32, v uint64) { slot(by, pid).MMIO += v })
 	readU32(maps["kvm_pio"], func(pid uint32, v uint64) { slot(by, pid).PIO += v })
@@ -89,8 +80,7 @@ func readSched(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {
 	if m == nil {
 		return
 	}
-	var pid uint32
-	var val struct {
+	type schedVal struct {
 		OnCPU        uint64
 		WakeupDelay  uint64
 		WakeupCount  uint64
@@ -98,9 +88,8 @@ func readSched(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {
 		PreemptNs    uint64
 		PreemptCount uint64
 	}
-	it := m.Iterate()
-	for it.Next(&pid, &val) {
-		c := slot(by, pid)
+	forEach(m, func(pid uint32, val schedVal) {
+		c := schedSlot(by, pid)
 		c.OnCPUNs += val.OnCPU
 		c.WakeupDelayNs += val.WakeupDelay
 		c.WakeupCount += val.WakeupCount
@@ -110,8 +99,8 @@ func readSched(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {
 			c.PreemptNs += val.PreemptNs
 			c.PreemptCount += val.PreemptCount
 		}
-	}
-	readHist2(maps["sched_hist"], func(c *aggregate.Counters) *[]uint64 { return &c.SchedHist }, by)
+	})
+	readHist2(maps["sched_hist"], func(c *aggregate.Counters) *[]uint64 { return &c.SchedHist }, by, schedSlot)
 	readPreemptors(by, maps["preempt_by"])
 }
 
@@ -120,39 +109,72 @@ func readPreemptors(by map[uint32]*aggregate.Counters, m *ebpf.Map) {
 	if m == nil {
 		return
 	}
-	var key struct{ Victim, By uint32 }
-	var val struct {
+	type key struct{ Victim, By uint32 }
+	type val struct {
 		Count, Ns uint64
 		Comm      [16]byte
 	}
-	it := m.Iterate()
-	for it.Next(&key, &val) {
-		if r, ok := threadRef(key.Victim); !ok || r.Role != "vcpu" {
-			continue
+	forEach(m, func(k key, v val) {
+		if r, ok := threadRef(k.Victim); !ok || r.Role != "vcpu" {
+			return
 		}
-		c := slot(by, key.Victim)
+		c := slot(by, k.Victim)
 		if c.Preemptors == nil {
 			c.Preemptors = map[string]uint64{}
 		}
-		c.Preemptors[preemptorLabel(key.By, commString(val.Comm), threadRef)] += val.Ns
-	}
+		c.Preemptors[preemptorLabel(k.By, commString(v.Comm), threadRef)] += v.Ns
+	})
 }
 
 // readHist2 reads a map keyed by {u32 pid, u32 bucket} into a log2 histogram.
-func readHist2(m *ebpf.Map, dst func(*aggregate.Counters) *[]uint64, by map[uint32]*aggregate.Counters) {
+func readHist2(m *ebpf.Map, dst func(*aggregate.Counters) *[]uint64, by map[uint32]*aggregate.Counters, slotFor func(map[uint32]*aggregate.Counters, uint32) *aggregate.Counters) {
 	if m == nil {
 		return
 	}
-	var key struct{ Pid, Bucket uint32 }
-	var val uint64
-	it := m.Iterate()
-	for it.Next(&key, &val) {
-		h := dst(slot(by, key.Pid))
+	type key struct{ Pid, Bucket uint32 }
+	forEach(m, func(k key, v uint64) {
+		h := dst(slotFor(by, k.Pid))
 		if *h == nil {
 			*h = make([]uint64, hist.Buckets)
 		}
-		if int(key.Bucket) < len(*h) {
-			(*h)[key.Bucket] += val
+		if int(k.Bucket) < len(*h) {
+			(*h)[k.Bucket] += v
+		}
+	})
+}
+
+// forEach calls f for every entry of m. It reads in batches, one system call for up to a couple of thousand
+// entries, where walking the map with get-next-key costs two per entry: on a host with tens of thousands of
+// threads that was over two hundred thousand system calls every refresh. A kernel or map that cannot batch
+// is walked the slow way, and an entry that is deleted while the map is read is no reason to stop.
+func forEach[K, V any](m *ebpf.Map, f func(K, V)) {
+	const batch = 2048
+	keys := make([]K, batch)
+	vals := make([]V, batch)
+	var cur ebpf.MapBatchCursor
+	seen := 0
+	for {
+		n, err := m.BatchLookup(&cur, keys, vals, nil)
+		for i := 0; i < n; i++ {
+			f(keys[i], vals[i])
+		}
+		seen += n
+		switch {
+		case err == nil:
+			continue
+		case errors.Is(err, ebpf.ErrKeyNotExist):
+			return // the whole map has been read
+		case seen == 0:
+			// Batching is not available here (an older kernel, or a map type that has no batch): nothing has
+			// been given to f yet, so the whole map can still be read the other way.
+			var k K
+			var v V
+			for it := m.Iterate(); it.Next(&k, &v); {
+				f(k, v)
+			}
+			return
+		default:
+			return // the rest is read on the next refresh; counters only go up, so nothing is lost
 		}
 	}
 }

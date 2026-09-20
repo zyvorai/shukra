@@ -4,6 +4,15 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### The daemon's own cost on a busy host
+
+Found by profiling the daemon on a production hypervisor (12 cores, 10 VMs, a k3s and Cilium node): it was using about **55% of a core** and 155 MB, nearly all of it garbage collection. It now uses **5 to 9% of a core** and about 88 MB, with the same output.
+
+- **The flight recorder is a real ring.** Once a VM's ring was full, every event copied all 4096 events into a new slice, over a megabyte of pointers for the garbage collector to scan, per event. Adding an event to a full ring now allocates nothing (a test asserts it). Order, the time window, snapshots and the nil-when-empty contract are unchanged.
+- **Scheduler counters of threads no VM owns are summed as they are read.** The sched maps hold every thread that has run on the host (about 64,000 on that node), and each 2-second refresh allocated a `Counters` for each of them only for `aggregate.group` to add them into the `_host` row. They are now added into one slot as they are read. A test feeds the same readings through both paths and checks that the scheduler rows and per-thread rows the API serves are identical.
+- **The large maps are read in batches**, one system call for up to 2048 entries instead of two per entry (over 200,000 system calls per refresh on that node). A kernel or map that cannot batch falls back to the old walk.
+- **`scripts/bench-tap.sh`** measures what the tap program costs per packet on the kernel it runs on, using `BPF_PROG_TEST_RUN` on a private copy that has its own maps and is attached to nothing, so it is safe on a production host. It takes two objects to show what a change costs. The measured cost of TLS server names is in [docs/tap.md](docs/tap.md#what-it-costs).
+
 ### TLS server names
 
 - **`guest_tls` events:** the server name (SNI) in the TLS ClientHello a guest sends, seen on its tap, with the protocols it offered (`alpn`), the highest version (`tls_version`), a JA3 fingerprint (only when the whole hello was seen), `ech` when Encrypted Client Hello is in use, and `tls_truncated` when the hello did not fit the copy. IPv4 and IPv6. One event per connection, with its own budget of 100 a second per tap, so a guest cannot flood the ring or starve the connect events. It names a site even when DNS was not used, and a guest that reaches a resolver over HTTPS is still seen going there. See [TLS server names](docs/tap.md#tls-server-names).

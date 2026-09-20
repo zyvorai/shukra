@@ -15,14 +15,48 @@ const DefaultCap = 4096
 type Recorder struct {
 	mu  sync.Mutex
 	cap int
-	buf map[string][]event.Event
+	buf map[string]*ring
+}
+
+// ring holds one VM's events. It grows to the recorder's cap, and after that a new event overwrites the
+// oldest in place: adding an event costs one copy of it, however full the ring is. (Reslicing and copying
+// the whole ring on every add made a busy host allocate megabytes per event, and the garbage collector
+// spent most of the daemon's CPU scanning what was thrown away.)
+type ring struct {
+	evs  []event.Event
+	next int // once full: the index of the oldest event, which the next add replaces
+}
+
+func (g *ring) add(e event.Event, cap int) {
+	if len(g.evs) < cap {
+		g.evs = append(g.evs, e)
+		return
+	}
+	g.evs[g.next] = e
+	g.next++
+	if g.next == len(g.evs) {
+		g.next = 0
+	}
+}
+
+// each calls f for every event, oldest first.
+func (g *ring) each(f func(event.Event)) {
+	if g == nil {
+		return
+	}
+	for _, e := range g.evs[g.next:] {
+		f(e)
+	}
+	for _, e := range g.evs[:g.next] {
+		f(e)
+	}
 }
 
 func New(cap int) *Recorder {
 	if cap <= 0 {
 		cap = DefaultCap
 	}
-	return &Recorder{cap: cap, buf: map[string][]event.Event{}}
+	return &Recorder{cap: cap, buf: map[string]*ring{}}
 }
 
 func keyOf(e event.Event) string {
@@ -38,10 +72,12 @@ func (r *Recorder) Add(e event.Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	k := keyOf(e)
-	r.buf[k] = append(r.buf[k], e)
-	if len(r.buf[k]) > r.cap {
-		r.buf[k] = append([]event.Event(nil), r.buf[k][len(r.buf[k])-r.cap:]...)
+	g := r.buf[k]
+	if g == nil {
+		g = &ring{}
+		r.buf[k] = g
 	}
+	g.add(e, r.cap)
 }
 
 // Window returns events for vm whose timestamp is within d of now, oldest first.
@@ -51,22 +87,18 @@ func (r *Recorder) Window(vm string, d time.Duration, now time.Time) []event.Eve
 	defer r.mu.Unlock()
 	cutoff := now.Add(-d)
 	var out []event.Event
-	if vm == "" || vm == "_" {
-		for _, evs := range r.buf {
-			out = append(out, filter(evs, cutoff)...)
-		}
-		return out
-	}
-	return filter(r.buf[vm], cutoff)
-}
-
-func filter(evs []event.Event, cutoff time.Time) []event.Event {
-	var out []event.Event
-	for _, e := range evs {
+	keep := func(e event.Event) {
 		if !e.TS.Before(cutoff) {
 			out = append(out, e)
 		}
 	}
+	if vm == "" || vm == "_" {
+		for _, g := range r.buf {
+			g.each(keep)
+		}
+		return out
+	}
+	r.buf[vm].each(keep)
 	return out
 }
 
@@ -82,7 +114,7 @@ func (r *Recorder) Snapshot() []event.Event {
 	sort.Strings(keys)
 	var out []event.Event
 	for _, k := range keys {
-		out = append(out, r.buf[k]...)
+		r.buf[k].each(func(e event.Event) { out = append(out, e) })
 	}
 	return out
 }
