@@ -25,6 +25,7 @@ shukractl isolate payment-prod-03
 | `vms [--json]` | QEMU and FluxVM virtual machines found on the host |
 | `explain <vm> [--window 5m\|lifetime] [--at TIME\|-90m]` | Why a VM looks slow, from the last minute by default: ranked host-side causes with evidence, and what Shukra cannot see |
 | `incident <vm> [--at TIME\|-90m] [--window 15m] [--out FILE]` | Everything known about a VM around a moment, in one bundle for a ticket. Prints a summary; `--out FILE` writes the whole JSON to a private file (mode 0600) and `--json` prints it. See [past verdicts](#past-verdicts-and-incident-bundles) |
+| `advise [--vm NAME] [--window 5m]` | Is each VM the right size? Over-provisioned (more vCPUs than it uses), starved (wants CPU and is preempted or made to wait), nearly idle, or fine, each with the numbers, how sure it is and its caveat. Advice for a person, never an action |
 | `recorder <vm> [--window 60s]` | Replay the flight recorder |
 | `watch [--json] [--once]` | Stream discrete events, resuming from the last one seen. A `guest_dns` line ends with `name=` and `qtype=` |
 | `export` | One JSON document: status, VMs, traces, events |

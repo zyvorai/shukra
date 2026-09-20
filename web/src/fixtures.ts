@@ -59,6 +59,16 @@ export function fixtureResponse(path: string, init?: RequestInit): unknown {
   }
   if (url.pathname === '/api/v1/trace/block') return { rows: filter(fixture.block, vm) };
   if (url.pathname === '/api/v1/trace/drops') return { measured: false, rows: [], taps: [] };
+  if (url.pathname === '/api/v1/advice') {
+    return {
+      note: 'Sample rows.',
+      window: '5m0s',
+      rows: [
+        { vm: 'batch-etl-01', vcpus: 8, window: '5m0s', idleAvailable: true, idleFraction: 0.91, busyFraction: 0.07, busyVcpus: 0.6, preemptShare: 0, unaccountedFraction: 0.02, runqueueDelayP99Ns: 65536, advice: [{ kind: 'overprovisioned', confidence: 'medium', summary: 'This VM has 8 vCPUs and used about 0.6 of them. 2 would leave it twice the headroom it used.', evidence: ['Halted 91% of the time.'] }] },
+        { vm: 'payment-prod-03', vcpus: 4, window: '5m0s', idleAvailable: true, idleFraction: 0.1, busyFraction: 0.74, busyVcpus: 3.0, preemptShare: 0.17, unaccountedFraction: 0.16, runqueueDelayP99Ns: 33000000, advice: [{ kind: 'starved', confidence: 'high', summary: 'This VM wants more CPU than the host gives it.', evidence: ['Preempted 17% of the time it wanted to run.'] }] },
+      ],
+    };
+  }
   if (url.pathname === '/api/v1/trace/contention') {
     return {
       note: 'Sample rows.',

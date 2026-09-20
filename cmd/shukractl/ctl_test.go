@@ -759,3 +759,38 @@ func TestTraceContentionShowsWhoTookWhoseCPUAndWhatTheCulpritDid(t *testing.T) {
 		t.Fatalf("--window is only for contention: %q %v", query, err)
 	}
 }
+
+func TestAdviseShowsTheNumbersAndEachPieceOfAdviceWithItsConfidence(t *testing.T) {
+	var query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"note":"n","window":"4m0s","rows":[
+			{"vm":"big","vcpus":4,"window":"4m0s","idleAvailable":true,"idleFraction":0.94,"busyFraction":0.03,"busyVcpus":0.13,"preemptShare":0,"unaccountedFraction":0.03,"advice":[{"kind":"overprovisioned","confidence":"medium","summary":"4 vCPUs, used 0.1","evidence":["halted 94%"]}]},
+			{"vm":"amd","vcpus":2,"window":"4m0s","idleAvailable":false,"idleFraction":0,"busyFraction":0.6,"busyVcpus":1.2,"preemptShare":0.2,"advice":[{"kind":"starved","confidence":"high","summary":"wants more CPU","evidence":[]}]},
+			{"vm":"new","vcpus":1,"window":"none","idleAvailable":false,"advice":[{"kind":"not_enough_data","confidence":"high","summary":"Less than 20s of history","evidence":[]}]}]}`))
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+	var buf bytes.Buffer
+	if err := run([]string{"advise", "--vm", "big", "--window", "3m"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if query != "vm=big&window=3m" {
+		t.Fatalf("%q", query)
+	}
+	for _, want := range []string{
+		"ADVISE  window=4m0s",
+		"vm=big  vcpus=4  halted=94%  busy=3% (0.1 vCPUs)  preempted=0%  neither=3%",
+		"[medium] overprovisioned: 4 vCPUs, used 0.1", "halted 94%",
+		"vm=amd  vcpus=2  halted=n/a  busy=60% (1.2 vCPUs)  preempted=20%", "[high] starved",
+		"vm=new  vcpus=1  halted=n/a\n", "not_enough_data",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("missing %q:\n%s", want, buf.String())
+		}
+	}
+	if strings.Contains(buf.String(), "vm=new  vcpus=1  halted=n/a  busy") {
+		t.Fatalf("a VM with no window has no busy figure to show:\n%s", buf.String())
+	}
+}

@@ -815,3 +815,43 @@ func TestContentionEndpointServesPairsVictimsAndCulpritsAndNeverNull(t *testing.
 		t.Fatalf("%d", rec.Code)
 	}
 }
+
+func TestParseAdviceWindowIsOneToFiveMinutes(t *testing.T) {
+	if d, err := parseAdviceWindow(""); err != nil || d != state.DefaultAdviceWindow {
+		t.Fatalf("%v %v", d, err)
+	}
+	for _, ok := range []string{"1m", "90s", "5m"} {
+		if _, err := parseAdviceWindow(ok); err != nil {
+			t.Errorf("%q refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"59s", "5m1s", "0", "lifetime", "x"} {
+		if _, err := parseAdviceWindow(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestAdviceEndpointHasAWindowANoteAndListsThatAreNeverNull(t *testing.T) {
+	st := state.New("node-07")
+	h := New(st, "k")
+	body := strings.Join(strings.Fields(get(h, "/api/v1/advice", "k").Body.String()), "")
+	for _, want := range []string{`"rows":[]`, `"window":"5m0s"`, `"note":"Adviceforaperson,neveranaction.`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %s in %s", want, body)
+		}
+	}
+	st.SetVMs([]identity.VM{{Name: "db", PID: 100, Threads: []int{100}}})
+	body = strings.Join(strings.Fields(get(h, "/api/v1/advice?vm=db", "k").Body.String()), "")
+	for _, want := range []string{`"vm":"db"`, `"kind":"not_enough_data"`, `"evidence":[]`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %s in %s", want, body)
+		}
+	}
+	if rec := get(h, "/api/v1/advice?window=10m", "k"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("%d", rec.Code)
+	}
+	if rec := get(h, "/api/v1/advice", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("%d", rec.Code)
+	}
+}

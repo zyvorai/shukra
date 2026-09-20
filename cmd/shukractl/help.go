@@ -29,6 +29,7 @@ func helpSections() []helpSection {
 		{title: "🔍  Investigate", cmds: []helpCmd{
 			{"vms [--json]", "Virtual machines from the host (QEMU and FluxVM)"},
 			{"explain <vm> [--window 5m|lifetime] [--at TIME|-90m]", "Why this VM looks slow, from the last minute by default, or at a past time from stored history"},
+			{"advise [--vm NAME] [--window 5m]", "Is each VM the right size? Over-provisioned, starved, or fine, with the numbers behind it"},
 			{"incident <vm> [--at TIME|-90m] [--window 15m] [--out FILE]", "Everything known about a VM around a moment, in one bundle for a ticket"},
 			{"recorder <vm> [--window 60s]", "Replay the flight recorder"},
 			{"watch [--json] [--once]", "Stream discrete events"},
