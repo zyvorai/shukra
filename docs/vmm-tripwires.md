@@ -29,6 +29,8 @@ An open is judged in the daemon, not the kernel, so the list can change without 
 
 The built-in sensitive list: `/etc/shadow`, `/etc/gshadow` (and their `-` backups), `/etc/sudoers` and `/etc/sudoers.d`, `/etc/ssh`, `/root/.ssh`, `/home/*/.ssh`, `/proc/*/mem` and `/proc/*/task/*/mem`, `/proc/kcore`, `/proc/kmem`, `/proc/sysrq-trigger`, the docker and containerd sockets, **`/etc/shukra` and `/var/lib/shukra`** (the API key and the daemon's own data), `/etc/kubernetes`, `/var/lib/rancher/k3s/server` and `/etc/rancher`. A pattern matches the path and everything under it, on a segment boundary (`/etc/ssh` is `/etc/ssh/sshd_config` and not `/etc/ssh2`), and `*` stands for exactly one segment.
 
+**A VMM that is starting or stopping does open a few files**, and they are events and not detections. On the reference host a KVM guest's QEMU opened `/proc/sys/vm/overcommit_memory` and `/sys/devices/system/cpu/online` as it started and its own disk image (`root.qcow2`) as it went away; none is on the sensitive list, so the tripwire raised nothing while it booted, ran and talked to its peer. If your VMs open something else as they start, or keep their images under a directory the list names, that is what `ignore` is for.
+
 A path is **cleaned first**, so `/etc/../etc//shadow` is `/etc/shadow`. A detection is held back per VM, file and program (per call for a syscall), so a shell that reads a file twice is one detection.
 
 ```text
