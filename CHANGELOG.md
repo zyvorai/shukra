@@ -54,8 +54,11 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 - **Windowed Explain:** the last minute by default, `--window` up to five minutes, or the lifetime.
 - Detections, isolations and the flight recorder survive a restart with `-data-dir`.
 
-### Documentation (#4 and this pass)
+### Documentation (#4 and the passes since)
 
 - New: [API reference](docs/api.md), [architecture](docs/architecture.md), [testing](docs/testing.md), [development](docs/development.md), [Where packets die](docs/drops.md) and tutorial 08, [Find out why traffic is lost](docs/tutorials/08-lost-traffic.md).
 - Rewritten: the README and [SECURITY](SECURITY.md); updated: signals, attribution, tap, shukractl and tutorials 01 to 06.
+- New: [doctor](docs/doctor.md), every check with its status, when it fires and what to do; the "Extending what is there" checklists and the kernel-verifier lessons in [development](docs/development.md); [testing](docs/testing.md) now covers the kernel preemption test, how to compare a program's cost before and after, and what the live guest test asserts.
+- Updated for DNS names, vCPU preemption and FluxVM: architecture (the DNS ring and its switch, the pinned and unpinned tap maps, the preemption tables), tap, SECURITY (the FluxVM files that are read, and that host process names now appear in the API), tutorials 01 to 06 (the `-dns-events` flag, the tap program's pins, other daemon options in `SHUKRA_EXTRA_ARGS`, the console pages, the recorder's kinds).
+- Fixed stale text in the product itself: `shukractl` help still described `trace list` without `drops` and `vms` as QEMU-only, and three console navigation blurbs said enforcement "is not attached in this build" and detections were "userspace only".
 - Corrected: the exit codes of `isolate` and `release` (0 even when refused: read `applied`), and the claim about KVM coverage (verified on Intel x86 hardware, not AMD or arm64).

@@ -38,7 +38,7 @@
 | `GET /api/v1/status` | `version`, `product`, `mode`, `datapath`, `healthy`, `vms`, `programsAttached`, `programsTotal`, `detections`, `summary`. The last line says whether guest tap attribution is attached |
 | `GET /api/v1/vms` | `{"vms": [...]}`. Each VM: `name`, `uuid`, `runtime` (`qemu`, `libvirt`, `kubevirt`, or `fluxvm`), `pid`, `comm`, `taps`, `threadInfo` (each thread's `tid`, `comm` and inferred `role`: `vcpu`, `iothread`, `vhost`, `other`), `cmdline`. `libvirt` and `kubevirt` are labels from the QEMU command line. `fluxvm` means the name, UUID and `taps` came from FluxVM's `vms.json`; `taps` is then the host interface, `vh<8hex>` for the default per-VM netns. See [FluxVM](tap.md#fluxvm) |
 | `GET /api/v1/programs` | `{"programs": [{"name","status","detail"}]}` for `kvm`, `sched`, `block`, `net`, `tap`, `drops`. `status` is `attached` or `detached`. `detail` says how many hooks, or why not |
-| `GET /api/v1/doctor` | `{"worst", "checks": [{"id","status","title","detail","fix"}]}`. `status` is `ok`, `info`, `warn` or `fail`, worst first. Only reads; readable with the read-only key |
+| `GET /api/v1/doctor` | `{"worst", "checks": [{"id","status","title","detail","fix"}]}`. `status` is `ok`, `info`, `warn` or `fail`, worst first. Only reads; readable with the read-only key. Every check id is in [doctor](doctor.md) |
 | `GET /api/v1/export` | One document: status, VMs, traces and events, for a bug report |
 
 ## Per-VM traces

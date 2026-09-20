@@ -23,7 +23,7 @@ const groups: NavGroup[] = [
   {
     label: 'Investigate',
     children: [
-      { page: 'vms', label: 'Virtual machines', blurb: 'QEMU identity from the host command line. Not an agent inside the guest.' },
+      { page: 'vms', label: 'Virtual machines', blurb: 'VM identity from the host (QEMU command line, FluxVM store). Not an agent inside the guest.' },
       { page: 'recorder', label: 'Flight recorder', blurb: 'Bounded per-VM history. Replay the last 60 seconds.' },
       { page: 'explain', label: 'Explain', blurb: 'Why this VM looks slow, from the counters we actually have.' },
     ],
@@ -32,7 +32,7 @@ const groups: NavGroup[] = [
     label: 'Diagnostics',
     children: [
       { page: 'kvm', label: 'KVM', blurb: 'Exit, entry, MMIO, and PIO counters per QEMU thread group.' },
-      { page: 'sched', label: 'Scheduler', blurb: 'On-CPU time and wakeup delay for those threads.' },
+      { page: 'sched', label: 'Scheduler', blurb: 'On-CPU time, wakeup delay and vCPU preemption for those threads.' },
       { page: 'block', label: 'Block', blurb: 'Log2 latency histogram for the QEMU I/O thread.' },
       { page: 'programs', label: 'Programs', blurb: 'Attached, detached, or missing. A missing KVM module does not stop the others.' },
     ],
@@ -40,15 +40,15 @@ const groups: NavGroup[] = [
   {
     label: 'Network',
     children: [
-      { page: 'connections', label: 'Host connections', blurb: 'tcp_v4_connect from the QEMU process. Not guest traffic.' },
+      { page: 'connections', label: 'Host connections', blurb: 'The QEMU process\'s connects, and the guest\'s own from its tap.' },
       { page: 'drops', label: 'Drops', blurb: 'Packets the kernel dropped on VM taps, and whether Shukra dropped them.' },
     ],
   },
   {
     label: 'Security',
     children: [
-      { page: 'detections', label: 'Detections', blurb: 'Destination watchlist hits. Userspace only.' },
-      { page: 'isolate', label: 'Isolate', blurb: 'Record a decision. Enforcement is not attached in this build.' },
+      { page: 'detections', label: 'Detections', blurb: 'Rule hits: destinations, ports, DNS names, exec and thresholds.' },
+      { page: 'isolate', label: 'Isolate', blurb: 'Cut a VM off except the management network. Needs the tap program and an allow list.' },
     ],
   },
 ];

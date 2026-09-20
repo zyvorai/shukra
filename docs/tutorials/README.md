@@ -11,4 +11,4 @@ Short paths through Shukra. Each one assumes you have read the boundary: Shukra 
 7. [Alert sinks](07-alert-sinks.md) — webhook (signed), syslog and file delivery.
 8. [Find out why a VM's traffic is lost](08-lost-traffic.md) — connection outcomes, kernel drops and Explain together: is the destination refusing, is something on the host dropping, or is the guest not reading its NIC.
 
-Deeper reference, not a walkthrough: [API](../api.md) · [shukractl](../shukractl.md) · [what each program measures](../signals.md) · [attribution](../attribution.md) · [guest traffic and isolation](../tap.md) · [where packets die](../drops.md) · [architecture](../architecture.md) · [testing](../testing.md) · [development](../development.md).
+Deeper reference, not a walkthrough: [API](../api.md) · [shukractl](../shukractl.md) · [what each program measures](../signals.md) · [attribution](../attribution.md) · [guest traffic and isolation](../tap.md) · [where packets die](../drops.md) · [doctor](../doctor.md) · [architecture](../architecture.md) · [testing](../testing.md) · [development](../development.md).

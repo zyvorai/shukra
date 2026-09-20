@@ -12,7 +12,7 @@ Shukra's claims are about what a real kernel does, so most of its tests load rea
 | Kernel integration | `make test-kernel` | Linux, root | Loads the sched, block and net programs into this kernel and checks counters against load the test generates itself: connect counts, block bytes, the exec filter, and vCPU preemption (two CPU-bound threads on one CPU, with a sleeping thread as a control) |
 | Tap rig | `make test-tap` (`scripts/test-tap.sh`) | Linux 6.6+, root, `ip`, `curl`, `python3`, `tc`, `iptables` | The tap program, isolation and drops on a real kernel with no KVM. See below |
 | Installer | `scripts/test-install.sh` | Linux | The shared install routine, the tarball and the `.deb` lay down the same files |
-| Live guest | `make test-live-guest` (`scripts/test-live-guest.sh`) | A hypervisor with fluxvm, `/dev/kvm`, a running `shukrad`, root | Real KVM guests: hot-plug attach, attributed events, packet counts equal to the kernel's, guests reaching each other, handshake outcomes, drops |
+| Live guest | `make test-live-guest` (`scripts/test-live-guest.sh`) | A hypervisor with fluxvm, `/dev/kvm`, a running `shukrad`, root | Real KVM guests: hot-plug attach, attributed events, packet counts equal to the kernel's, guests reaching each other, handshake outcomes, drops, DNS names, vCPU preemption |
 
 ## The rules the tests follow
 
@@ -43,11 +43,12 @@ The rig and the daemon it starts share the pin directory `/sys/fs/bpf/shukra/tap
 
 ## The live guest test
 
-`scripts/test-live-guest.sh` boots two disposable Ubuntu cloud images with [fluxvm](https://github.com/zyvorai/fluxvm) on a host bridge (`"netns": false`, so the two guests share L2 and can reach each other): the guest under test and a peer. cloud-init makes the guest send a TCP SYN, twenty UDP datagrams on one flow and three multicast datagrams every 75 seconds, connect to a listener on the peer, and connect to a closed peer port. The script then checks a running daemon against what the kernel says. FluxVM's default per-VM netns, traced on the host veth, is not what this script boots; that mapping is the identity unit tests. See [FluxVM](tap.md#fluxvm).
+`scripts/test-live-guest.sh` boots two disposable Ubuntu cloud images with [fluxvm](https://github.com/zyvorai/fluxvm) on a host bridge (`"netns": false`, so the two guests share L2 and can reach each other): the guest under test and a peer. cloud-init makes the guest send a TCP SYN, twenty UDP datagrams on one flow and three multicast datagrams every 75 seconds, connect to a listener on the peer, connect to a closed peer port, and send hand-built DNS queries (the same name in two spellings, and an AAAA) to an address nothing answers. The script then checks a running daemon against what the kernel says. FluxVM's default per-VM netns, traced on the host veth, is not what this script boots; that mapping is the identity unit tests. See [FluxVM](tap.md#fluxvm).
 
+- What it asserts about DNS and preemption: the lookup arrives as a `guest_dns` event with exactly the lower-cased name and its type, five lookups of one name are one event per 75-second cycle, and the guest's sched row has preemption fields with a preemptor list that is `[]` and never `null` and a time below the VM's lifetime.
 - It creates two VMs, gives them a TTL as a backstop, deletes them, and never touches another VM. It never isolates anything.
 - Both guests get their own `mac`, since fluxvm gives every tap guest the same default otherwise.
-- On a host whose fluxvm config has a `[sandbox.dataplane]`, **only these two guests** get a per-VM policy (private CIDRs, no port restriction) so they can reach each other. The token is read from the config, never printed, and kept out of the checks, since a failed check prints its command.
+- On a host whose fluxvm config has a `[sandbox.dataplane]`, **only these two guests** get a per-VM policy (private CIDRs, no port restriction) so they can reach each other. The request is repeated for up to a minute, because a VM that has only just been created may not have its network up yet (a 400 on the first try was seen on a real host), and a refusal prints its body, which does not contain the token. The token is read from the config, never printed, and kept out of the checks, since a failed check prints its command.
 - Environment: `SHUKRA_URL`, `SHUKRA_API_KEY` (defaults to the key in `/etc/shukra/env`), `IMAGE`, `BRIDGE` (default `virbr0`), `PEER_IP`, `FLUXCTL`, `FLUXVM_TOML`, `FLUXVM_URL`, `BOOT_WAIT`.
 
 Run it on the hypervisor without putting it on the host first:
@@ -68,6 +69,16 @@ ssh sus@hypervisor 'bash -c "$(cat)"' < scripts/test-live-guest.sh
 
 The GitHub runners run a newer kernel than most hypervisors, which is a feature: it is where a hard-coded kernel layout breaks first (the drops program failed there until it read the tracepoint by field name). A green CI is evidence for a kernel the hypervisor may not run, so the live test on the real host is not redundant.
 
+## The kernel test
+
+`TestKernelIntegration` and `TestKernelPreemption` (`internal/observe/integration_bpf_test.go`, tag `shukrabpf`, `SHUKRA_BPF_TEST=1`, root) load the real programs into the running kernel and check what they count against load the test generates itself. Counters are keyed by thread id, so each test locks its goroutine to one OS thread and reads that thread's row: nothing else on the machine can move the numbers, which is what lets the assertions be exact.
+
+`TestKernelPreemption` pins a busy "taker" and a busy "victim" to one CPU. The victim must be charged roughly half the run and the taker must be named by the command the test gave it. A third thread on the same CPU that runs briefly and sleeps is the control: sleeping is not being preempted, so it must not be charged, and removing the runnable check from the program makes the test fail. Unlike the rig, this test loads its own unpinned programs, so it **can** be run on a hypervisor that is running Shukra:
+
+```bash
+sudo env "PATH=$PATH" SHUKRA_BPF_TEST=1 go test -tags shukrabpf -run TestKernelPreemption -v ./internal/observe
+```
+
 ## Verifying BPF changes
 
 The BPF programs cannot be built or loaded on a Mac. The workflow that works:
@@ -75,7 +86,8 @@ The BPF programs cannot be built or loaded on a Mac. The workflow that works:
 1. **Write the change, and the tests that can run anywhere**: the state, API, CLI and rules logic. `go test ./...` runs these.
 2. **Type-check the tagged build locally.** The default `go build` skips every file tagged `linux && shukrabpf`, so a compile error in the loaders would only show up on the host. Put a temporary file `internal/bpfgen/zz_tmp_stub.go` (same build tag) that defines `LoadKvm`, `LoadSched`, `LoadBlock`, `LoadNet`, `LoadDrops` and `LoadTap` returning `(*ebpf.CollectionSpec, error)`, run `GOOS=linux GOARCH=amd64 go vet -tags shukrabpf ./internal/bpfgen ./internal/observe ./cmd/...`, then delete the file. Add any new generated loader to the stub.
 3. **Deploy to a real hypervisor and test there:** `./scripts/deploy-remote.sh HOST USER`. The host compiles the CO-RE objects with its own clang and loads them into its real kernel, so a verifier error shows up as a program `detached` with the reason. Then run `scripts/test-live-guest.sh` and read-only `shukractl` checks.
-4. **Push, and let CI run the rig and the kernel test** on a real kernel. A rig section is verified by its pull request's CI, and the queue on GitHub can be slow.
+4. **Measure the cost of a hot-path change.** Turn on `kernel.bpf_stats_enabled`, and compare `run_time_ns` and `run_cnt` of the old and new program **at the same time under the same load** (load both from throwaway test binaries next to the daemon's), then turn it off again and remove the copies. A number from another day is not a comparison.
+5. **Push, and let CI run the rig and the kernel test** on a real kernel. A rig section is verified by its pull request's CI, and the queue on GitHub can be slow.
 
 Real-host checks that are safe: the deploy script, the live guest test, read-only `shukractl` and API calls, `bpftool prog show` (it reports `run_time_ns` and `run_cnt` while any process has run-time stats on), and a few seconds of `bpftrace`. Never `isolate` or `release` a VM you did not create.
 

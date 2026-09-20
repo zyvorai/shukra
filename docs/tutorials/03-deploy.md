@@ -54,6 +54,19 @@ sudo systemctl restart shukra
 
 `systemctl reload shukra` re-reads the certificate as well as the detection rules, so a renewed certificate needs no restart. A bad file on reload is logged and the working certificate stays in use. The floor is TLS 1.2. Point the CLI at a private CA with `SHUKRA_CA_FILE=/path/ca.pem` and `SHUKRA_URL=https://...`. The daemon warns at start when it serves plain HTTP on a non-loopback address.
 
+## Other daemon options
+
+Anything `shukrad` takes can be added the same way, in `SHUKRA_EXTRA_ARGS` in `/etc/shukra/env`, then `sudo systemctl restart shukra`. A later flag wins over one in the unit. The ones a fresh deploy usually needs:
+
+| Flag | Why |
+|---|---|
+| `-isolate-allow 10.0.0.0/24` | Enables isolate. Without a management allow list it is refused |
+| `-dns-events=false` | Do not record the names guests look up. The tap program then does not read DNS at all |
+| `-webhook-url`, `-syslog`, `-alert-file` | Where detections go. See [alert sinks](07-alert-sinks.md) |
+| `-listen 127.0.0.1:30970` | Bind only locally |
+
+`shukractl doctor` names what is missing, with a fix for each: [doctor](../doctor.md).
+
 ## A key that can only read
 
 Set `SHUKRA_READONLY_KEY` in `/etc/shukra/env` and give that key to a Prometheus scrape or a dashboard. It can call every `GET`, including `/metrics` and the event stream, and gets `403` on `POST /api/v1/isolate`. It must differ from `SHUKRA_API_KEY`, and the daemon refuses to start otherwise.

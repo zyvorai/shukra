@@ -33,6 +33,8 @@ Shukra is one privileged daemon on the hypervisor, a CLI and a console that only
 | `drops` | `skb:kfree_skb` | Per VM tap and drop reason: a count and the kernel function that freed the packet | Filters to VM taps first. Reads the record by field name (CO-RE). See [drops](drops.md) |
 | `tap` | TCX ingress and egress on each VM's host interface (Linux 6.6+) | Counters, TCP handshake outcomes, isolation policy, an event ring | The only program that sees the guest. On FluxVM's default netns the interface is the host veth, not the inner tap. See [guest traffic](tap.md) |
 
+The `sched` program's preemption tables (`preempt_start`, `preempt_by`) are small LRUs that only QEMU threads ever enter; the per-thread totals in `sched_stats` are the exact ones. See [vCPU preemption](signals.md#vcpu-preemption).
+
 Each of the first five loads on its own, and a missing hook detaches only that program: a host without a KVM tracepoint still gets scheduler, block and network data. `tap` is attached per VM interface and comes and goes with the VMs, so its status changes at runtime.
 
 **Hot paths stay in maps.** Counters and histograms are BPF maps that userspace reads on a timer. The ring buffer carries discrete events only (an exec, a connect, a slow request), and every producer of events is rate-limited or sampled so a busy guest cannot fill it.
@@ -54,10 +56,11 @@ Identity comes from the host, never from inside the guest.
 It is the only program that touches traffic, so it is the one to understand.
 
 - **TCX, not clsact.** It attaches with TCX (Linux 6.6+), at ingress (frames from the guest) and egress (frames to it), and returns `TCX_NEXT`, never `TCX_PASS`, so anything else on the tap (Cilium, another tool) still runs.
-- **Pinned.** Its links and most maps live under `/sys/fs/bpf/shukra/tap/`, which is why isolation outlives the daemon and counters continue across a restart. The pinned maps are `tap_stats`, `tap_policy`, `allow4`, `allow6`, `tap_rate`, `tap_events`, `tap_outcomes`, `tap_handshake_hist` and `tap_timeouts`. `udp_flows` and `pending_syn` (both LRU, both keyed by values the guest controls) are not pinned, so a restart does not inherit stale flows or in-flight handshakes.
+- **Pinned.** Its links and most maps live under `/sys/fs/bpf/shukra/tap/`, which is why isolation outlives the daemon and counters continue across a restart. The pinned maps are `tap_stats`, `tap_policy`, `allow4`, `allow6`, `tap_rate`, `tap_events`, `tap_outcomes`, `tap_handshake_hist`, `tap_timeouts`, and for DNS names `tap_dns` (the ring) and `dns_cfg` (the on/off switch). `udp_flows`, `pending_syn` and `dns_seen` (all LRU, all keyed by values the guest controls) and `dns_rate` are not pinned, so a restart does not inherit stale flows, in-flight handshakes or de-duplication state.
 - **Upgrades.** Maps are loaded by pin name. A new map is a new pin, so an upgrade that only adds maps keeps every existing map and link. Only a change to an existing map's layout forces the old pins to be replaced, with a brief gap that the daemon closes by re-applying recorded isolations. The rule when changing the program is never to change a pinned map's layout: add a new map.
 - **Isolation.** A flag in `tap_policy` per interface index. While set, every frame is dropped except ARP, IPv6 neighbour discovery and addresses in the `allow4`/`allow6` LPM tries.
 - **Events.** A 56-byte record in a 256 KiB ring, decoded by offset in `internal/observe/tap.go` (asserted at compile time). One per TCP SYN, per new UDP flow and per SYN sent to the guest, at most 200 per tap per second.
+- **DNS names.** For a plain query to UDP port 53 the program checks the header (`QR=0`, `OPCODE=0`, one question), hashes the name to announce it once a minute per tap, and copies the first 128 bytes of the question into a second ring, `tap_dns`, as a 176-byte record, on its own 200-per-second budget. It does not decode the name: `internal/observe/dns.go` does, in Go, where a bug cannot upset the verifier and the decoder can be unit-tested. `dns_cfg[0]` switches it off (`shukrad -dns-events=false`), and the daemon sets it on every start because the map is pinned. See [DNS names](tap.md#dns-names).
 - **Handshakes.** Each SYN is remembered in `pending_syn` until it is answered. A SYN-ACK or RST that matches counts it accepted or refused and forgets it. A SYN never answered is counted by userspace when the counters are read, after 3 seconds, in its own map (BPF has no timers, and a userspace write to a per-CPU value would race the program's increments).
 
 ## State, windows and history
@@ -75,6 +78,7 @@ Rules live in one YAML file (`-watchlist`), re-read on `SIGHUP`:
 
 - **destinations**: a CIDR watchlist, matched on the address a connect went to, or the peer that connected in.
 - **ports**: a port, with `proto` (`tcp`, `udp`, `any`) and `dir` (`out`, `in`, `any`).
+- **dns**: a name a guest looked up, by `suffix`, `exact` or `contains`.
 - **exec_allow**: names that may start under QEMU without an alert.
 - **thresholds**: a per-VM metric over a window (block p99, run-queue delay, vCPU preemption, retransmits, KVM exit rate and latency, guest drops, connection failures, inbound connections).
 - **suppress**: a repeat of the same detection inside a window is held back and counted.
@@ -117,7 +121,7 @@ A build without root, clang or BTF still serves discovered VMs and reports every
 | `internal/observe` | Reads the maps, decodes events, joins the loaders to the rest. Has a stub for builds without BPF |
 | `internal/identity` | Finds QEMU and FluxVM VMMs, their threads, and the host interface to trace |
 | `internal/aggregate` | Turns per-thread maps into per-VM rows, deltas and clones |
-| `internal/state` | The in-memory truth, history, Explain, doctor |
+| `internal/state` | The in-memory truth, history, Explain, [doctor](doctor.md) |
 | `internal/detect`, `internal/agent` | Rules, thresholds, suppression, and the loop that applies them |
 | `internal/api`, `internal/sink`, `internal/persist` | The HTTP API and metrics, alert sinks, on-disk logs |
 | `cmd/shukrad`, `cmd/shukractl` | The daemon and the CLI |

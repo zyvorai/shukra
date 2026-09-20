@@ -217,6 +217,7 @@ Events that leave the daemon carry `product: "shukra"`. A joined host event has 
 | [Attribution](docs/attribution.md) | Host events versus guest events, and what is not measured |
 | [Guest traffic and isolation](docs/tap.md) | The tap program, handshakes, isolate, durability |
 | [Where packets die](docs/drops.md) | The drops program |
+| [Doctor](docs/doctor.md) | Every check, when it fires, and what to do |
 | [Architecture](docs/architecture.md) | How the pieces fit, privileges, kernel requirements |
 | [Testing](docs/testing.md) | Every test, where it can run, and what must never run on a live host |
 | [Development](docs/development.md) | Build, conventions, adding a program |
