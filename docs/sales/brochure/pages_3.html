@@ -1,0 +1,55 @@
+<section class="page" data-title="Scenario 4"><div class="body">
+<div class="eyebrow">Slow-VM scenario &middot; part 4 of 4</div>
+<h1>Lost traffic, then contain</h1>
+<p class="lede">Another ticket: <b>api-01</b> cannot reach a service. Is the destination refusing, is something dropping the packets, is the guest not reading its NIC, or is Shukra itself in the way? The tap answers each connection, and the kernel names each drop.</p>
+<figure class="dia">{{dia:handshake}}</figure>
+<h2>What the kernel dropped, and why</h2>
+<table>
+<tr><th>Reason on the tap</th><th>What it means</th><th>Where to look</th></tr>
+<tr><td class="k">TC_INGRESS, TC_EGRESS</td><td>a tc or TCX program on the tap dropped a frame; if Shukra accounts for it, that was isolation</td><td><code>bpftool net show dev &lt;tap&gt;</code>: another program (Cilium, a <code>tc</code> filter)</td></tr>
+<tr><td class="k">FULL_RING</td><td>the tap's queue is full: the guest is stalled, has no working NIC driver, or is overloaded</td><td>the VM itself</td></tr>
+<tr><td class="k">NETFILTER_DROP</td><td>iptables or nftables</td><td>the rule whose packet counter is moving</td></tr>
+<tr><td class="k">QDISC_DROP, CPU_BACKLOG</td><td>the host's own queues are overflowing</td><td>host load and qdisc settings</td></tr>
+</table>
+<p class="tiny">Each drop is also attributed to the function that freed the packet. Shukra's own isolation drops are subtracted, so "is it us?" has an answer: <code>shukractl trace drops</code>. Reason names are read from the running kernel's BTF and never hard-coded; one it cannot name is shown as <code>reason N</code>, not guessed.</p>
+<div class="step"><div class="b">1</div><div><b>Read the outcome.</b> <code>shukractl trace tap --vm api-01</code> shows accepted, refused, never answered and blocked per direction, with the guest's handshake time.</div></div>
+<div class="step"><div class="b">2</div><div><b>Read the drops.</b> <code>shukractl trace drops --vm api-01</code> says what the host kernel dropped on the tap, by reason and function, and whether it was Shukra.</div></div>
+<div class="step"><div class="b">3</div><div><b>If the VM must be cut off,</b> <code>shukractl isolate api-01</code> drops its tap traffic except your management network. It prints whether the kernel took the change.</div></div>
+<div class="callout"><b>Isolation is real, and conditional.</b> It needs an explicit allow list (<code>-isolate-allow</code>) and Linux 6.6 or newer, and is refused without them, because a VM that could reach nothing could not be reached by the host that isolated it. <code>applied</code> is true only after the kernel took the change on every tap; a half-applied isolation is reported <code>partial</code>, not silently reopened. It blocks the VM's tap: it does not touch vhost-user or SR-IOV interfaces.</div>
+</div></section>
+
+<section class="page" data-title="What Shukra reads"><div class="body">
+<h1>What Shukra reads, and what it never does</h1>
+<p class="lede">The accurate promise is stronger than "no agent": nothing runs inside a guest, no application data is read, and the one thing read beyond headers is stated here, can be turned off, and is bounded.</p>
+<div class="cards c3">
+<div class="card on"><h3>By default</h3><p><b>Metadata only.</b> Counters and histograms from the host: exits, scheduling, block requests, TCP connects, tap packet counts. From a tap: headers, so flow addresses and ports, handshake outcomes and kernel drop reasons. VM names from the QEMU command line.</p></div>
+<div class="card"><h3>One bounded exception</h3><p><b>DNS names.</b> For a plain DNS query on UDP port 53, the first question (at most 128 bytes: the name and the type). <code>-dns-events=false</code> turns it off. Answers, DNS over TCP, TLS and HTTPS are not read.</p></div>
+<div class="card"><h3>Never</h3><p>Anything inside a guest. Application payloads. The guest's own steal counter. Which process in the guest made a connection. Keys in any API response, in <code>doctor</code> or in <code>systemctl show</code>.</p></div>
+</div>
+<table>
+<tr><th>Question</th><th>Answer</th></tr>
+<tr><td class="k">Does anything run inside the VM?</td><td>No. There is no agent. Everything is read from the host: <code>/proc</code>, kernel tracepoints, and the host side of each VM's tap.</td></tr>
+<tr><td class="k">Are host TCP events the guest's?</td><td>No. Host connects are the QEMU process's own sockets, labelled <code>qemu-process</code> and <code>guest_attributed: false</code>. Only events seen on a VM's tap are <code>guest-tap</code> and guest-attributed, and only for a tap that belongs to a VM in the current scan. A tap no VM owns stays <code>unattributed</code>.</td></tr>
+<tr><td class="k">Can a guest change what is attributed to it?</td><td>No. Attribution comes from the tap's owner, found on the host, not from anything in a packet.</td></tr>
+<tr><td class="k">Can a hostile guest hurt the daemon?</td><td>It can generate load, not growth. Tables keyed by packet contents are fixed-size LRUs; events from a tap are rate-limited to 200 per second; DNS names are cut at 253 bytes with every non-printable byte replaced, so a name cannot carry an escape sequence into a log.</td></tr>
+<tr><td class="k">Who can isolate a VM?</td><td>The admin key only. A separate read-only key reads everything, including <code>/metrics</code> and the stream, and cannot isolate or release. Give that one to Prometheus.</td></tr>
+<tr><td class="k">What does an incident bundle expose?</td><td>VM names, addresses and DNS names, as the event list does. It holds nothing from the daemon's configuration except the allow list. It is written with mode 0600.</td></tr>
+<tr><td class="k">What does the daemon need to run?</td><td>Root with six capabilities and a read-only filesystem apart from its data directory (<code>0700</code>). <code>CAP_SYS_PTRACE</code> and <code>CAP_DAC_READ_SEARCH</code> are used only to read a libvirt VM's tap names from <code>/proc/&lt;pid&gt;/fd</code>; drop them if you run no libvirt VMs.</td></tr>
+</table>
+<div class="callout"><b>What this release will not pretend.</b> It can say <i>which VM and which address</i>, not <i>which process inside the guest</i>. A VM with user-mode networking has no tap and so no guest traffic, and <code>shukractl doctor</code> names it. The scheduler program records the command name of a host task that took a vCPU's CPU, so names like <code>kubectl</code> can appear in the API. Treat the data directory as sensitive, and alert sinks as a place that data leaves the host.</div>
+</div></section>
+
+<section class="page" data-title="Console tour"><div class="body">
+<h1>The console: thirteen pages, five groups</h1>
+<p class="lede">The console is served by the daemon on port 30970 and talks only to its API. Every page says what it knows, how it knows it, and what it cannot see.</p>
+<div class="cards c4" style="margin-bottom:6px">
+<div class="card warm"><h3>Overview</h3><p>Programs attached, VMs found, detections, and the host banner.</p></div>
+<div class="card warm"><h3>Investigate</h3><p>Virtual machines, Flight recorder, Explain.</p></div>
+<div class="card warm"><h3>Diagnostics</h3><p>KVM, Scheduler, Contention, Block, Programs.</p></div>
+<div class="card warm"><h3>Network + Security</h3><p>Host connections, Drops. Detections, Isolate.</p></div>
+</div>
+<figure style="margin:8px 0 4px"><div class="crop" style="height:2.9in"><img style="margin-top:-18.5%" src="shots/explain.png" alt=""></div><figcaption>Explain: ranked findings in the daemon's own words, an At field for a past time, and the incident bundle download.</figcaption></figure>
+<figure style="margin:8px 0 4px"><div class="crop" style="height:1.5in"><img style="margin-top:-20.8%" src="shots/drops.png" alt=""></div><figcaption>Drops: what the kernel dropped on each tap, by reason and freeing function, and whether it was Shukra.</figcaption></figure>
+<figure style="margin:8px 0 4px"><div class="crop" style="height:1.75in"><img style="margin-top:-20.8%" src="shots/isolate.png" alt=""></div><figcaption>Isolate: cut a VM off except the management network, with a confirmation step and what survives a daemon crash.</figcaption></figure>
+<p class="tiny" style="text-align:center">Illustrative: all captures are rendered from the console's fixture data. They are not a live host or customer data.</p>
+</div></section>
