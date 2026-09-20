@@ -429,12 +429,16 @@ guest python3 "$D/hello.py" 10.99.0.1 8080 big.example.com 1800; sleep 1
 check "a hello longer than the copy keeps its name, says it is cut short, and has no fingerprint" \
   "api $U/api/v1/events | J \"any(e.get('tls_truncated') and not e.get('ja3') for e in d['events'] if e['kind']=='guest_tls' and e.get('sni')=='big.example.com')\" | grep -q True"
 
+# The daemon has been restarted since the lookup of this suffix in section 12, so how many detections the dns rule has
+# is not assumed: what is checked is that a TLS connection to the same suffix does not add one.
+dnsdet() { api "$U/api/v1/events" | J "len([e for e in d['events'] if e['kind']=='detection' and e.get('rule')=='dns-watch'])"; }
+DW0=$(dnsdet)
 tls 10.99.0.1:8080 c2.watched.test
 tls 10.99.0.1:8080 quiet.example.org
 check "a tls rule fires on the name, guest-attributed, and names it" \
   "api $U/api/v1/events | J \"any(e['guest_attributed'] and e['vm']['name']=='taptest' and 'c2.watched.test' in e['message'] for e in d['events'] if e['kind']=='detection' and e.get('rule')=='tls-watch')\" | grep -q True"
 check "and only on the names it matches" "api $U/api/v1/events | J \"len([e for e in d['events'] if e['kind']=='detection' and e.get('rule')=='tls-watch'])\" | grep -q '^1$'"
-check "and the dns rule for the same suffix did not judge the TLS name (it still has its one detection, from the lookup)" "api $U/api/v1/events | J \"len([e for e in d['events'] if e['kind']=='detection' and e.get('rule')=='dns-watch'])\" | grep -q '^1$'"
+check "and the dns rule for the same suffix did not judge the TLS name (its detections are the same count as before the connection)" "[ \"\$(dnsdet)\" = \"$DW0\" ]"
 
 # The switch lives in a pinned map, so the daemon sets it on every start, whatever a previous run left there.
 stopd; start -isolate-allow 10.99.0.1/32,fd99::1/128 -tls-events=false
