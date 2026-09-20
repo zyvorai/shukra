@@ -30,7 +30,7 @@ export default function Login({ onLogin, initialError = '' }: { onLogin: () => v
         <h1>Shukra.</h1>
         <p>eBPF-powered runtime intelligence and security for KVM. Observe, protect, and explain every workload from the host.</p>
         <p className="login-host">
-          Daemon <code>127.0.0.1:30970</code>
+          Daemon <code>{window.location.host}</code>
         </p>
       </div>
       <form className="card login-card" onSubmit={submit}>

@@ -172,6 +172,12 @@ export function Connections() {
   );
 }
 
+/** A column title from its field name. A duration that is shown with its unit (1.2 ms) drops the trailing Ns. */
+export function header(c: string, withUnit: boolean) {
+  const name = withUnit ? c.replace(/Ns$/, '') : c;
+  return name.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+}
+
 function Trace({
   title,
   err,
@@ -199,7 +205,7 @@ function Trace({
             <thead>
               <tr>
                 {cols.map((c) => (
-                  <th key={c}>{c.replace(/([a-z0-9])([A-Z])/g, '$1 $2')}</th>
+                  <th key={c}>{header(c, Boolean(format[c]))}</th>
                 ))}
               </tr>
             </thead>

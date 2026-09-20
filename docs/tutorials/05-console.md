@@ -33,6 +33,10 @@ Hash routes keep you on one origin. The mega-nav is the same set of pages.
 
 That page keeps a banner: the host connections are QEMU-process connections, not the guest, and `guest_attributed` is false. It is not a warning you dismiss. When the tap program is attached, more tables follow: the guest's own connects, connections made to the guest and UDP flows seen on its tap (each row's `kind` says which, and inbound rows show the peer as the source), the names the guest looked up (one row per name and type, once a minute), and a per-tap table of what became of every connection: attempts, accepted, refused, never answered, blocked, and the handshake time.
 
+## VM fields
+
+Explain, Flight recorder and Isolate each have a VM field. It opens on the first VM the daemon knows and suggests the others as you type. If the daemon knows no VM the field is empty; it never opens on a made-up name.
+
 ## Isolate
 
 The controls are enabled only when the daemon reports it can enforce: the tap program is attached and a management allow list is configured. Otherwise the page says why (for example that no allow list is set) and the buttons stay disabled. Isolate asks for a second confirmation that names what will be cut off, what stays reachable, and what happens if the daemon stops, and the result shown is what the daemon reported: applied, refused, or only partly done. Release lifts it. See [Guest traffic and isolation](../tap.md).
