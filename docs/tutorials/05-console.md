@@ -46,7 +46,7 @@ Two controls above the tables narrow all of them at once:
 - **Show**: everything, **host processes (no VM)** (the connects made by k3s, cilium and other host software, which belong to no VM), or one VM. Choosing a VM also narrows the per-tap table to that VM's tap, and choosing host processes empties it, since a host process has no tap.
 - **Search**: text matched, ignoring case, against the address, port, DNS name, query type, protocol, kind and attribution.
 
-An empty result says `Nothing matches this filter.`, which is different from `None seen yet.`. The filter is in your browser: it works on the events the daemon holds (the last 2048 of every kind), so a VM that has been quiet while the host was busy may have no rows left to show.
+An empty result says `Nothing matches this filter.`, which is different from `None seen yet.`. The filter is in your browser: it works on the events the daemon holds: 2048 in all, with a share reserved for each kind (guest events, host connects, detections and so on), so a flood of host connects cannot push a guest's events out. A busy kind is still trimmed to its share when the list is full, so the oldest host connects are the ones that go.
 
 ## Isolate
 
