@@ -298,10 +298,10 @@ Streams discrete events. It reads what the daemon holds, then follows `GET /api/
 ```text
 2026-09-20T15:05:33.412887Z  guest_dns  guest-tap  vm=payment-prod-03  dst=10.20.0.2  name=updates.example.com  qtype=A
 2026-09-20T15:05:33.412889Z  guest_tls  guest-tap  vm=payment-prod-03  dst=203.0.113.9  sni=api.example.com  tls=TLS1.3  alpn=h2
-2026-09-20T15:05:33.412889Z  vmm_file_open  qemu-process  vm=payment-prod-03  dst=<nil>  path=/etc/shadow  comm=qemu-system-x86  pid=4121
+2026-09-20T15:05:33.412889Z  vmm_file_open  qemu-process  vm=payment-prod-03  path=/etc/shadow  comm=qemu-system-x86  pid=4121
 ```
 
-Each line is time, kind, attribution, `vm=`, `dst=`, then fields for the kind:
+Each line is time, kind, attribution, `vm=`, `dst=` (only when the event has a destination), then fields for the kind:
 
 | Kind | Ends with |
 |---|---|
@@ -310,7 +310,7 @@ Each line is time, kind, attribution, `vm=`, `dst=`, then fields for the kind:
 | `vmm_file_open` | `path=`, `comm=`, `pid=`, and `write` when the open asked to write |
 | `vmm_syscall` | `syscall=`, `comm=`, `pid=`, then the call's arguments in words |
 
-`dst=<nil>` is an event with no destination.
+A tripwire event is about a call, not a peer, so it has no `dst=`. (An older `shukractl` printed `dst=<nil>` there.)
 
 #### `export`
 

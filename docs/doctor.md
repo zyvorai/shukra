@@ -139,7 +139,7 @@ There are seven programs: `kvm`, `sched`, `block`, `net`, `vmm`, `drops` and `ta
 | `programs-detached` | `warn` | Two or more programs are detached for the **same** reason: one finding that names them, not one per program | Usually the daemon was built without BPF: `make generate` and `-tags shukrabpf` |
 | `program-tap` | `info` | The tap program has no VM tap to attach to yet | Nothing: it attaches when a VM with a tap starts |
 
-Two things to know. The `tap` program is attached per VM interface, so on a host with no VM it is `detached` and that is `info`, not a warning. And turning a program off on purpose is a warning too: `-vmm-tripwires=false` leaves `vmm` detached with the reason `turned off with -vmm-tripwires=false`, so it shows as `program-vmm`, and `doctor --strict` will fail on it. (The fix line says to rebuild with BPF, which does not apply to a program you switched off yourself.) The `-dns-events` and `-tls-events` switches do not change a program's state and are not reported.
+Two things to know. The `tap` program is attached per VM interface, so on a host with no VM it is `detached` and that is `info`, not a warning. And turning a program off on purpose is a warning too: `-vmm-tripwires=false` leaves `vmm` detached with the reason `turned off with -vmm-tripwires=false`, so it shows as `program-vmm`, and `doctor --strict` will fail on it. The fix line says it was turned off on purpose and which flag to remove; a program that failed to attach is told to rebuild with BPF instead. The `-dns-events` and `-tls-events` switches do not change a program's state and are not reported.
 
 ### VMs Shukra cannot see, or cannot fully see
 

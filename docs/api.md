@@ -32,7 +32,7 @@ curl -s -H "Authorization: Bearer $SHUKRA_API_KEY" "$SHUKRA_URL/api/v1/status"
 ### Data
 
 - Times are RFC 3339. Durations in field names end in `Ns` (nanoseconds). A time that was never set (`expires` on an action that does not lapse, `decided` on one nobody has decided) reads `0001-01-01T00:00:00Z`, not absent.
-- **Lists are `[]`, with a few exceptions.** Every route that carries a list of rows says `[]` when there are none, except where a value has not been set yet: `GET /api/v1/detections`, `GET /api/v1/isolations`, `GET /api/v1/security` (`detections`, `allowList`), the `threads` list of `GET /api/v1/trace/sched?threads=1`, and `kvm`, `sched`, `block` and `net` in `GET /api/v1/export` are `null` on a daemon that has nothing yet. Treat `null` as empty.
+- **Lists are `[]`, never `null`.** Every route that carries a list of rows says `[]` when there are none, including `detections`, `isolations`, the `threads` of `trace/sched?threads=1`, the `security` board's `detections` and `allowList`, and every list in `export`. A test asks each GET route with nothing known and fails on a `null`. (A daemon older than this rule answered `null` for those; treat `null` as empty if you must talk to one.)
 - **A program that is not measuring does not invent a zero.** In `/metrics` a VM that is not measured has no series. In `trace/kvm`, `trace/sched` and `trace/block` a known VM whose counters are all zero still has a row, and `measured: false` says so. `trace/net` and `trace/tap` rows have no `measured` field, `trace/drops` says `measured` once for the whole response, and `trace/contention` has no row for a VM the sched program has not measured. A VM name that matches nothing is an empty result, not an error and not a guess.
 - A row named `_host` is everything the program counted that belongs to no VM's threads. It has no vCPUs, so it has no preemption.
 - Latency percentiles come from log2 histograms, so each is a bucket's high edge and can read up to 2x high. A histogram array has 64 buckets: bucket *b* counts values from 2^*b* up to 2^(*b*+1) nanoseconds, and bucket 0 also holds zero.
@@ -606,7 +606,7 @@ data: {"seq":41,"product":"shukra","kind":"guest_dns","ts":"2026-09-20T14:58:28.
 
 ### `GET /api/v1/detections`
 
-`?vm=<name>`. `{"detections": [...]}`: the events of kind `detection` the daemon holds, oldest first, capped at 2048 like events, and restored from `-data-dir` after a restart. `null` when there are none.
+`?vm=<name>`. `{"detections": [...]}`: the events of kind `detection` the daemon holds, oldest first, capped at 2048 like events, and restored from `-data-dir` after a restart. `[]` when there are none.
 
 ## Security and isolation
 
@@ -628,7 +628,7 @@ data: {"seq":41,"product":"shukra","kind":"guest_dns","ts":"2026-09-20T14:58:28.
 
 ### `GET /api/v1/isolations`
 
-`{"isolations": [...]}`: the audit trail of isolate and release requests, oldest first, newest 2048, and whether each took effect. Restored from `-data-dir`. `null` when there are none.
+`{"isolations": [...]}`: the audit trail of isolate and release requests, oldest first, newest 2048, and whether each took effect. Restored from `-data-dir`. `[]` when there are none.
 
 ### `POST /api/v1/isolate` and `POST /api/v1/release`
 

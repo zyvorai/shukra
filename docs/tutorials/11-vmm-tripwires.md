@@ -56,10 +56,10 @@ shukractl security web-01
 On a settled host you will often see nothing from the first command, and `no detections` (or none named `vmm-...`) from the second. If a VM has just started or stopped you may see its ordinary opens:
 
 ```text
-2026-09-20T04:41:07.221Z  vmm_file_open  qemu-process  vm=web-01  dst=<nil>  path=/sys/devices/system/cpu/online  comm=qemu-system-x86  pid=2211
+2026-09-20T04:41:07.221Z  vmm_file_open  qemu-process  vm=web-01  path=/sys/devices/system/cpu/online  comm=qemu-system-x86  pid=2211
 ```
 
-(`dst=<nil>` is only how the CLI prints a field these events do not have.) Ordinary opens like that one are not on the sensitive list, so the second command stays quiet. If it names a `vmm-` detection, go to [reading a detection](#6-read-a-vmm-sensitive-open) now.
+(These events are about a file, not a peer, so the line has no `dst=`. An older `shukractl` printed `dst=<nil>` there.) Ordinary opens like that one are not on the sensitive list, so the second command stays quiet. If it names a `vmm-` detection, go to [reading a detection](#6-read-a-vmm-sensitive-open) now.
 
 ## 4. Change what counts: the `vmm:` section
 
