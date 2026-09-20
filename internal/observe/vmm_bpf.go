@@ -13,7 +13,8 @@ import (
 var vmmStartOnce sync.Once
 
 // DisableVMM keeps the VMM tripwire program from being loaded (shukrad -vmm-tripwires=false). It must be called
-// before the programs are attached.
+// before the programs are attached. The reason starts with "turned off with ", which the doctor reads as a choice
+// and not a fault (state.switchedOff).
 func DisableVMM() { bpfgen.Disable("vmm", "turned off with -vmm-tripwires=false") }
 
 // StartVMM reads the VMM tripwire ring: the files a VMM process (or something it started) opens, and the calls it

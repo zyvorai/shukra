@@ -29,7 +29,7 @@ func rulesCmd(args []string, out io.Writer) error {
 		return fmt.Errorf("%s: %w", args[1], err)
 	}
 	names := func(n int, get func(int) string) []string {
-		var s []string
+		s := []string{}
 		for i := 0; i < n; i++ {
 			s = append(s, get(i))
 		}
@@ -39,7 +39,7 @@ func rulesCmd(args []string, out io.Writer) error {
 		"ok":         true,
 		"suppress":   c.Suppress.String(),
 		"ports":      names(len(c.Ports), func(i int) string { return c.Ports[i].Name }),
-		"execAllow":  c.ExecAllow,
+		"execAllow":  append([]string{}, c.ExecAllow...),
 		"thresholds": names(len(c.Thresholds), func(i int) string { return c.Thresholds[i].Name }),
 		"maxWindow":  c.MaxWindow().String(),
 		"responses":  responseSummary(c),

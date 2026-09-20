@@ -97,10 +97,10 @@ func routes(st *state.State) *http.ServeMux {
 		writeJSON(w, http.StatusOK, map[string]any{"worst": worst, "checks": checks})
 	})
 	mux.HandleFunc("GET /api/v1/isolations", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"isolations": st.Isolations()})
+		writeJSON(w, http.StatusOK, map[string]any{"isolations": orEmpty(st.Isolations())})
 	})
 	mux.HandleFunc("GET /api/v1/detections", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"detections": st.Detections(r.URL.Query().Get("vm"))})
+		writeJSON(w, http.StatusOK, map[string]any{"detections": orEmpty(st.Detections(r.URL.Query().Get("vm")))})
 	})
 	mux.HandleFunc("GET /api/v1/recorder", func(w http.ResponseWriter, r *http.Request) {
 		window := 60 * time.Second
@@ -124,7 +124,7 @@ func routes(st *state.State) *http.ServeMux {
 		vm := r.URL.Query().Get("vm")
 		out := map[string]any{"rows": orEmpty(st.Sched(vm))}
 		if r.URL.Query().Get("threads") == "1" {
-			out["threads"] = st.SchedThreads(vm)
+			out["threads"] = orEmpty(st.SchedThreads(vm))
 		}
 		writeJSON(w, http.StatusOK, out)
 	})
@@ -375,12 +375,12 @@ func routes(st *state.State) *http.ServeMux {
 		_, _ = w.Write(b)
 	})
 	mux.HandleFunc("GET /api/v1/export", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, st.Export())
+		writeJSON(w, http.StatusOK, orEmptyExport(st.Export()))
 	})
 	mux.HandleFunc("GET /api/v1/security", func(w http.ResponseWriter, r *http.Request) {
 		vm := r.URL.Query().Get("vm")
 		mode, allow, why := st.Enforcement()
-		out := map[string]any{"vm": vm, "detections": st.Detections(vm), "enforcement": mode, "allowList": allow, "durable": st.Durable()}
+		out := map[string]any{"vm": vm, "detections": orEmpty(st.Detections(vm)), "enforcement": mode, "allowList": orEmpty(allow), "durable": st.Durable()}
 		if why != "" {
 			out["reason"] = why
 		}
@@ -591,6 +591,19 @@ func orEmpty[T any](s []T) []T {
 		return []T{}
 	}
 	return s
+}
+
+// orEmptyExport gives every list of the export an empty value, so a daemon that has measured nothing yet
+// still exports lists.
+func orEmptyExport(e state.Export) state.Export {
+	e.VMs = orEmpty(e.VMs)
+	e.Programs = orEmpty(e.Programs)
+	e.KVM = orEmpty(e.KVM)
+	e.Sched = orEmpty(e.Sched)
+	e.Block = orEmpty(e.Block)
+	e.Net = orEmpty(e.Net)
+	e.Events = orEmpty(e.Events)
+	return e
 }
 
 // policyBody is the JSON body of a policy request: the VM, and for apply the request itself.

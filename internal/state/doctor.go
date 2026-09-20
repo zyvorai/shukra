@@ -59,6 +59,10 @@ var statusRank = map[string]int{"ok": 0, "info": 1, "warn": 2, "fail": 3}
 
 // Doctor audits the running daemon and returns the findings, the worst first.
 // It is a read of state, not a probe: it changes nothing and touches no VM.
+// switchedOff starts the reason of a program the operator turned off with a flag (observe.DisableVMM), as
+// opposed to one that failed to attach.
+const switchedOff = "turned off with "
+
 func (s *State) Doctor() []Check {
 	s.mu.RLock()
 	c, rulesErr, ready := s.config, s.rulesErr, s.ready
@@ -160,11 +164,16 @@ func (s *State) Doctor() []Check {
 	const detachedFix = "Run shukractl programs. On a host built without BPF, rebuild with make generate and -tags shukrabpf."
 	for _, reason := range detachedOrder {
 		names := detached[reason]
+		fix := detachedFix
+		if strings.HasPrefix(reason, switchedOff) {
+			// An operator's own switch (shukrad -vmm-tripwires=false): nothing is broken, and a rebuild would not help.
+			fix = "It was turned off on purpose. Remove that flag from shukrad's arguments and restart to turn it back on."
+		}
 		if len(names) == 1 {
-			add("program-"+names[0], "warn", names[0]+" is detached", reason, detachedFix)
+			add("program-"+names[0], "warn", names[0]+" is detached", reason, fix)
 			continue
 		}
-		add("programs-detached", "warn", strconv.Itoa(len(names))+" programs are detached ("+strings.Join(names, ", ")+")", reason, detachedFix)
+		add("programs-detached", "warn", strconv.Itoa(len(names))+" programs are detached ("+strings.Join(names, ", ")+")", reason, fix)
 	}
 
 	// VMs the tap program cannot see.

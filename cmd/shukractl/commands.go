@@ -84,8 +84,8 @@ func run(args []string, out io.Writer) error {
 		if len(args) < 2 {
 			return fmt.Errorf("recorder <vm> [--window 60s]")
 		}
-		window := flagValue(args[2:], "--window", "60s")
-		return getBoard(out, "/api/v1/recorder?vm="+args[1]+"&window="+window, has(args[2:], "--json"), formatRecorder)
+		q := url.Values{"vm": {args[1]}, "window": {flagValue(args[2:], "--window", "60s")}}
+		return getBoard(out, "/api/v1/recorder?"+q.Encode(), has(args[2:], "--json"), formatRecorder)
 	case "watch":
 		return watchCmd(args[1:], out)
 	case "export":
@@ -94,7 +94,7 @@ func run(args []string, out io.Writer) error {
 		if len(args) < 2 {
 			return fmt.Errorf("security <vm>")
 		}
-		return getBoard(out, "/api/v1/security?vm="+args[1], has(args[2:], "--json"), formatSecurity)
+		return getBoard(out, "/api/v1/security?"+url.Values{"vm": {args[1]}}.Encode(), has(args[2:], "--json"), formatSecurity)
 	case "isolate":
 		if len(args) < 2 {
 			return fmt.Errorf("isolate <vm>")
@@ -352,7 +352,12 @@ func printEvent(e map[string]any, asJSON bool, out io.Writer) error {
 			extra += "  ech"
 		}
 	}
-	_, err := fmt.Fprintf(out, "%v  %v  %v  vm=%v  dst=%v%s\n", e["ts"], e["kind"], e["attribution"], nested(e, "vm", "name"), e["dst"], extra)
+	// A destination is only named when the event has one: a tripwire event is about a call, not a peer.
+	dst := ""
+	if d, ok := e["dst"]; ok && d != nil {
+		dst = fmt.Sprintf("  dst=%v", d)
+	}
+	_, err := fmt.Fprintf(out, "%v  %v  %v  vm=%v%s%s\n", e["ts"], e["kind"], e["attribution"], nested(e, "vm", "name"), dst, extra)
 	return err
 }
 
@@ -943,7 +948,7 @@ func formatActions(w io.Writer, m map[string]any) {
 				}
 				fmt.Fprintln(w)
 			}
-			if t := str(a, "releaseAt"); t != "" && str(a, "status") == "executed" {
+			if t := str(a, "releaseAt"); t != "" && str(a, "status") == "executed" && !zeroTime(t) {
 				fmt.Fprintf(w, "      releases itself at %s\n", t)
 			}
 		}
@@ -956,4 +961,10 @@ func orDash(v any) any {
 		return s
 	}
 	return "-"
+}
+
+// zeroTime is whether a time from the API is Go's zero time, which is how it says "never set".
+func zeroTime(s string) bool {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	return err == nil && t.IsZero()
 }

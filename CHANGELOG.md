@@ -36,6 +36,13 @@ Found by profiling the daemon on a production hypervisor (12 cores, 10 VMs, a k3
 - **`tls:` rules** in the rules file (suffix, exact or contains, like `dns:`), which do not judge each other's names; learned baselines count a server name as the site it names; `shukractl watch` shows `sni=`; the console's Connections page has a table of them, searchable by name, protocol and fingerprint.
 - New pinned maps `tap_tls` and `tls_cfg` and unpinned `tls_flows` and `tls_rate`; no existing map changed. A tap program from before this change still runs and just has no TLS names.
 
+### API and CLI fixes found by auditing the docs against the code
+
+- **Empty lists are `[]` in every API answer.** `isolations`, `detections`, the sched `threads`, the `security` board's `detections` and `allowList`, and the export's `vms`, `programs`, `kvm`, `sched`, `block`, `net` and `events` came back `null` when empty, against the rule the rest of the API keeps. A test now asks every route with nothing known and again with one silent VM, and fails on any `null`. `shukractl rules check --json` does the same for `ports`, `execAllow` and `thresholds`.
+- **`shukractl recorder` and `security` escape the VM name** (and the recorder's window). A name with a space, `&` or `#` used to make a request the daemon refused with 400 or asked for a different VM.
+- **`shukractl actions --all`** no longer says an action "releases itself at 0001-01-01" when it never had a release timer, and **`shukractl watch`** no longer prints `dst=<nil>` for an event that has no destination (every VMM tripwire event).
+- **`shukractl doctor`** no longer tells an operator who turned a program off (`-vmm-tripwires=false`) to rebuild with BPF; it says it was turned off on purpose and which flag to remove.
+
 ### Responses: acting on a detection, safely
 
 - A `responses:` section in the rules file lets a detection propose isolating a VM, which a person approves (`shukractl approve`, the Actions page), or, with `mode: enforce` and named rules only, do it on its own. Guardrails apply to every response: `never_isolate`, isolate must be enabled, an hourly cap on automatic isolations, a per-VM cooldown, proposal expiry and a timed `release_after` that survives a restart. `dry_run` tries one out and changes nothing. Off unless configured. See [responses](docs/responses.md).
