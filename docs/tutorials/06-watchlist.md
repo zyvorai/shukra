@@ -1,6 +1,6 @@
 # Detection rules
 
-Rules are a userspace check on connects. When one matches, Shukra writes a `detection` event. It does not drop the packet, and it does not move the match into BPF. A rule can match three kinds of connect:
+Rules are a userspace check on what the daemon has already recorded: connects and flows first, then looked-up names and per-VM counters (below). When one matches, Shukra writes a `detection` event. It does not drop the packet, and it does not move the match into BPF. A destination or port rule can match three kinds of connect:
 
 | Seen as | Where it comes from | `guest_attributed` |
 |---|---|---|
@@ -26,6 +26,8 @@ destinations:
 | `cidr` | CIDR, or a single IP (treated as `/32` or `/128`) |
 | `name` | Shown on the detection |
 | `severity` | Optional. Default `high` |
+
+Severity defaults differ by rule type: `destinations`, `ports`, `dns` and `tls` rules are `high` unless you say otherwise, thresholds are `medium`, and the tripwires' own detections are described in [tutorial 11](11-vmm-tripwires.md).
 
 For a `destinations` rule, the address that matters is where the VM connected to, or, for a connection made **to** the VM, the peer that connected in, so a watched network reaching into a VM fires too and the message says "connected in from". `ports` rules take `proto` (`tcp` by default, `udp` or `any`) and `dir` (`out` by default, `in` for a connection made to the VM and matched on the port it reached, or `any`), so a rule written before either existed means what it always did.
 
@@ -91,7 +93,7 @@ thresholds:            # per VM, over a window
 
 **`responses`** say what to do when a detection fires, and the only thing they can do is isolate the VM. By default a response **proposes** and a person approves; `mode: enforce` acts on its own but must name the rules it answers, and `guardrails` protect VMs and cap how much can happen. See [responses](../responses.md).
 
-**`exec_allow`** adds to the names that are always fine: `qemu-system*`, QEMU's own `cpu`, `io` and `vhost` threads, and the FluxVM VMMs `cloud-hypervisor`, `firecracker`, `fluxvm-hypervisor` and `jailer` (the kernel comm is 15 characters, so the first two long names match on `cloud-hypervis` and `fluxvm-hypervis`). It does not replace them. A boot of those binaries is not an unexpected-exec detection.
+**`exec_allow`** adds to the names that are always fine: `qemu-system*`, QEMU's own `cpu`, `io`, `vhost` and `kvm` threads, and the FluxVM VMMs `cloud-hypervisor`, `firecracker`, `fluxvm-hypervisor` and `jailer` (the kernel comm is 15 characters, so the first two long names match on `cloud-hypervis` and `fluxvm-hypervis`). It does not replace them. A boot of those binaries is not an unexpected-exec detection.
 
 **Thresholds** compare a metric against the counters one `window` ago, per VM:
 
@@ -110,6 +112,21 @@ thresholds:            # per VM, over a window
 | `tcp_retransmits_per_sec` | retransmits per second |
 
 `op` is `>` (default) or `>=`. A rule says nothing until a full window of history exists, a VM that appeared mid-window is skipped, and a counter that went backwards (a thread exited) is skipped rather than guessed at. No I/O in the window means no p99, so no alert. Latency comes from a log2 histogram, so a p99 is a bucket edge and can read up to 2x high. These are the QEMU process's counters, not the guest's. Thresholds need the kernel programs attached; on a detached build they never fire.
+
+## Detections that need no rule
+
+Some detections come from Shukra itself, and their names are what a `responses:` entry lists under `rules:` and what you filter on in a sink.
+
+| Rule | Raised when | Severity |
+|---|---|---|
+| `unexpected-exec` | A VMM started a program that is not on the allow list (below) | high |
+| `vmm-sensitive-open`, `vmm-syscall`, `vmm-flood` | A VMM, or something it started, opened a sensitive file or made a call a VMM never makes | critical, critical or high, critical: [tutorial 11](11-vmm-tripwires.md) |
+| `new-destination`, `new-dns-suffix`, `new-inbound-peer`, `baseline-cap`, `baseline-forgotten` | A learned baseline saw a first sighting, hit its daily cap, or was reset by a person | medium, low, medium, low, low |
+| `egress-policy-audit`, `egress-policy-blocked` | A VM under an egress policy started a connection outside its list | low, medium: [tutorial 10](10-egress-policy.md) |
+| `policy-applied`, `policy-confirmed`, `policy-reverted`, `policy-removed` | An egress policy changed | low or medium, low, medium, low |
+| `action-proposed`, `action-executed`, `action-refused`, `action-rejected`, `action-expired`, `action-released`, `action-dry-run` | A response decided something | by outcome |
+
+A response can answer any of them except the `action-*` announcements, which no response ever answers.
 
 ## Suppression
 
@@ -131,6 +148,35 @@ sudo systemctl reload shukra    # sends SIGHUP to shukrad
 
 If the new file has any mistake, `shukrad` logs `detection file reload failed, keeping the previous rules` and the old rules stay in force. Only a restart with a bad file refuses to start. Units installed before this change have no `ExecReload`; `kill -HUP $(pidof shukrad)` does the same thing.
 
+Check before you reload, and confirm after:
+
+```bash
+shukractl rules check /etc/shukra/detections.yaml
+sudo systemctl reload shukra
+sudo journalctl -u shukra -n 5 | grep 'detection rules reloaded'
+```
+
+`rules check` runs the daemon's own strict parser on the file without touching a daemon:
+
+```text
+ok: /etc/shukra/detections.yaml would be accepted
+  suppress   5m0s
+  ports      smtp-egress, ssh-into-vm, dns-out
+  exec_allow node_exporter
+  thresholds slow-disk
+  responses  contain-miners (propose)
+  thresholds need the kernel programs attached, and stay quiet until a full window of history exists
+```
+
+A mistake is refused with the reason and a non-zero exit, and `shukractl doctor` reports `The detection file did not reload` when a reload failed:
+
+```text
+error: bad.yaml: yaml: unmarshal errors:
+  line 5: field threshold not found in type the detection file
+```
+
+Only ports, exec allow, thresholds and responses are summarised: the `destinations`, `dns`, `tls`, `vmm` and `baselines` sections are checked but not listed.
+
 ## See a hit
 
 ```bash
@@ -141,6 +187,30 @@ shukractl watch --json
 Or open Detections in the console. The event kind is `detection` and `rule` names the rule that fired. The message is the rule name plus the destination. `guest_attributed` is false for a host connect. A rule that fires on a guest connect seen on the VM tap is `guest_attributed: true` with `attribution: "guest-tap"`, and it is a separate alert from a host connect to the same address. The flight recorder keeps the same event, so `shukractl recorder <vm> --window 60s` shows it if it happened inside the window.
 
 A connect that matches nothing is a normal `tcp_connect` event, not a detection.
+
+To see one on purpose, with the tap program attached, add a rule for a connection made **to** a VM:
+
+```yaml
+ports:
+  - port: 22
+    name: ssh-into-vm
+    dir: in
+    severity: medium
+```
+
+Check, reload, then `ssh` to one of that host's VMs from anywhere. Within a second `shukractl security <vm>` shows a `medium` line naming the peer that connected in, `guest_attributed=true` and `attribution=guest-tap`. A second `ssh` inside the suppression time is held back and counted in `shukra_detections_suppressed_total`. Take the rule out again if you did not want it.
+
+> **If it does not work.**
+>
+> | You see | Do this |
+> |---|---|
+> | `field ... not found in type` | A key is misspelled or in the wrong place. The message names it and its line |
+> | `name "x" is used twice` | Rule names are unique within a kind: rename one |
+> | `severity "x" is not low, medium, high or critical` | Spell it as one of those four |
+> | The reload logs `keeping the previous rules` | The file has a mistake. `shukractl rules check` names it. The old rules are still in force |
+> | `SIGHUP ignored: no -watchlist detection file is configured` | The daemon was started with no `-watchlist`. Add it to the unit and restart |
+> | A rule never fires | Does the daemon see that kind of event? Guest rules (`dir: in`, `dns`, `tls`, guest connects) need the tap program and, for names, `-dns-events` and `-tls-events` left on. Thresholds need the kernel programs. A `destinations` rule on a host connect matches the QEMU process's own sockets only. And a repeat inside `suppress` is held back on purpose |
+> | It fired once and not again | Suppression: same rule, same VM, same destination inside five minutes is one alert. `suppress: 0s` alerts every time |
 
 ## What you should not add
 

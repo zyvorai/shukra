@@ -62,6 +62,23 @@ shukractl incident osboxes-mint --at 2026-09-20T03:00:00Z --window 30m --out osb
 wrote osboxes-incident.json (100415 bytes, mode 0600). It names VMs, addresses and DNS names: treat it like the event list.
 ```
 
+Check the file is private and holds what you expect:
+
+```bash
+ls -l osboxes-incident.json                         # -rw-------
+jq '{at, window, verdict: [.explain.findings[].cause], detections: (.detections | length), events: (.events | length)}' osboxes-incident.json
+```
+
+```text
+{
+  "at": "2026-09-20T03:00:00Z",
+  "window": "30m0s",
+  "verdict": ["no_host_cause"],
+  "detections": 2,
+  "events": 87
+}
+```
+
 Without `--out` it prints a summary (the verdict, the detections in the window, how many recorder events and isolate requests there were) and says how to get the whole document. The file holds:
 
 | Key | What |
@@ -76,7 +93,7 @@ Without `--out` it prints a summary (the verdict, the detections in the window, 
 
 It contains nothing from the daemon's configuration except the allow list: no key, no listen address, no data directory. It is as sensitive as the event list, because it names your VMs, the addresses they talked to and the DNS names they looked up: attach it to a ticket you would be comfortable putting those in.
 
-In the console it is the **At** field and **Download incident bundle** button on the Explain page.
+In the console it is the **At** field and **Download incident bundle** button on the Explain page. The detections in the bundle are every kind the daemon raised in the window, including [VMM tripwires](11-vmm-tripwires.md), [egress policy](10-egress-policy.md) strays and changes, and baseline first sightings, so the bundle for a VM that was contained shows what set it off. A response that proposes an isolation keeps the same kind of bundle for its own decision: `shukractl actions --bundle <id> --out FILE` ([responses](../responses.md)).
 
 ## What this cannot tell you
 
@@ -84,3 +101,16 @@ In the console it is the **At** field and **Download incident bundle** button on
 - **The guest.** As everywhere in Shukra: no process inside the guest, and not the guest's own steal counter.
 - **Anything before the daemon first stored a snapshot**, or while it was not running.
 - **Events that were pushed out.** The flight recorder and the daemon's event list are bounded (the list keeps a share for each kind of event so a busy host cannot push out a guest's), so a very old event may be gone even where counters were stored.
+
+> **If it does not work.**
+>
+> | You see | Do this |
+> |---|---|
+> | `no_history` and `No history is kept: the daemon has nowhere to store snapshots` | It ran without `-data-dir`. The shipped unit has it; `shukractl doctor` says `Nothing is kept across a restart` |
+> | `no_history` and a time that is too old | Only the newest snapshots are kept (a day or two at ten VMs). The bundle for that time cannot be made, but the events the recorder and the alert sinks still hold can |
+> | `no_history` and the nearest snapshot is more than ten minutes away | The daemon was not running then |
+> | `at must be an RFC 3339 time, or a negative duration such as -90m` | Use `2026-09-20T03:00:00Z` (any zone, with the offset) or `-90m` |
+> | `at is in the future` | The clock on your laptop and on the host disagree, or the date is wrong |
+> | `window must be a duration from 5m0s to 6h0m0s` | For a past time the window is 5 minutes to 6 hours. A live `explain --window` is up to 5 minutes, or `lifetime` |
+> | `unknown_vm` and `No VM with that name was running at that time` | Check the spelling against `shukractl vms`, and that the VM existed at that moment: the verdict is built from what the snapshot held then |
+

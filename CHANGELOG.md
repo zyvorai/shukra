@@ -4,6 +4,17 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### Build and tooling
+
+- **Go 1.27.** `go.mod` and the three workflows build with Go 1.27 (from 1.25). No source change was needed; `go vet`, `go test ./...`, the linux builds and the tagged BPF type-check are clean.
+- **Console dev tooling:** `vite` 7.3.5 and `vitest` 4.1.11, which clear every open Dependabot alert (all were in dev tooling, none in the built console or the Go binaries); `npm audit` reports none.
+- **The live-guest test makes a real QEMU trip the wire.** It asks the disposable guest's own QEMU, over its own QMP socket, to open `/etc/shadow` (a read-only file node, removed straight after) and requires a critical `vmm-sensitive-open` detection naming that VM and attributed to the VMM, not the guest. Run on the reference hypervisor: 58 of 58 checks.
+
+### Documentation refresh
+
+- Every guide was re-checked against the code and rewritten where it had drifted: seven programs and 31 attach points (the architecture and README still said six), the persistence table for every file under `-data-dir`, the trust boundaries (what a guest or a taken-over VMM controls and how each table is bounded), a complete API and metrics reference, every `shukractl` command with real output, all 20 `doctor` checks with the condition that fires each, and the exceptions to "no payloads" named wherever it is claimed.
+- Two new tutorials: [an egress policy, from learning to enforcing](docs/tutorials/10-egress-policy.md) and [watching the VMM itself](docs/tutorials/11-vmm-tripwires.md).
+
 ### Egress policy: which networks a VM may connect to
 
 - **`shukractl policy`** turns a VM's learned baseline into a list of networks it may start connections to, tries it in **audit** mode (nothing is dropped; what would be is counted and reported), and only then **enforces** it. `learn` proposes a list and shows how it differs from what the VM has; `apply` puts a VM under one; `confirm` keeps an enforcing policy; `remove` lifts one. `GET /api/v1/policy`, `.../proposal`, and admin-only `apply`, `confirm` and `remove`. See [egress policy](docs/egress-policy.md).
