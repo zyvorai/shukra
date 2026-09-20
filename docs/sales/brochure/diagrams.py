@@ -35,7 +35,7 @@ def ebpf_pipeline():
     o.append(text(428, 254, "reads", 9, 700, DEEP))
     px = 8
     o.append(text(px, 285, "Why this is safe to run on a hypervisor", 11, 700, INK))
-    for i, s in enumerate(["No agent, module or change inside any guest", "The verifier proves each program before it runs", "Programs observe; the tap program returns TCX_NEXT", "Only isolation drops, and it needs an allow list"]):
+    for i, s in enumerate(["No agent, module or change inside any guest", "The verifier proves each program before it runs", "Programs observe; the tap program returns TCX_NEXT", "Only isolation and an enforced egress policy drop; both need an allow list"]):
         o.append(circle(px + 5, 302 + i * 17 - 3, 3.2, SIG))
         o.append(text(px + 16, 302 + i * 17, s, 9.5, 400, SOFT))
     return svg(720, 372, "".join(o), "How an eBPF program gets from source to a kernel hook and back to the daemon")
@@ -55,8 +55,10 @@ def hypervisor():
          ("block", "block_rq_issue and complete: latency histogram, bytes, slowest request")),
         ("QEMU process sockets", "QEMU's own connections, not the guest's", "on",
          ("net", "tcp_v4/v6_connect, sampled tcp_retransmit_skb: the QEMU process only")),
+        ("The VMM itself, and what it starts", "a QEMU process that opens files or reaches around itself", "on",
+         ("vmm", "openat, ptrace, mount, setns, module and kexec calls, and fork and exit: what a VMM never does")),
         ("VM tap (or the host veth vh*)", "where the guest's own traffic crosses", "on",
-         ("tap", "TCX ingress and egress: guest flows, DNS names, handshake outcomes, isolation")),
+         ("tap", "TCX ingress and egress: guest flows, DNS and TLS names, handshakes, isolation, egress policy")),
         ("Host network stack, qdisc, NIC", "where packets are dropped and freed", "grey",
          ("drops", "skb:kfree_skb on the tap: the kernel's reason and the function that freed it")),
     ]
@@ -208,7 +210,7 @@ def system():
     o.append(text(14, 26, "HYPERVISOR", 10, 700, DEEP, spacing=1.2))
     o.append(card(14, 38, 402, 46, "Guests (QEMU, libvirt, kubevirt, FluxVM)", "", 40, GREY, LINE, size=9.5, tsize=11))
     o.append(text(26, 74, "seen from outside; nothing is installed in them", 9, 400, SOFT))
-    o.append(card(14, 100, 402, 62, "kvm  ·  sched  ·  block  ·  net  ·  tap  ·  drops", "", 40, PALE, SIG, size=9.5, tsize=11))
+    o.append(card(14, 100, 402, 62, "kvm  ·  sched  ·  block  ·  net  ·  vmm  ·  tap  ·  drops", "", 40, PALE, SIG, size=9.5, tsize=11))
     o.append(text(26, 134, "eBPF, CO-RE. Hot paths stay in maps; a small ring carries discrete events", 9, 400, SOFT))
     o.append(text(26, 148, "a program the kernel cannot support reports detached, with the reason", 9, 400, SOFT))
     o.append(line(215, 84, 215, 100, SOFT, 1.4, None, True))
@@ -217,10 +219,10 @@ def system():
     o.append(text(26, 228, "bearer keys: an admin key, and a read-only key that cannot isolate", 9, 400, SOFT))
     o.append(line(215, 162, 215, 182, SIG, 1.5, "4 3", True, "o"))
     o.append(card(14, 256, 402, 40, "/var/lib/shukra  (0700)", "", 40, "#fff", LINE, size=9.5, tsize=10.5))
-    o.append(text(190, 281, "detections · isolations · recorder · snapshots", 9, 400, SOFT))
+    o.append(text(190, 281, "detections · recorder · snapshots · policies · actions", 9, 400, SOFT))
     o.append(line(215, 244, 215, 256, SOFT, 1.2, "3 3"))
     outs = [
-        (10, "shukractl and the console", "the operator loop: 17 commands, 14 pages", "#fff", INK, None),
+        (10, "shukractl and the console", "the operator loop: 21 commands, 16 pages", "#fff", INK, None),
         (70, "Prometheus", "GET /metrics with the read-only key", "#fff", INK, None),
         (130, "Alert sinks", "signed webhook, syslog, JSONL file", "#fff", INK, None),
         (190, "Detection rules", "one YAML file, reloaded on SIGHUP", "#fff", INK, None),
@@ -293,7 +295,7 @@ def baseline():
     o.append(text(300, 78, "24 h later (learn: 24h is the default)", 9, 700, DEEP, "middle"))
     kinds = [
         ("new-destination", "medium", "a network the guest never contacted before: the /24 of an IPv4 address, the /64 of an IPv6 address"),
-        ("new-dns-suffix", "low", "a site it never looked up: example.co.uk, not the host name in front of it"),
+        ("new-dns-suffix", "low", "a site it never looked up or asked for by TLS name: example.co.uk, not the host name in front of it"),
         ("new-inbound-peer", "medium", "a network that never connected in to the guest before"),
     ]
     for i, (t, sev, b) in enumerate(kinds):
@@ -310,6 +312,112 @@ def baseline():
     return svg(720, 276, "".join(o), "Learned baselines: a learning period, then first sightings reported once")
 
 
+# ---------------------------------------------------------------- 10. VMM tripwires
+def tripwire():
+    o = []
+    o.append(text(0, 12, "WHAT IS WATCHED", 9.5, 700, DEEP, spacing=1.1))
+    o.append(rect(0, 24, 206, 44, PALE, SIG, 1.6, 9))
+    o.append(text(12, 43, "A QEMU process (the VMM)", 10.5, 700))
+    o.append(text(12, 58, "found from /proc, as for every program", 9, 400, SOFT))
+    o.append(rect(0, 84, 206, 44, GREY, LINE, 1.4, 9))
+    o.append(text(12, 103, "A shell it started", 10.5, 700))
+    o.append(text(12, 118, "however deep: descent is recorded at fork", 9, 400, SOFT))
+    o.append(rect(0, 144, 206, 44, GREY, LINE, 1.4, 9))
+    o.append(text(12, 163, "What that shell ran, and so on", 10.5, 700))
+    o.append(text(12, 178, "a job that outlives its parent is still followed", 9, 400, SOFT))
+    o.append(line(103, 68, 103, 84, SOFT, 1.4, None, True))
+    o.append(line(103, 128, 103, 144, SOFT, 1.4, None, True))
+
+    o.append(text(246, 12, "THE vmm PROGRAM", 9.5, 700, DEEP, spacing=1.1))
+    o.append(rect(246, 24, 216, 164, "#fff", SIG, 1.6, 9))
+    o.append(text(258, 43, "13 syscall tracepoints, fork and exit", 10.5, 700))
+    y = 60
+    for t in ["openat, openat2, open: the file, as the process gave it", "ptrace, process_vm_readv and writev, mount, unshare, setns, module and kexec loads: with their arguments", "at most 300 reported a second for a VMM and everything it started"]:
+        b, h = lines(270, y, t, cw(196, 9), 9, 10.8, 400, SOFT)
+        o.append(circle(261, y - 3, 2.6, SIG))
+        o.append(b)
+        y += h + 6
+    o.append(line(206, 106, 246, 106, SIG, 1.6, None, True, "o"))
+
+    o.append(text(502, 12, "shukrad JUDGES IT", 9.5, 700, DEEP, spacing=1.1))
+    o.append(rect(502, 24, 218, 44, GREY, LINE, 1.4, 9))
+    o.append(text(514, 43, "Sensitive list, path cleaned first", 10.5, 700))
+    o.append(text(514, 58, "decided in the daemon, so it can change", 9, 400, SOFT))
+    dets = [("vmm-sensitive-open", "critical"), ("vmm-syscall", "critical or high"), ("vmm-flood", "critical")]
+    for i, (n, sev) in enumerate(dets):
+        yy = 84 + i * 36
+        o.append(rect(502, yy, 218, 30, "#fff", SIG, 1.4, 8))
+        o.append(text(514, yy + 19, n, 9.6, 700, DEEP, mono=True))
+        o.append(text(708, yy + 19, sev, 9, 700, SOFT, "end"))
+    o.append(line(462, 46, 502, 46, SIG, 1.6, None, True, "o"))
+    o.append(line(611, 68, 611, 84, SOFT, 1.4, None, True))
+    o.append(text(0, 214, "It reports; it does not stop anything. Isolation cuts the guest's network at its tap, not a process in the VMM's tree.", 9.5, 400, SOFT, italic=True))
+    return svg(720, 226, "".join(o), "The VMM tripwire: what is watched, the vmm program and the detections it raises")
+
+
+# ---------------------------------------------------------------- 11. egress policy
+def policy_flow():
+    o = []
+    o.append(text(0, 12, "THREE STAGES, EACH SAFER THAN THE NEXT IS RISKY", 9.5, 700, DEEP, spacing=1.1))
+    stages = [
+        (0, "1  LEARN", "the VM's baseline, as a list of networks (/24 and /64)", "shukractl policy learn web: a proposal, and how it differs from what the VM has. Nothing changes", GREY, LINE),
+        (260, "2  AUDIT", "drops nothing", "what would have been dropped is counted and reported. policy apply web --mode audit --from-baseline", PALE, SIG),
+        (520, "3  ENFORCE", "with a timer", "drops what the VM starts outside the list. policy apply web --mode enforce --confirm 10m", PALE, SIG),
+    ]
+    for x, t, sub, b, f, st in stages:
+        o.append(rect(x, 24, 200, 124, f, st, 1.6, 9))
+        o.append(text(x + 12, 44, t, 11.5, 700))
+        o.append(text(x + 12, 58, sub, 8.8, 700, DEEP))
+        bb, _ = lines(x + 12, 74, b, cw(200, 9), 9, 10.8, 400, SOFT)
+        o.append(bb)
+    o.append(line(200, 86, 260, 86, SOFT, 1.6, None, True))
+    o.append(line(460, 86, 520, 86, SOFT, 1.6, None, True))
+    o.append(line(575, 148, 505, 168, SOFT, 1.5, None, True))
+    o.append(line(665, 148, 665, 168, RED, 1.5, "4 3", True, "r"))
+    o.append(rect(400, 168, 210, 50, "#fff", INK, 1.4, 9))
+    o.append(text(412, 187, "Confirmed: it stays", 10.5, 700))
+    o.append(text(412, 203, "policy confirm web", 9, 400, SOFT, mono=True))
+    o.append(rect(630, 168, 90, 50, "#fff8f6", RED, 1.4, 9))
+    o.append(text(640, 187, "Time is up", 10.5, 700, RED))
+    o.append(text(640, 203, "goes back", 9, 400, SOFT))
+    b, _ = lines(0, 184, "Even if the daemon was down when the time ran out: it reverts on its first pass after it starts, and until then the kernel keeps enforcing.", cw(380, 9.5), 9.5, 12, 400, SOFT)
+    o.append(b)
+    o.append(rect(0, 236, 720, 34, WARM, SIG, 1.4, 9))
+    o.append(text(12, 257, "The management allow list (-isolate-allow) is never judged, whatever a policy says. A wrong policy cannot cut a VM off from the network that manages it.", 9.5, 700))
+    return svg(720, 278, "".join(o), "An egress policy: learn, audit, enforce with a timer, and the management floor")
+
+
+# ---------------------------------------------------------------- 12. responses
+def response_flow():
+    o = []
+    o.append(text(0, 12, "A RESPONSE CAN DO ONE THING: ISOLATE THE VM. BY DEFAULT IT ONLY PROPOSES", 9.5, 700, DEEP, spacing=0.8))
+    steps = [
+        ("Detection", "a rule fires for a VM", GREY, LINE),
+        ("Response", "matches a rule you named", GREY, LINE),
+        ("Guardrails", "protected list, cap, cooldown", PALE, SIG),
+        ("Propose", "pending. Bundle captured, announced", PALE, SIG),
+        ("A person", "approves, or rejects. A lapse does nothing", "#fff", INK),
+        ("Isolated", "at the tap; the allow list stays reachable", PALE, SIG),
+    ]
+    w, gap = 108, 14.4
+    xs = []
+    for i, (t, b, f, st) in enumerate(steps):
+        x = i * (w + gap)
+        xs.append(x)
+        o.append(rect(x, 24, w, 84, f, st, 1.6, 9))
+        o.append(text(x + 10, 43, t, 10.5, 700))
+        bb, _ = lines(x + 10, 58, b, cw(w, 8.8), 8.8, 10.6, 400, SOFT)
+        o.append(bb)
+        if i < len(steps) - 1:
+            o.append(line(x + w, 66, x + w + gap, 66, SOFT, 1.5, None, True))
+    gx = xs[2] + w / 2
+    ix = xs[5] + w / 2
+    o.append(path(f"M{gx},108 L{gx},134 L{ix},134 L{ix},110", SIG, 1.5, "4 3", True, marker="o"))
+    o.append(text((gx + ix) / 2, 128, "mode: enforce, for the rules it names only: carried out at once", 9, 700, DEEP, "middle"))
+    o.append(text(0, 158, "dry_run: true records what would have been done and changes nothing, so a response can be tried on real detections first.", 9.2, 400, SOFT, italic=True))
+    return svg(720, 168, "".join(o), "A detection becomes a proposal that a person decides, or, only for named rules, an isolation")
+
+
 ALL = {
     "ebpf": ebpf_pipeline,
     "hypervisor": hypervisor,
@@ -320,4 +428,7 @@ ALL = {
     "system": system,
     "rightsize": rightsize,
     "baseline": baseline,
+    "tripwire": tripwire,
+    "policyflow": policy_flow,
+    "responseflow": response_flow,
 }

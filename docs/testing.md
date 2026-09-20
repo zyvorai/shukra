@@ -33,7 +33,7 @@ The short version: unit tests run anywhere; the kernel tests need Linux and root
 
 ## Unit tests and the untagged decoders
 
-There are 538 Go test functions in 57 files, and 528 of them run on the default build. The other ten are compiled only with `-tags shukrabpf` on Linux: seven decoder tests for the tap record (`internal/observe/tap_bpf_test.go`) and the three kernel tests below. Every one of the 528 runs on a Mac, which is what keeps CI and a laptop honest about the logic.
+There are 545 Go test functions in 59 files (not counting `TestMain`), and 535 of them run on the default build. The other ten are compiled only with `-tags shukrabpf` on Linux: seven decoder tests for the tap record (`internal/observe/tap_bpf_test.go`) and the three kernel tests below. Every one of the 535 runs on a Mac, which is what keeps CI and a laptop honest about the logic.
 
 What makes that possible is a rule in [development](development.md): **a record the kernel writes is decoded by offset in a file that has no build tag**, so its decoder is unit-tested on any OS. The tests build a record byte by byte, decode it, and check what comes out, and they check what must not come out:
 
@@ -172,7 +172,7 @@ The `CI` job, step by step:
 
 1. **BPF toolchain.** `clang-18`, `llvm-18`, `libbpf-dev` and the kernel's `bpftool`, linked as `clang`, `llvm-strip` and `bpftool`. The step fails if any of the three is missing.
 2. **`make generate`**, and a check that at least one `internal/bpfgen/*_bpfel.go` was written.
-3. **`go test -count=1 ./...`**: the stub build, the 528.
+3. **`go test -count=1 ./...`**: the stub build, the 535.
 4. **`make test-bpf`**: the tagged build and the tap decoder tests.
 5. **BPF integration.** Builds the test binary as the runner user and runs only that binary under `sudo` with `SHUKRA_BPF_TEST=1` and `-test.run TestKernelIntegration`: the connect, block and exec checks and the VMM tripwire test, on the runner's real kernel. (`TestKernelPreemption` is not in this step.)
 6. **`scripts/test-tap-progrun.sh`**: the egress policy's verdicts, packet by packet.

@@ -392,7 +392,7 @@ Events that leave the daemon carry `product: "shukra"`. A joined host event has 
 | [Tap: what is left](docs/roadmap-taptrace.md) | What is not built yet |
 | [Security](SECURITY.md) | What it reads, what it can do, what a hostile guest can do to it |
 | [Changelog](CHANGELOG.md) | What changed |
-| [Product brochure](docs/sales/brochure/Zyvor-Shukra-Product-Brochure.pdf) | Sixteen pages for a buyer: the scenarios, right-sizing and baselines, the limits, and a checklist. [Source and claims table](docs/sales/brochure/README.md) |
+| [Product brochure](docs/sales/brochure/Zyvor-Shukra-Product-Brochure.pdf) | Twenty-two pages for a buyer: the scenarios, right-sizing and baselines, the VMM tripwires, egress policy and responses, what each key and party can do, the measured costs, the limits, and a checklist. [Source and claims table](docs/sales/brochure/README.md) |
 
 ## Development
 
@@ -422,7 +422,7 @@ Default `go build` does not link CO-RE objects, so CI and macOS stay green. The 
 | Workflow | Runs | What it proves |
 |---|---|---|
 | `CI` | every push and pull request | Go and console tests; the tagged build; the programs loaded into the runner's kernel (including the VMM tripwire program); the tap program's egress policy packet by packet; the tap rig (guest traffic, isolation, drops, every handshake outcome with exact counts, DNS and TLS names, egress policy, VMM tripwires); the installer |
-| `Live guest (fluxvm)` | weekly, by hand, and on changes to the tap code, identity code or the test | Two real KVM guests booted by fluxvm on a runner with `/dev/kvm`: the taps are attached as hot-plugs, guest events are attributed, one guest reaches the other, packet counts equal the kernel's, DNS and TLS names arrive as asked, an egress policy in audit mode marks exactly what is outside its list, a real QEMU is on the kernel's watched list and raises no tripwire detection, and the taps come off when the VMs are deleted. It fails, rather than skips, on a runner with no KVM |
+| `Live guest (fluxvm)` | weekly, by hand, and on changes to the tap code, the VMM tripwire code, identity code or the test | Two real KVM guests booted by fluxvm on a runner with `/dev/kvm`: the taps are attached as hot-plugs, guest events are attributed, one guest reaches the other, packet counts equal the kernel's, DNS and TLS names arrive as asked, an egress policy in audit mode marks exactly what is outside its list, a real QEMU is on the kernel's watched list, raises no tripwire detection while it runs, and raises a critical `vmm-sensitive-open` when asked over QMP to open `/etc/shadow`, and the taps come off when the VMs are deleted. It fails, rather than skips, on a runner with no KVM |
 | `Release` | a `v*` tag | The tarball and `.deb` for each architecture |
 
 ### Fixture mode
