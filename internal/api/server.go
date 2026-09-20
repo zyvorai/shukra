@@ -252,6 +252,71 @@ func routes(st *state.State) *http.ServeMux {
 			Message: body.VM + "'s learned baseline was forgotten by " + actor + ": it is learning again from now"})
 		writeJSON(w, http.StatusOK, map[string]any{"vm": body.VM, "forgotten": true})
 	})
+	// Egress policy: which networks a VM may start connections to, learned, audited, then enforced.
+	mux.HandleFunc("GET /api/v1/policy", func(w http.ResponseWriter, r *http.Request) {
+		out := map[string]any{"enabled": false, "persisted": false, "policies": []state.PolicyRow{}, "orphans": []state.PolicyOrphan{},
+			"note": "Which networks each VM may start connections to. Audit reports what would be dropped and drops nothing; enforce drops it, and goes back unless a person confirms it in time. The management allow list is never dropped. See docs/egress-policy.md."}
+		if v := st.Policy(); v != nil {
+			out["enabled"], out["persisted"] = true, v.Persisted()
+			out["policies"] = v.List()
+			out["orphans"] = v.Orphans()
+			if vm := r.URL.Query().Get("vm"); vm != "" {
+				rows := []state.PolicyRow{}
+				if row, ok := v.Get(vm); ok {
+					rows = append(rows, row)
+				}
+				out["policies"] = rows
+			}
+		}
+		writeJSON(w, http.StatusOK, out)
+	})
+	mux.HandleFunc("GET /api/v1/policy/proposal", func(w http.ResponseWriter, r *http.Request) {
+		v := st.Policy()
+		vm := r.URL.Query().Get("vm")
+		if v == nil || vm == "" {
+			http.Error(w, "vm is required", http.StatusBadRequest)
+			return
+		}
+		prop, err := v.Learn(vm)
+		if err != nil {
+			policyError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, prop)
+	})
+	policyAction := func(do func(v state.PolicyView, vm, actor string, body policyBody) (state.PolicyRow, error)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			var body policyBody
+			if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil || body.VM == "" {
+				http.Error(w, "vm is required", http.StatusBadRequest)
+				return
+			}
+			v := st.Policy()
+			if v == nil {
+				http.Error(w, "no egress policy engine in this build", http.StatusConflict)
+				return
+			}
+			actor := r.Header.Get("X-Shukra-Actor")
+			if actor == "" {
+				actor = "api"
+			}
+			row, err := do(v, body.VM, actor, body)
+			if err != nil {
+				policyError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"policy": row})
+		}
+	}
+	mux.HandleFunc("POST /api/v1/policy/apply", policyAction(func(v state.PolicyView, vm, actor string, b policyBody) (state.PolicyRow, error) {
+		return v.Apply(vm, b.PolicyRequest, actor)
+	}))
+	mux.HandleFunc("POST /api/v1/policy/confirm", policyAction(func(v state.PolicyView, vm, actor string, _ policyBody) (state.PolicyRow, error) {
+		return v.Confirm(vm, actor)
+	}))
+	mux.HandleFunc("POST /api/v1/policy/remove", policyAction(func(v state.PolicyView, vm, actor string, _ policyBody) (state.PolicyRow, error) {
+		return v.Remove(vm, actor)
+	}))
 	mux.HandleFunc("GET /api/v1/actions", func(w http.ResponseWriter, r *http.Request) {
 		out := map[string]any{"enabled": false, "pending": 0, "actions": []state.Action{},
 			"note": "What responses decided to do when a detection fired. A proposal waits for a person: POST /api/v1/actions/<id>/approve or /reject. Nothing is done to a VM by a proposal."}
@@ -526,4 +591,25 @@ func orEmpty[T any](s []T) []T {
 		return []T{}
 	}
 	return s
+}
+
+// policyBody is the JSON body of a policy request: the VM, and for apply the request itself.
+type policyBody struct {
+	VM string `json:"vm"`
+	state.PolicyRequest
+}
+
+// policyError answers a failed policy request with the status its cause deserves and the reason, which is
+// written for a person.
+func policyError(w http.ResponseWriter, err error) {
+	code := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, state.ErrPolicyNotFound):
+		code = http.StatusNotFound
+	case errors.Is(err, state.ErrPolicyBad):
+		code = http.StatusBadRequest
+	case errors.Is(err, state.ErrPolicyRefused):
+		code = http.StatusConflict
+	}
+	http.Error(w, err.Error(), code)
 }

@@ -39,9 +39,12 @@ type tapStatC struct {
 	FromPkts, FromBytes, ToPkts, ToBytes, DroppedPkts, DroppedBytes uint64
 }
 
+// tapPolicyC mirrors struct tap_policy: the isolation flag, and the egress policy's mode in what used to be
+// the first spare byte, so the map's layout is what it always was.
 type tapPolicyC struct {
 	Isolated uint8
-	_        [7]uint8
+	Egress   uint8
+	_        [6]uint8
 }
 
 type lpm4Key struct {
@@ -58,6 +61,7 @@ type tapLinks struct {
 	ifindex  uint32
 	in, out  link.Link
 	isolated bool
+	egress   uint8 // the egress policy's mode, as last set or read back from the kernel
 }
 
 func (t *tapLinks) close() {
@@ -276,8 +280,8 @@ func adoptLocked(name string, ifindex uint32) bool {
 		return fail()
 	}
 	var pol tapPolicyC
-	isolated := tapMgr.coll.Maps["tap_policy"].Lookup(ifindex, &pol) == nil && pol.Isolated != 0
-	tapMgr.taps[name] = &tapLinks{ifindex: ifindex, in: in, out: out, isolated: isolated}
+	found := tapMgr.coll.Maps["tap_policy"].Lookup(ifindex, &pol) == nil
+	tapMgr.taps[name] = &tapLinks{ifindex: ifindex, in: in, out: out, isolated: found && pol.Isolated != 0, egress: pol.Egress}
 	return true
 }
 
@@ -325,6 +329,7 @@ func detachTapLocked(name string) {
 	t.unpin()
 	t.close()
 	_ = tapMgr.coll.Maps["tap_policy"].Delete(t.ifindex)
+	clearEgressLocked(t.ifindex)
 	clearOutcomesLocked(t.ifindex)
 	delete(tapMgr.taps, name)
 }
@@ -355,20 +360,22 @@ func dropOrphansLocked(want map[string]bool) {
 		}
 		if ifindex != 0 {
 			_ = tapMgr.coll.Maps["tap_policy"].Delete(ifindex)
+			clearEgressLocked(ifindex)
 		}
 	}
 }
 
-// ShutdownTaps is the daemon's graceful exit. A tap that is not isolated is
-// detached, so nothing of Shukra is left on a VM's interface once it is off. An
-// isolated tap is left enforcing: the point of pinning is that stopping the daemon
-// must not reopen a VM that was cut off. A crash skips this and leaves every tap as
+// ShutdownTaps is the daemon's graceful exit. A tap that is not isolated and has no
+// enforcing egress policy is detached, so nothing of Shukra is left on a VM's interface
+// once it is off. An isolated tap is left enforcing: the point of pinning is that
+// stopping the daemon must not reopen a VM that was cut off. The same goes for a tap
+// whose egress policy is enforcing. One that only audits has nothing to keep. A crash skips this and leaves every tap as
 // it was, for the next start to adopt.
 func ShutdownTaps() (kept, detached int) {
 	tapMgr.mu.Lock()
 	defer tapMgr.mu.Unlock()
 	for name, t := range tapMgr.taps {
-		if tapMgr.pinned && t.isolated {
+		if tapMgr.pinned && (t.isolated || t.egress == EgressEnforce) {
 			t.close() // the pins keep the link attached
 			kept++
 		} else {
@@ -406,7 +413,7 @@ func SetTapIsolated(name string, on bool) error {
 	if t == nil {
 		return fmt.Errorf("tap %s does not carry the program", name)
 	}
-	pol := tapPolicyC{}
+	pol := tapPolicyC{Egress: t.egress}
 	if on {
 		pol.Isolated = 1
 	}
@@ -540,4 +547,144 @@ func SetTapTLS(on bool) error {
 		off = 1
 	}
 	return m.Put(uint32(0), off)
+}
+
+// clearEgressLocked removes everything the egress policy holds for an interface: its allowed networks, its
+// mode (the caller deletes or rewrites the tap_policy value) and its counters. A reused index must never
+// inherit another VM's list.
+func clearEgressLocked(ifindex uint32) {
+	if m := tapMgr.coll.Maps["egress4"]; m != nil {
+		var k egress4Key
+		var v uint8
+		var stale []egress4Key
+		for it := m.Iterate(); it.Next(&k, &v); {
+			if k.Ifindex == ifindex {
+				stale = append(stale, k)
+			}
+		}
+		for _, k := range stale {
+			_ = m.Delete(k)
+		}
+	}
+	if m := tapMgr.coll.Maps["egress6"]; m != nil {
+		var k egress6Key
+		var v uint8
+		var stale []egress6Key
+		for it := m.Iterate(); it.Next(&k, &v); {
+			if k.Ifindex == ifindex {
+				stale = append(stale, k)
+			}
+		}
+		for _, k := range stale {
+			_ = m.Delete(k)
+		}
+	}
+	if m := tapMgr.coll.Maps["egress_stats"]; m != nil {
+		_ = m.Delete(ifindex)
+	}
+}
+
+// SetTapEgress puts a tap under an egress policy: the mode, and the networks its VM may start connections to.
+// It never leaves the tap with less allowed than the old list and the new one together: what is new is added
+// first, the mode is set, and what is no longer wanted is removed last, so a change of list cannot cut off a
+// destination that is on both. Turning the policy off removes the list after the mode.
+func SetTapEgress(name string, mode uint8, prefixes []netip.Prefix) error {
+	tapMgr.mu.Lock()
+	defer tapMgr.mu.Unlock()
+	t := tapMgr.taps[name]
+	if t == nil {
+		return fmt.Errorf("tap %s does not carry the program", name)
+	}
+	m4, m6 := tapMgr.coll.Maps["egress4"], tapMgr.coll.Maps["egress6"]
+	if m4 == nil || m6 == nil {
+		return errors.New("the tap program has no egress policy maps")
+	}
+	if mode > EgressEnforce {
+		return fmt.Errorf("egress mode %d is not off, audit or enforce", mode)
+	}
+	want4, want6 := egressKeys(t.ifindex, prefixes)
+	for _, k := range want4 {
+		if err := m4.Put(k, uint8(1)); err != nil {
+			return fmt.Errorf("adding %s: %w", netip.AddrFrom4(k.Addr), err)
+		}
+	}
+	for _, k := range want6 {
+		if err := m6.Put(k, uint8(1)); err != nil {
+			return fmt.Errorf("adding %s: %w", netip.AddrFrom16(k.Addr), err)
+		}
+	}
+	pol := tapPolicyC{Egress: mode}
+	if t.isolated {
+		pol.Isolated = 1
+	}
+	if err := tapMgr.coll.Maps["tap_policy"].Put(t.ifindex, pol); err != nil {
+		return err
+	}
+	t.egress = mode
+	keep4 := map[egress4Key]bool{}
+	for _, k := range want4 {
+		keep4[k] = true
+	}
+	keep6 := map[egress6Key]bool{}
+	for _, k := range want6 {
+		keep6[k] = true
+	}
+	var k4 egress4Key
+	var k6 egress6Key
+	var v uint8
+	var stale4 []egress4Key
+	var stale6 []egress6Key
+	for it := m4.Iterate(); it.Next(&k4, &v); {
+		if k4.Ifindex == t.ifindex && !keep4[k4] {
+			stale4 = append(stale4, k4)
+		}
+	}
+	for it := m6.Iterate(); it.Next(&k6, &v); {
+		if k6.Ifindex == t.ifindex && !keep6[k6] {
+			stale6 = append(stale6, k6)
+		}
+	}
+	for _, k := range stale4 {
+		_ = m4.Delete(k)
+	}
+	for _, k := range stale6 {
+		_ = m6.Delete(k)
+	}
+	return nil
+}
+
+// TapEgress reports the egress policy's mode for a tap: what was last set, or read back from the kernel when
+// this process adopted the tap.
+func TapEgress(name string) uint8 {
+	tapMgr.mu.Lock()
+	defer tapMgr.mu.Unlock()
+	if t := tapMgr.taps[name]; t != nil {
+		return t.egress
+	}
+	return EgressOff
+}
+
+// TapEgressStats sums each tap's per-CPU egress counters, keyed by interface index.
+func TapEgressStats() map[uint32]EgressStat {
+	tapMgr.mu.Lock()
+	defer tapMgr.mu.Unlock()
+	out := map[uint32]EgressStat{}
+	if tapMgr.coll == nil || tapMgr.coll.Maps["egress_stats"] == nil {
+		return out
+	}
+	var idx uint32
+	var per []egressStatC
+	it := tapMgr.coll.Maps["egress_stats"].Iterate()
+	for it.Next(&idx, &per) {
+		var s EgressStat
+		for _, c := range per {
+			s.Checked += c.Checked
+			s.AuditPkts += c.AuditPkts
+			s.AuditBytes += c.AuditBytes
+			s.DropPkts += c.DropPkts
+			s.DropBytes += c.DropBytes
+		}
+		out[idx] = s
+	}
+	return out
 }

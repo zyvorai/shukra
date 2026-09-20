@@ -60,10 +60,13 @@ struct {
 	__type(value, struct tap_stat);
 } tap_stats SEC(".maps");
 
-/* Set for an ifindex to isolate the VM behind it. */
+/* Set for an ifindex to isolate the VM behind it, and to put it under an egress policy. The value has always
+   had seven spare bytes, and egress takes the first, so the map's layout is what it was: a daemon from before
+   egress policy writes zeros there, which is "off". */
 struct tap_policy {
 	__u8 isolated;
-	__u8 pad[7];
+	__u8 egress; /* EGRESS_OFF, EGRESS_AUDIT or EGRESS_ENFORCE */
+	__u8 pad[6];
 };
 
 struct {
@@ -147,7 +150,8 @@ struct tap_event {
 	__u8 dropped;   /* 17: 1 when isolation dropped this packet */
 	__u8 proto;     /* 18: 6 for a TCP connect, 17 for a new UDP flow */
 	__u8 dir;       /* 19: 0 when the guest sent it, 1 when it was sent to the guest (src is then the peer) */
-	__u8 pad[4];    /* 20 */
+	__u8 policy;    /* 20: 0, or the egress policy's verdict: 1 audit (would have been dropped), 2 dropped */
+	__u8 pad[3];    /* 21 */
 	__u8 src[16];   /* 24: IPv4 uses the first 4 bytes */
 	__u8 dst[16];   /* 40 */
 };                      /* 56 */
@@ -277,6 +281,80 @@ struct {
 	__type(value, struct rate);
 } tls_rate SEC(".maps");
 
+/* Egress policy. A VM whose tap_policy.egress is not off may start a TCP connection or send a UDP datagram only
+   to a network that is on its own allow list (egress4 and egress6), or on the management allow list, which no
+   policy can take away. In audit mode nothing is dropped: what would have been is counted, and reported on the
+   connect event. In enforce mode it is dropped, as isolation drops.
+
+   It judges new things only: a TCP SYN (so an established connection, and a server's answers, are never
+   touched, since they can only exist where the SYN was let through or came in) and a UDP datagram that is not
+   multicast and is not a reply (a datagram to a peer that sent one to the guest in the last minute).
+   ICMP, ARP and everything else are not judged.
+
+   The keys carry the ifindex, so one trie holds every VM's list: prefixlen is 32 (the ifindex, matched
+   exactly) plus the length of the network. */
+#define EGRESS_OFF 0
+#define EGRESS_AUDIT 1
+#define EGRESS_ENFORCE 2
+#define EGRESS_UDP_REPLY_NS 60000000000ull
+
+struct egress4_key {
+	__u32 prefixlen;
+	__u32 ifindex;
+	__u8 addr[4];
+};
+
+struct egress6_key {
+	__u32 prefixlen;
+	__u32 ifindex;
+	__u8 addr[16];
+};
+
+struct {
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
+	__uint(max_entries, 16384);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, struct egress4_key);
+	__type(value, __u8);
+} egress4 SEC(".maps");
+
+struct {
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
+	__uint(max_entries, 16384);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, struct egress6_key);
+	__type(value, __u8);
+} egress6 SEC(".maps");
+
+/* What the policy did, per tap and per CPU. checked is every new connection or datagram it judged. */
+struct egress_stat {
+	__u64 checked;
+	__u64 audit_pkts;
+	__u64 audit_bytes;
+	__u64 drop_pkts;
+	__u64 drop_bytes;
+};
+
+struct {
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+	__uint(type, BPF_MAP_TYPE_PERCPU_HASH);
+	__uint(max_entries, 1024);
+	__type(key, __u32); /* ifindex */
+	__type(value, struct egress_stat);
+} egress_stats SEC(".maps");
+
+/* UDP flows that a peer started, so the guest's answers to them are not judged. The key is what the guest's
+   answer looks like (guest as source), and the map is an LRU of a fixed size that is not pinned: the guest
+   cannot grow it and a restart does not inherit it. */
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, 65536);
+	__type(key, struct flow_key);
+	__type(value, __u64);
+} egress_udp_in SEC(".maps");
+
 /* TCP handshake outcomes. A SYN is remembered until it is answered: a SYN-ACK means the connection was
    accepted, an RST means it was refused, and one that is never answered is counted as a timeout by
    userspace (BPF has no timers), which sweeps the pending table. dir says who started it. */
@@ -381,7 +459,7 @@ static __always_inline int may_emit(__u32 ifindex) {
 }
 
 static __always_inline void emit_connect(__u32 ifindex, __u8 family, __u8 proto, const __u8 *src, const __u8 *dst,
-					 __u16 sport, __u16 dport, __u8 dropped, __u8 dir) {
+					 __u16 sport, __u16 dport, __u8 dropped, __u8 dir, __u8 policy) {
 	if (!may_emit(ifindex))
 		return;
 	struct tap_event *e = bpf_ringbuf_reserve(&tap_events, sizeof(*e), 0);
@@ -396,6 +474,7 @@ static __always_inline void emit_connect(__u32 ifindex, __u8 family, __u8 proto,
 	e->proto = proto;
 	e->dropped = dropped;
 	e->dir = dir;
+	e->policy = policy;
 	__u32 n = family == FAMILY_INET ? 4 : 16;
 	/* Constant-size copies so the verifier can bound them. */
 	if (n == 4) {
@@ -445,6 +524,91 @@ static __always_inline int allowed6(const __u8 *addr) {
 	struct lpm6_key k = {.prefixlen = 128};
 	__builtin_memcpy(k.addr, addr, 16);
 	return bpf_map_lookup_elem(&allow6, &k) != 0;
+}
+
+static __always_inline int egress_in4(__u32 ifindex, const __u8 *addr) {
+	struct egress4_key k = {.prefixlen = 64, .ifindex = ifindex};
+	__builtin_memcpy(k.addr, addr, 4);
+	return bpf_map_lookup_elem(&egress4, &k) != 0;
+}
+
+static __always_inline int egress_in6(__u32 ifindex, const __u8 *addr) {
+	struct egress6_key k = {.prefixlen = 160, .ifindex = ifindex};
+	__builtin_memcpy(k.addr, addr, 16);
+	return bpf_map_lookup_elem(&egress6, &k) != 0;
+}
+
+static __always_inline struct egress_stat *egress_stat_for(__u32 ifindex) {
+	struct egress_stat *s = bpf_map_lookup_elem(&egress_stats, &ifindex);
+	if (s)
+		return s;
+	struct egress_stat zero = {};
+	bpf_map_update_elem(&egress_stats, &ifindex, &zero, BPF_NOEXIST);
+	return bpf_map_lookup_elem(&egress_stats, &ifindex);
+}
+
+/* The flow key of a UDP datagram as the guest sends it: the guest is the source. */
+static __always_inline void udp_key(struct flow_key *k, __u32 ifindex, __u8 family, const __u8 *src, const __u8 *dst,
+				    __u16 sport, __u16 dport) {
+	k->ifindex = ifindex;
+	k->sport = sport;
+	k->dport = dport;
+	k->family = family;
+	if (family == FAMILY_INET) {
+		__builtin_memcpy(k->src, src, 4);
+		__builtin_memcpy(k->dst, dst, 4);
+	} else {
+		__builtin_memcpy(k->src, src, 16);
+		__builtin_memcpy(k->dst, dst, 16);
+	}
+}
+
+/* A UDP datagram sent TO the guest: remember that the guest may answer it. src is the peer, dst the guest. The
+   key is the answer's, so it is written with the guest as the source, and only when it is new or old enough to
+   need a refresh. */
+static __always_inline void egress_udp_seen(__u32 ifindex, __u8 family, const __u8 *src, const __u8 *dst, __u16 sport,
+					    __u16 dport) {
+	struct flow_key k = {};
+	udp_key(&k, ifindex, family, dst, src, dport, sport);
+	__u64 now = bpf_ktime_get_ns();
+	__u64 *last = bpf_map_lookup_elem(&egress_udp_in, &k);
+	if (last && now - *last < EGRESS_UDP_REPLY_NS / 12)
+		return;
+	bpf_map_update_elem(&egress_udp_in, &k, &now, BPF_ANY);
+}
+
+/* The verdict on a new TCP connection or UDP datagram from a guest whose tap has an egress policy: 0 to let it
+   through, 1 in audit mode when it is outside the policy, 2 in enforce mode when it is. */
+static __always_inline int egress_check(__u32 ifindex, __u8 family, const __u8 *src, const __u8 *dst, __u16 sport,
+					__u16 dport, __u8 l4, __u8 mode, __u32 len) {
+	struct egress_stat *st = egress_stat_for(ifindex);
+	if (st)
+		st->checked++;
+	int inside;
+	if (family == FAMILY_INET)
+		inside = allowed4(dst) || egress_in4(ifindex, dst);
+	else
+		inside = allowed6(dst) || egress_in6(ifindex, dst);
+	if (!inside && l4 == IPPROTO_UDP_) {
+		struct flow_key k = {};
+		udp_key(&k, ifindex, family, src, dst, sport, dport);
+		__u64 *last = bpf_map_lookup_elem(&egress_udp_in, &k);
+		inside = last && bpf_ktime_get_ns() - *last < EGRESS_UDP_REPLY_NS;
+	}
+	if (inside)
+		return 0;
+	if (mode == EGRESS_ENFORCE) {
+		if (st) {
+			st->drop_pkts++;
+			st->drop_bytes += len;
+		}
+		return 2;
+	}
+	if (st) {
+		st->audit_pkts++;
+		st->audit_bytes += len;
+	}
+	return 1;
 }
 
 static __always_inline struct tap_outcome *outcome_for(__u32 ifindex) {
@@ -768,6 +932,8 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 
 	struct tap_policy *pol = bpf_map_lookup_elem(&tap_policy, &ifindex);
 	int isolated = pol && pol->isolated;
+	__u8 egress = pol ? pol->egress : EGRESS_OFF;
+	__u8 verdict = 0; /* the egress policy's, for the connect event */
 	int drop = 0;
 
 	__u8 family = 0;
@@ -857,6 +1023,21 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 		drop = 1;
 	}
 
+	/* The egress policy, when this tap has one. What a peer sends is only remembered (UDP, so that the guest's
+	   answers are not judged); what the guest sends is judged if it is new: a SYN, or a datagram that is neither
+	   multicast nor an answer. It comes before the handshake is followed, so that a connection the policy
+	   dropped is counted as blocked, as one isolation dropped is. An isolated tap is already dropping all. */
+	if (egress != EGRESS_OFF && src && dst) {
+		if (!from_guest) {
+			if (l4 == IPPROTO_UDP_)
+				egress_udp_seen(ifindex, family, src, dst, sport, dport);
+		} else if (!drop && ((l4 == IPPROTO_TCP_ && syn) || (l4 == IPPROTO_UDP_ && !is_multicast(family, dst)))) {
+			verdict = egress_check(ifindex, family, src, dst, sport, dport, l4, egress, len);
+			if (verdict == 2)
+				drop = 1;
+		}
+	}
+
 	/* Follow the TCP handshake: what was answered, refused, or is still waiting, either way round. */
 	int inbound_new = 0;
 	if (l4 == IPPROTO_TCP_ && src && dst && (syn || synack || rst))
@@ -864,9 +1045,9 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 
 	if (from_guest && src && dst) {
 		if (syn)
-			emit_connect(ifindex, family, IPPROTO_TCP_, src, dst, sport, dport, drop, DIR_OUT);
+			emit_connect(ifindex, family, IPPROTO_TCP_, src, dst, sport, dport, drop, DIR_OUT, verdict);
 		else if (l4 == IPPROTO_UDP_ && !is_multicast(family, dst) && new_udp_flow(ifindex, family, src, dst, sport, dport))
-			emit_connect(ifindex, family, IPPROTO_UDP_, src, dst, sport, dport, drop, DIR_OUT);
+			emit_connect(ifindex, family, IPPROTO_UDP_, src, dst, sport, dport, drop, DIR_OUT, verdict);
 		if (l4 == IPPROTO_UDP_ && dport == 53 && l4off)
 			dns_query(skb, ifindex, family, src, dst, l4off, drop);
 		/* A TCP segment that carries data: its payload may be the start of a ClientHello. */
@@ -874,7 +1055,7 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 			tls_hello(skb, ifindex, family, src, dst, sport, dport, tlsoff, drop);
 	} else if (inbound_new) {
 		/* Someone connecting INTO the guest. src is the peer, dst is the guest. */
-		emit_connect(ifindex, family, IPPROTO_TCP_, src, dst, sport, dport, drop, DIR_IN);
+		emit_connect(ifindex, family, IPPROTO_TCP_, src, dst, sport, dport, drop, DIR_IN, 0);
 	}
 
 account:;

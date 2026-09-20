@@ -75,6 +75,10 @@ type Event struct {
 	DNSName      string `json:"dns_name,omitempty"`
 	QType        string `json:"qtype,omitempty"`
 	DNSTruncated bool   `json:"dns_truncated,omitempty"`
+	// Policy is set on a guest_connect or guest_flow that the VM's egress policy judged to be outside it:
+	// "audit" when it would have been dropped (and was not), "enforce" when it was. Blocked is also set in the
+	// second case.
+	Policy string `json:"policy,omitempty"`
 	// SNI, ALPN, TLSVersion, JA3, ECH and TLSTruncated are set on guest_tls events. SNI is lower-cased and
 	// made printable. TLSVersion is the highest version the client offered. JA3 is only set when the whole
 	// hello was seen. ECH says the hello carries Encrypted Client Hello, so SNI is the outer name at most.

@@ -81,6 +81,9 @@ There is no `_sum` series. The kernel keeps buckets, not a total, and a sum buil
 | `shukra_tap_connect_attempts_total`, `shukra_tap_connect_retransmits_total` | counter, `vm`, `tap`, `direction` (`out` is the guest's own, `in` is made to it) |
 | `shukra_tap_connect_outcomes_total` | counter, `vm`, `tap`, `direction`, `result` (`accepted`, `refused`, `timed_out` or `ignored`, `blocked`) |
 | `shukra_tap_handshake_seconds` | histogram, `vm`, `tap`. SYN to SYN-ACK of the guest's own connections |
+| `shukra_egress_policy_mode` | gauge, `vm`, `tap`. The egress policy's mode as the kernel has it: 0 off, 1 audit, 2 enforce. Only for a VM that has a policy |
+| `shukra_egress_policy_unconfirmed` | gauge, `vm`. 1 while an enforcing policy waits to be confirmed, after which it goes back to what it replaced |
+| `shukra_egress_checked_total`, `shukra_egress_audit_packets_total`, `shukra_egress_audit_bytes_total`, `shukra_egress_dropped_packets_total`, `shukra_egress_dropped_bytes_total` | counter, `vm`, `tap`. New connections and datagrams the policy judged; what audit mode would have dropped; what enforcement dropped. See [egress policy](egress-policy.md) |
 | `shukra_tap_kernel_drops_total` | counter, `vm`, `tap`, `reason`. Only while the drops program is measuring. The Shukra/other split is on `/api/v1/trace/drops`, not here, because it is a difference of two counters read a moment apart and can dip |
 
 Useful queries for the guest signals:

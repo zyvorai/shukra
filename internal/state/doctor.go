@@ -341,6 +341,53 @@ func (s *State) Doctor() []Check {
 		}
 	}
 
+	// Egress policy, only when a VM has one or the kernel is applying one nobody recorded.
+	if pv := s.Policy(); pv != nil {
+		rows, orphans := pv.List(), pv.Orphans()
+		var problems, unconfirmed []string
+		var audit, enforce int
+		var wouldDrop uint64
+		for _, r := range rows {
+			if r.Problem != "" {
+				problems = append(problems, r.VM+": "+r.Problem)
+			}
+			if r.Revert != nil {
+				unconfirmed = append(unconfirmed, r.VM+" goes back to "+r.Revert.To+" at "+r.Revert.Until.UTC().Format(time.RFC3339))
+			}
+			if r.Mode == "enforce" {
+				enforce++
+			} else {
+				audit++
+			}
+			for _, t := range r.Taps {
+				wouldDrop += t.AuditPkts
+			}
+		}
+		switch {
+		case len(orphans) > 0:
+			var names []string
+			for _, o := range orphans {
+				names = append(names, o.VM+" ("+o.Tap+", "+o.Mode+")")
+			}
+			add("egress-policy", "warn", strconv.Itoa(len(orphans))+" taps apply an egress policy that nobody has a record of",
+				"The kernel is applying it, so it is dropping or auditing whatever it lists, and the daemon cannot say what that is or ever revert it: "+briefList(names)+". The record was lost, or something else set it.",
+				"shukractl policy remove <vm> lifts it and puts the tap right, and a new one can be applied after.")
+		case len(problems) > 0:
+			add("egress-policy", "warn", "The kernel is not doing what an egress policy says",
+				briefList(problems)+".", "It is put right on the daemon's next pass; if it stays, the tap program may have failed to take the list: see the daemon's log.")
+		case len(unconfirmed) > 0:
+			add("egress-policy", "warn", strconv.Itoa(len(unconfirmed))+" enforcing egress policies are waiting to be confirmed",
+				briefList(unconfirmed)+". Unconfirmed, a policy is taken off again, and the VM goes back to what it had.",
+				"shukractl policy confirm <vm> keeps it, once the VM is seen to be working.")
+		case len(rows) > 0:
+			detail := ""
+			if wouldDrop > 0 {
+				detail = strconv.FormatUint(wouldDrop, 10) + " new connections or datagrams would have been dropped in audit mode: shukractl policy shows which VMs."
+			}
+			add("egress-policy", "ok", "Egress policy is on for "+strconv.Itoa(len(rows))+" VMs ("+strconv.Itoa(audit)+" audit, "+strconv.Itoa(enforce)+" enforce)", detail, "")
+		}
+	}
+
 	// Worst first, and stable within a status.
 	for i := 1; i < len(out); i++ {
 		for j := i; j > 0 && statusRank[out[j].Status] > statusRank[out[j-1].Status]; j-- {

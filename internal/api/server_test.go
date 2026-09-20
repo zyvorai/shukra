@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -1212,5 +1214,192 @@ func TestMetricsShowNothingForAViewWithNoResponses(t *testing.T) {
 	st.SetActions(&actionsView{enabled: false, list: []state.Action{{ID: "a-1", Status: "pending"}}})
 	if strings.Contains(get(h, "/metrics", "k").Body.String(), "shukra_actions") {
 		t.Fatal("series for responses that are not configured")
+	}
+}
+
+type policyFake struct {
+	rows      []state.PolicyRow
+	orphans   []state.PolicyOrphan
+	persisted bool
+	err       error
+	// what the last request was
+	verb, vm, actor string
+	req             state.PolicyRequest
+}
+
+func (p *policyFake) List() []state.PolicyRow { return p.rows }
+func (p *policyFake) Get(vm string) (state.PolicyRow, bool) {
+	for _, r := range p.rows {
+		if r.VM == vm {
+			return r, true
+		}
+	}
+	return state.PolicyRow{}, false
+}
+func (p *policyFake) Learn(vm string) (state.PolicyProposal, error) {
+	p.verb, p.vm = "learn", vm
+	if p.err != nil {
+		return state.PolicyProposal{}, p.err
+	}
+	return state.PolicyProposal{VM: vm, Allow: []string{"203.0.113.0/24"}, Current: []string{}, Added: []string{"203.0.113.0/24"}, Removed: []string{}}, nil
+}
+func (p *policyFake) done(verb, vm, actor string) (state.PolicyRow, error) {
+	p.verb, p.vm, p.actor = verb, vm, actor
+	if p.err != nil {
+		return state.PolicyRow{}, p.err
+	}
+	return state.PolicyRow{VM: vm, Mode: "audit", Allow: []string{}, Taps: []state.PolicyTap{}}, nil
+}
+func (p *policyFake) Apply(vm string, req state.PolicyRequest, actor string) (state.PolicyRow, error) {
+	p.req = req
+	return p.done("apply", vm, actor)
+}
+func (p *policyFake) Confirm(vm, actor string) (state.PolicyRow, error) {
+	return p.done("confirm", vm, actor)
+}
+func (p *policyFake) Remove(vm, actor string) (state.PolicyRow, error) {
+	return p.done("remove", vm, actor)
+}
+func (p *policyFake) Orphans() []state.PolicyOrphan { return p.orphans }
+func (p *policyFake) Persisted() bool               { return p.persisted }
+
+func TestThePolicyEndpointIsEmptyWithoutAnEngineAndListsWhatThereIsWithOne(t *testing.T) {
+	st := state.New("node-07")
+	h := New(st, "k")
+	body := strings.Join(strings.Fields(get(h, "/api/v1/policy", "k").Body.String()), "")
+	for _, want := range []string{`"enabled":false`, `"persisted":false`, `"policies":[]`, `"orphans":[]`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %s in %s", want, body)
+		}
+	}
+	f := &policyFake{persisted: true, rows: []state.PolicyRow{{VM: "db", Mode: "audit"}, {VM: "web", Mode: "enforce"}}, orphans: []state.PolicyOrphan{{VM: "x", Tap: "tapx", Mode: "enforce"}}}
+	st.SetPolicy(f)
+	var got struct {
+		Enabled, Persisted bool
+		Policies           []struct{ VM, Mode string }
+		Orphans            []struct{ VM, Tap, Mode string }
+	}
+	rec := get(h, "/api/v1/policy", "k")
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || !got.Enabled || !got.Persisted || len(got.Policies) != 2 || len(got.Orphans) != 1 || got.Orphans[0].Tap != "tapx" {
+		t.Fatalf("%v %s", err, rec.Body.String())
+	}
+	got.Policies = nil
+	rec = get(h, "/api/v1/policy?vm=web", "k")
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Policies) != 1 || got.Policies[0].Mode != "enforce" {
+		t.Fatalf("%v %s", err, rec.Body.String())
+	}
+	if body := strings.Join(strings.Fields(get(h, "/api/v1/policy?vm=nobody", "k").Body.String()), ""); !strings.Contains(body, `"policies":[]`) {
+		t.Fatalf("a VM with no policy is an empty list, not null: %s", body)
+	}
+	if rec := get(h, "/api/v1/policy", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("%d", rec.Code)
+	}
+}
+
+func TestOnlyTheAdminKeyChangesAPolicyAndTheRequestAndActorReachTheEngine(t *testing.T) {
+	st := state.New("node-07")
+	f := &policyFake{}
+	st.SetPolicy(f)
+	h := NewWithKeys(st, Keys{Admin: "admin", ReadOnly: "ro"})
+	for _, path := range []string{"/api/v1/policy/apply", "/api/v1/policy/confirm", "/api/v1/policy/remove"} {
+		if rec := post(h, path, "ro", `{"vm":"web","mode":"audit"}`); rec.Code != http.StatusForbidden {
+			t.Fatalf("a read-only key must not change a policy: %s %d", path, rec.Code)
+		}
+	}
+	if f.verb != "" {
+		t.Fatal("a refused request reached the engine")
+	}
+	rec := post(h, "/api/v1/policy/apply", "admin", `{"vm":"web","mode":"enforce","allow":["203.0.113.0/24","10.0.0.1"],"fromBaseline":true,"confirm":"5m","permanent":false}`)
+	if rec.Code != 200 || f.verb != "apply" || f.vm != "web" || f.actor != "tester" || !strings.Contains(rec.Body.String(), `"policy"`) {
+		t.Fatalf("%d %s %+v", rec.Code, rec.Body.String(), f)
+	}
+	if f.req.Mode != "enforce" || !reflect.DeepEqual(f.req.Allow, []string{"203.0.113.0/24", "10.0.0.1"}) || !f.req.FromBaseline || f.req.Confirm != "5m" || f.req.Permanent {
+		t.Fatalf("the request arrived as %+v", f.req)
+	}
+	for verb := range map[string]bool{"confirm": true, "remove": true} {
+		if rec := post(h, "/api/v1/policy/"+verb, "admin", `{"vm":"db"}`); rec.Code != 200 || f.verb != verb || f.vm != "db" {
+			t.Fatalf("%s: %d %+v", verb, rec.Code, f)
+		}
+	}
+	// without an actor header, the API is the actor
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/policy/remove", strings.NewReader(`{"vm":"db"}`))
+	req.Header.Set("Authorization", "Bearer admin")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if f.actor != "api" {
+		t.Fatalf("who acted must never be empty: %q", f.actor)
+	}
+}
+
+func TestAPolicyRequestNeedsAVMAndAnEngine(t *testing.T) {
+	st := state.New("node-07")
+	h := New(st, "k")
+	if rec := post(h, "/api/v1/policy/apply", "k", `{"vm":"web","mode":"audit"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("no engine: %d", rec.Code)
+	}
+	st.SetPolicy(&policyFake{})
+	for _, body := range []string{`{}`, `{"mode":"audit"}`, `not json`, ``} {
+		if rec := post(h, "/api/v1/policy/apply", "k", body); rec.Code != http.StatusBadRequest {
+			t.Fatalf("%q: %d", body, rec.Code)
+		}
+	}
+	if rec := get(h, "/api/v1/policy/proposal", "k"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("a proposal needs a vm: %d", rec.Code)
+	}
+}
+
+func TestEachKindOfPolicyFailureHasItsOwnStatusAndKeepsItsReason(t *testing.T) {
+	st := state.New("node-07")
+	f := &policyFake{}
+	st.SetPolicy(f)
+	h := New(st, "k")
+	for _, tc := range []struct {
+		err  error
+		code int
+	}{
+		{fmt.Errorf("%w: no VM named x", state.ErrPolicyNotFound), http.StatusNotFound},
+		{fmt.Errorf("%w: mode is wrong", state.ErrPolicyBad), http.StatusBadRequest},
+		{fmt.Errorf("%w: enforcing needs a floor", state.ErrPolicyRefused), http.StatusConflict},
+		{errors.New("disk on fire"), http.StatusInternalServerError},
+	} {
+		f.err = tc.err
+		for _, rec := range []*httptest.ResponseRecorder{post(h, "/api/v1/policy/apply", "k", `{"vm":"web","mode":"audit"}`), get(h, "/api/v1/policy/proposal?vm=web", "k")} {
+			if rec.Code != tc.code || !strings.Contains(rec.Body.String(), strings.TrimPrefix(tc.err.Error(), "")) {
+				t.Fatalf("%v: %d %q", tc.err, rec.Code, rec.Body.String())
+			}
+		}
+	}
+	f.err = nil
+	rec := get(h, "/api/v1/policy/proposal?vm=web", "k")
+	if rec.Code != 200 || f.verb != "learn" || f.vm != "web" || !strings.Contains(rec.Body.String(), "203.0.113.0/24") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMetricsShowEgressPolicyOnlyForVMsThatHaveOne(t *testing.T) {
+	st := state.New("node-07")
+	h := New(st, "k")
+	if strings.Contains(get(h, "/metrics", "k").Body.String(), "shukra_egress") {
+		t.Fatal("series for something that is off")
+	}
+	st.SetPolicy(&policyFake{})
+	if strings.Contains(get(h, "/metrics", "k").Body.String(), "shukra_egress") {
+		t.Fatal("an engine with no policies has no series")
+	}
+	st.SetPolicy(&policyFake{rows: []state.PolicyRow{
+		{VM: "web", Mode: "audit", Taps: []state.PolicyTap{{Tap: "tapweb", Kernel: "audit", Checked: 40, AuditPkts: 7, AuditBytes: 700}}},
+		{VM: "db", Mode: "enforce", Revert: &state.PolicyRevert{Until: time.Now()}, Taps: []state.PolicyTap{{Tap: "tapdb1", Kernel: "enforce", DroppedPkts: 3, DroppedBytes: 300}, {Tap: "tapdb2", Kernel: "off"}}},
+	}})
+	text := get(h, "/metrics", "k").Body.String()
+	for _, want := range []string{
+		`shukra_egress_policy_mode{vm="web",tap="tapweb"} 1`, `shukra_egress_policy_mode{vm="db",tap="tapdb1"} 2`, `shukra_egress_policy_mode{vm="db",tap="tapdb2"} 0`,
+		`shukra_egress_policy_unconfirmed{vm="web"} 0`, `shukra_egress_policy_unconfirmed{vm="db"} 1`,
+		`shukra_egress_checked_total{vm="web",tap="tapweb"} 40`,
+		`shukra_egress_audit_packets_total{vm="web",tap="tapweb"} 7`, `shukra_egress_audit_bytes_total{vm="web",tap="tapweb"} 700`,
+		`shukra_egress_dropped_packets_total{vm="db",tap="tapdb1"} 3`, `shukra_egress_dropped_bytes_total{vm="db",tap="tapdb1"} 300`,
+		"# TYPE shukra_egress_dropped_packets_total counter", "# TYPE shukra_egress_policy_mode gauge",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in\n%s", want, text)
+		}
 	}
 }

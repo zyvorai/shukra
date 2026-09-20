@@ -423,3 +423,11 @@ func TestRandomDamageToARealHelloNeverPanics(t *testing.T) {
 		}
 	}
 }
+
+func TestThePolicyByteOfAConnectEventNamesTheVerdictAndAnythingElseIsNone(t *testing.T) {
+	for b, want := range map[byte]string{0: "", 1: "audit", 2: "enforce", 3: "", 255: ""} {
+		if got := policyName(b); got != want {
+			t.Fatalf("%d: %q, want %q", b, got, want)
+		}
+	}
+}
