@@ -105,3 +105,19 @@ func TestDecodeTapTreatsProtoZeroAsTCPForAnUpgrade(t *testing.T) {
 		t.Fatal("an unknown protocol was accepted")
 	}
 }
+
+func TestDecodeTapCarriesTheEgressPolicyVerdictAndAnOlderProgramHasNone(t *testing.T) {
+	b := tapSample(2)
+	copy(b[24:28], net.ParseIP("10.99.0.2").To4())
+	copy(b[40:44], net.ParseIP("198.51.100.7").To4())
+	for verdict, want := range map[byte]string{0: "", 1: "audit", 2: "enforce"} {
+		b[20] = verdict
+		if e, ok := decodeTap(b, nameOf); !ok || e.Policy != want {
+			t.Fatalf("verdict byte %d: %+v %v", verdict, e, ok)
+		}
+	}
+	b[20], b[17] = 2, 1 // an enforced verdict is a blocked connect, as the program marks it
+	if e, _ := decodeTap(b, nameOf); e.Policy != "enforce" || !e.Blocked {
+		t.Fatalf("%+v", e)
+	}
+}

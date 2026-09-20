@@ -451,6 +451,134 @@ stopd; start -isolate-allow 10.99.0.1/32,fd99::1/128
 tls 10.99.0.1:8080 public.example.com
 check "and starting again without the flag turns names back on, whatever the last run left in the map" "[ \"\$(tlsn public.example.com)\" = 1 ]"
 
+echo "== 15. egress policy: audit drops nothing, enforce drops only what is new, and a wrong policy cannot cut off the management network"
+# .3 is what the policy lists, .1 is the management address (-isolate-allow), and .4 is somewhere neither names.
+sudo ip addr add 10.99.0.4/24 dev vethh 2>/dev/null; sudo ip -6 addr add fd99::4/64 dev vethh nodad 2>/dev/null
+FLOOR="-isolate-allow 10.99.0.1/32,fd99::1/128"
+stopd; start $FLOOR
+pol() { api "$U/api/v1/policy"; }
+polq() { pol | J "$1"; }
+apply() { api -s -o "$D/apply.out" -w '%{http_code}' -X POST -d "$1" "$U/api/v1/policy/apply"; }
+pdet() { api "$U/api/v1/events" | J "len([e for e in d['events'] if e['kind']=='detection' and e.get('rule')=='$1' and '$2' in e['message']])"; }
+dropped() { polq "d['policies'][0]['taps'][0]['droppedPackets']"; }
+cat > "$D/udpsend.py" <<'PY'
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+for a in sys.argv[1:]:
+    host, port = a.split(":")
+    s.sendto(b"x", (host, int(port)))
+PY
+cat > "$D/udpecho.py" <<'PY'
+import socket, time
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("0.0.0.0", 5400)); s.settimeout(1)
+end = time.time() + 90
+while time.time() < end:
+    try:
+        d, a = s.recvfrom(100); s.sendto(d, a)
+    except socket.timeout:
+        pass
+PY
+cat > "$D/udpping.py" <<'PY'
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("10.99.0.4", 0)); s.settimeout(3)
+s.sendto(b"ping", ("10.99.0.2", 5400))
+print(s.recvfrom(100)[0] == b"ping")
+PY
+pkt() { api "$U/api/v1/events" | J "len([e for e in d['events'] if e['kind'] in ('guest_connect','guest_flow') and e.get('dst')=='$1' and e.get('policy','')=='$2'])"; }
+
+check "with no baselines, a proposal is refused and says why" "[ \"\$(api -s -o /dev/null -w %{http_code} '$U/api/v1/policy/proposal?vm=taptest')\" = 409 ]"
+check "no VM has a policy to begin with" "[ \"\$(polq \"len(d['policies'])\")\" = 0 ]"
+check "an unknown VM is not found" "[ \"\$(apply '{\"vm\":\"nobody\",\"mode\":\"audit\",\"allow\":[\"10.99.0.3/32\"]}')\" = 404 ]"
+check "a mode nobody knows is a bad request" "[ \"\$(apply '{\"vm\":\"taptest\",\"mode\":\"block\",\"allow\":[\"10.99.0.3/32\"]}')\" = 400 ]"
+check "enforcing without a timer or permanent is refused, and nothing is applied" "[ \"\$(apply '{\"vm\":\"taptest\",\"mode\":\"enforce\",\"allow\":[\"10.99.0.3/32\"]}')\" = 400 ] && [ \"\$(polq \"len(d['policies'])\")\" = 0 ]"
+
+echo "-- audit"
+check "audit is accepted" "[ \"\$(apply '{\"vm\":\"taptest\",\"mode\":\"audit\",\"allow\":[\"10.99.0.3/32\",\"fd99::3/128\"]}')\" = 200 ]"
+check "the kernel is in audit mode on the VM's tap, and the list is canonical" "polq \"[t['kernel'] for p in d['policies'] for t in p['taps']]==['audit'] and d['policies'][0]['allow']==['10.99.0.3/32','fd99::3/128']\" | grep -q True"
+check "a listed address is reachable" "[ \"\$(code4 10.99.0.3)\" = 200 ]"
+check "an address the policy does not list is ALSO reachable: audit drops nothing" "[ \"\$(code4 10.99.0.4)\" = 200 ]"
+check "the management address is reachable" "[ \"\$(code4 10.99.0.1)\" = 200 ]"
+sleep 1
+check "the connection outside the policy is an event marked audit, and the listed one is not marked" "[ \"\$(pkt 10.99.0.4 audit)\" -ge 1 ] && [ \"\$(pkt 10.99.0.3 audit)\" = 0 ] && [ \"\$(pkt 10.99.0.1 audit)\" = 0 ]"
+check "it is a low detection, guest-attributed, naming the VM and the place" "api $U/api/v1/events | J \"any(e['guest_attributed'] and e['vm']['name']=='taptest' and e['severity']=='low' and '10.99.0.4:8080' in e['message'] and 'would have been dropped' in e['message'] for e in d['events'] if e['kind']=='detection' and e.get('rule')=='egress-policy-audit')\" | grep -q True"
+check "the counters say what would have been dropped, and that it was judged" "polq \"d['policies'][0]['taps'][0]['auditPackets']>=1 and d['policies'][0]['taps'][0]['checked']>=3 and d['policies'][0]['taps'][0]['droppedPackets']==0\" | grep -q True"
+check "and they are on /metrics, as is the mode" "api $U/metrics | grep -q 'shukra_egress_audit_packets_total{vm=\"taptest\",tap=\"vethh\"} [1-9]' && api $U/metrics | grep -q 'shukra_egress_policy_mode{vm=\"taptest\",tap=\"vethh\"} 1'"
+check "applying it was announced as a detection" "[ \"\$(pdet policy-applied 'is auditing')\" -ge 1 ]"
+check "the doctor reports the policy and what audit would have dropped" "api $U/api/v1/doctor | J \"[c for c in d['checks'] if c['id']=='egress-policy'][0]['title']\" | grep -q 'Egress policy is on for 1 VMs (1 audit, 0 enforce)'"
+
+echo "-- enforce"
+stopd; start
+check "enforcing is refused without a management allow list: it is the floor no policy can take away" "[ \"\$(apply '{\"vm\":\"taptest\",\"mode\":\"enforce\",\"confirm\":\"60s\"}')\" = 409 ] && grep -q 'management allow list' $D/apply.out"
+check "and auditing needs no such list" "[ \"\$(apply '{\"vm\":\"taptest\",\"mode\":\"audit\"}')\" = 200 ]"
+stopd; start $FLOOR
+check "the audit policy was kept across that restart, and is still audit" "polq \"d['policies'][0]['mode']\" | grep -q audit"
+check "enforcing with a confirmation timer is accepted" "[ \"\$(apply '{\"vm\":\"taptest\",\"mode\":\"enforce\",\"confirm\":\"60s\"}')\" = 200 ]"
+check "it keeps the audit's list, waits to be confirmed, and says what it goes back to" "polq \"d['policies'][0]['mode']=='enforce' and d['policies'][0]['revert']['to']=='audit with 2 networks' and d['policies'][0]['allow']==['10.99.0.3/32','fd99::3/128']\" | grep -q True"
+check "the listed address is still reachable" "[ \"\$(code4 10.99.0.3)\" = 200 ]"
+check "the address outside the policy is now cut off" "[ \"\$(code4 10.99.0.4)\" = 000 ]"
+check "the management address is reachable although the policy does not list it" "[ \"\$(code4 10.99.0.1)\" = 200 ]"
+check "IPv6 is judged the same way: listed passes, outside is cut off" "[ \"\$(code6 fd99::3)\" = 200 ] && [ \"\$(code6 fd99::4)\" = 000 ]"
+N0=$(dropped)
+guest python3 "$D/udpsend.py" 10.99.0.3:5300 10.99.0.4:5300 10.99.0.4:5301; sleep 1
+check "UDP outside the policy is dropped and counted (two datagrams), UDP to a listed address is not" "[ \"\$(dropped)\" -ge $((N0+2)) ]"
+sleep 1
+check "what was dropped is an event marked blocked and enforce, and a medium detection says so" \
+  "[ \"\$(pkt 10.99.0.4 enforce)\" -ge 1 ] && api $U/api/v1/events | J \"any(e['severity']=='medium' and 'was dropped' in e['message'] for e in d['events'] if e['kind']=='detection' and e.get('rule')=='egress-policy-blocked')\" | grep -q True"
+check "the dropped connect is counted as blocked in the handshake outcomes, as isolation's are" "api $U/api/v1/trace/tap | J \"[r['outBlocked'] for r in d['rows'] if r['vm']=='taptest'][0]>=1\" | grep -q True"
+check "and it is in the tap's dropped counters, so it is subtracted from what someone else dropped" "api $U/api/v1/trace/tap | J \"[r['droppedPackets'] for r in d['rows'] if r['vm']=='taptest'][0]>=1\" | grep -q True"
+
+echo "-- a server keeps working: only what the guest starts is judged"
+( cd "$D" && exec sudo ip netns exec g1 python3 -m http.server 8091 --bind 0.0.0.0 >/dev/null 2>&1 ) &
+GSRV=$!
+guest python3 "$D/udpecho.py" >/dev/null 2>&1 &
+GUDP=$!
+sleep 2
+check "a connection made TO the guest from the address the policy does not list is answered (its SYN-ACK and data are not new connections)" "[ \"\$(curl -s -o /dev/null -m 3 -w %{http_code} --interface 10.99.0.4 http://10.99.0.2:8091/)\" = 200 ]"
+check "and so is a UDP datagram to the guest: the guest's answer goes back to the address that sent it" "python3 $D/udpping.py | grep -q True"
+check "while the guest still cannot start a connection there" "[ \"\$(code4 10.99.0.4)\" = 000 ]"
+kill $GSRV $GUDP 2>/dev/null; sudo pkill -f 'http.server 8091' 2>/dev/null
+
+echo "-- the timer: unconfirmed, the policy goes back"
+echo "  waiting for the confirmation to run out (a minute from when it was applied, checked every two seconds)"
+for _ in $(seq 60); do [ "$(polq "d['policies'][0]['mode']")" = audit ] && break; sleep 2; done
+check "the VM went back to the audit it had, with its list" "polq \"d['policies'][0]['mode']=='audit' and d['policies'][0].get('revert') is None and len(d['policies'][0]['allow'])==2\" | grep -q True"
+check "and the kernel with it: the outside address is reachable again" "[ \"\$(code4 10.99.0.4)\" = 200 ]"
+check "the reversion was announced as a medium detection" "[ \"\$(pdet policy-reverted 'gone back to audit')\" -ge 1 ]"
+
+echo "-- confirmed, it stays; and it outlives the daemon"
+check "enforcing again, permanently" "[ \"\$(apply '{\"vm\":\"taptest\",\"mode\":\"enforce\",\"permanent\":true}')\" = 200 ]"
+check "there is nothing waiting to be confirmed" "polq \"d['policies'][0].get('revert') is None\" | grep -q True"
+check "the doctor says nothing is waiting" "! api $U/api/v1/doctor | grep -q 'waiting to be confirmed'"
+check "confirming what is not waiting is refused" "[ \"\$(api -s -o /dev/null -w %{http_code} -X POST -d '{\"vm\":\"taptest\"}' $U/api/v1/policy/confirm)\" = 409 ]"
+check "the outside address is cut off" "[ \"\$(code4 10.99.0.4)\" = 000 ]"
+sudo pkill -9 -f "$BIN -listen"; sleep 2
+check "AFTER A KILL -9 the outside address is still cut off (fail closed), and the listed and management ones still work" "[ \"\$(code4 10.99.0.4)\" = 000 ] && [ \"\$(code4 10.99.0.3)\" = 200 ] && [ \"\$(code4 10.99.0.1)\" = 200 ]"
+start $FLOOR
+check "the restarted daemon has the same policy, and the kernel says enforce" "polq \"d['policies'][0]['mode']=='enforce' and [t['kernel'] for t in d['policies'][0]['taps']]==['enforce'] and d['policies'][0]['taps'][0]['droppedPackets']>=1\" | grep -q True"
+check "the counters carried on across the restart: the kernel kept them" "polq \"d['policies'][0]['taps'][0]['droppedPackets']>=1\" | grep -q True"
+check "nothing is reported as an orphan, and the kernel was not re-applied blindly" "[ \"\$(polq \"len(d['orphans'])\")\" = 0 ] && [ \"\$(code4 10.99.0.4)\" = 000 ]"
+stopd
+check "AFTER A GRACEFUL STOP an enforcing tap is left enforcing, as an isolated one is" "[ \"\$(code4 10.99.0.4)\" = 000 ] && sudo ls /sys/fs/bpf/shukra/tap | grep -q 'link-vethh-in'"
+start $FLOOR
+
+echo "-- a record that was lost is an orphan, and is put right by hand"
+stopd
+sudo rm -f "$D/data/policies.json"
+start $FLOOR
+check "the kernel still enforces what nobody has a record of, and the daemon does not guess about it" "[ \"\$(code4 10.99.0.4)\" = 000 ] && [ \"\$(polq \"len(d['policies'])\")\" = 0 ]"
+check "it is reported as an orphan, and the doctor says so" "polq \"d['orphans'][0]['vm']=='taptest' and d['orphans'][0]['mode']=='enforce'\" | grep -q True && api $U/api/v1/doctor | grep -q 'nobody has a record of'"
+check "removing it puts the tap right whether or not there was a record" "[ \"\$(api -s -o /dev/null -w %{http_code} -X POST -d '{\"vm\":\"taptest\"}' $U/api/v1/policy/remove)\" = 200 ] && [ \"\$(code4 10.99.0.4)\" = 200 ] && [ \"\$(polq \"len(d['orphans'])\")\" = 0 ]"
+check "removing what is not there is not found" "[ \"\$(api -s -o /dev/null -w %{http_code} -X POST -d '{\"vm\":\"taptest\"}' $U/api/v1/policy/remove)\" = 404 ]"
+check "and there is no series for a VM that has no policy" "! api $U/metrics | grep -q 'shukra_egress_policy_mode{vm=\"taptest\"'"
+
+echo "-- a policy and isolation together: isolation wins, and releasing it leaves the policy"
+check "audit again, then isolate" "[ \"\$(apply '{\"vm\":\"taptest\",\"mode\":\"enforce\",\"allow\":[\"10.99.0.3/32\"],\"permanent\":true}')\" = 200 ] && api -s -o /dev/null -X POST -d '{\"vm\":\"taptest\"}' $U/api/v1/isolate && sleep 1 && [ \"\$(code4 10.99.0.3)\" = 000 ]"
+check "the management address is still reachable while isolated" "[ \"\$(code4 10.99.0.1)\" = 200 ]"
+api -s -o /dev/null -X POST -d '{"vm":"taptest"}' $U/api/v1/release; sleep 1
+check "released, the policy is still there: the listed address works and the other is still cut off" "[ \"\$(code4 10.99.0.3)\" = 200 ] && [ \"\$(code4 10.99.0.4)\" = 000 ]"
+api -s -o /dev/null -X POST -d '{"vm":"taptest"}' $U/api/v1/policy/remove; sleep 1
+check "and removing the policy leaves the VM open" "[ \"\$(code4 10.99.0.4)\" = 200 ]"
+sudo ip addr del 10.99.0.4/24 dev vethh 2>/dev/null; sudo ip -6 addr del fd99::4/64 dev vethh 2>/dev/null
 echo "== 16. VMM tripwires: what a VMM, or something it started, opens and calls"
 # The program watches every process that is, or descends from, a QEMU process. The fake VMM's children are that: they
 # open shared libraries as they start, which is reported and never a detection. What follows makes one of them open a

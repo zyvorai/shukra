@@ -111,6 +111,7 @@ type State struct {
 	rollup        RollupStore
 	baselines     BaselineView
 	actions       ActionsView
+	policy        PolicyView
 	lastRoll      time.Time
 	rollWarned    bool
 	clock         func() time.Time

@@ -55,6 +55,22 @@ func (noBPF) Error() string { return "this build has no BPF programs" }
 
 var errNoBPF error = noBPF{}
 
+// EgressKernel cannot reach a kernel program in this build.
+type EgressKernel struct{}
+
+// NewEgressKernel returns an EgressKernel that cannot set anything.
+func NewEgressKernel(*Enforcer) *EgressKernel { return &EgressKernel{} }
+
+func (*EgressKernel) Available() (bool, string) {
+	return false, "this build has no BPF programs, so no policy can be set"
+}
+func (*EgressKernel) CanEnforce() (bool, string) {
+	return false, "this build has no BPF programs, so nothing can be enforced"
+}
+func (*EgressKernel) Set(string, uint8, []netip.Prefix) error { return errNoBPF }
+func (*EgressKernel) Mode(string) uint8                       { return 0 }
+func (*EgressKernel) Stats() []EgressCounters                 { return nil }
+
 // StartVMM reads no ring in this build.
 func StartVMM(func(event.Event)) {}
 

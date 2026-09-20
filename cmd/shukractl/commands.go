@@ -74,6 +74,8 @@ func run(args []string, out io.Writer) error {
 		return getBoard(out, path, has(args[1:], "--json"), formatAdvice)
 	case "baseline":
 		return baselineCmd(args[1:], out)
+	case "policy":
+		return policyCmd(args[1:], out)
 	case "actions":
 		return actionsCmd(args[1:], out)
 	case "approve", "reject":

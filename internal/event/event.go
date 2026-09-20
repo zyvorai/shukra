@@ -81,6 +81,10 @@ type Event struct {
 	DNSName      string `json:"dns_name,omitempty"`
 	QType        string `json:"qtype,omitempty"`
 	DNSTruncated bool   `json:"dns_truncated,omitempty"`
+	// Policy is set on a guest_connect or guest_flow that the VM's egress policy judged to be outside it:
+	// "audit" when it would have been dropped (and was not), "enforce" when it was. Blocked is also set in the
+	// second case.
+	Policy string `json:"policy,omitempty"`
 	// Syscall, Path, Write, Detail and Count are set on vmm_file_open and vmm_syscall events. Comm is the process
 	// that made the call and PID is that process; TGID is the VMM it is, or descends from. Path is as it was
 	// given, made printable. Write says an open asked to write. Detail reads the call's arguments. Count is how

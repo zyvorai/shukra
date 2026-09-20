@@ -53,6 +53,7 @@ Observe. Protect. Explain.
 | Is the host, the disk or a noisy neighbour to blame? | `trace kvm`, `trace sched`, `trace block`: exit handling time, run-queue delay per vCPU thread, block latency histograms |
 | Who took my vCPU's CPU? | `trace sched`, `explain` (`cpu_preempted`): how long the vCPUs were runnable but off a host CPU, and which VM or host process had it |
 | Can it act on a detection, safely? | `responses:` in the rules file: a detection can propose isolating the VM, which a person approves (`shukractl approve`), or, only where you name the rules, do it on its own, with a protected list, a cooldown, an hourly cap and a timed release. Off unless configured |
+| Where may this VM connect to? | `shukractl policy`: a VM's learned baseline becomes a list of networks it may start connections to. Audit it first (nothing is dropped, what would be is counted and reported), then enforce with a timer that reverts it unless a person confirms. The management network can never be cut off. Off until a policy is applied |
 | Is a VMM doing something a VMM never does? | The `vmm` program watches every QEMU process, and what it started, for the files it opens and for `ptrace`, `mount`, `unshare`, `setns` and module or kexec loads. A steady-state VMM does none, so any one is a detection (`vmm-sensitive-open`, `vmm-syscall`), with nothing to configure. On by default; `-vmm-tripwires=false` turns it off |
 | What is new for this VM? | `baselines:` in the rules file, then `shukractl baseline`: each VM's normal networks, sites and inbound peers are learned, and the first sighting of a new one is reported once. No rule to write; off unless you turn it on |
 | Is each VM the right size? | `shukractl advise`: VMs with more vCPUs than they use (halt time, a lower bound) and VMs that want CPU and are not getting it, with the numbers and how sure it is. Advice for a person, never an action |
@@ -219,6 +220,7 @@ By default everything is in memory. `shukrad -data-dir /var/lib/shukra` (the sys
 | `isolations.jsonl` | on every isolate request | last 2048 |
 | `recorder.json` | every minute and on clean shutdown | the per-VM flight recorder |
 | `actions.jsonl`, `incidents/` | on every decision | what responses decided, and the incident bundle each was made on (empty until a response acts; the private directory is created either way) |
+| `policies.json` | on every change | each VM's egress policy: its networks, its mode, and any timer waiting to be confirmed (only when a policy has been applied) |
 | `baselines.json` | every minute, if it changed | what each VM has learned as normal (only when `baselines:` is on) |
 | `snapshots.jsonl` | every 5 minutes | read on demand by `explain --at` and `incident`; not loaded into memory |
 
@@ -264,6 +266,7 @@ Events that leave the daemon carry `product: "shukra"`. A joined host event has 
 | [Attribution](docs/attribution.md) | Host events versus guest events, and what is not measured |
 | [Guest traffic and isolation](docs/tap.md) | The tap program, handshakes, isolate, durability |
 | [Where packets die](docs/drops.md) | The drops program |
+| [Egress policy](docs/egress-policy.md) | Learn what a VM may connect to, audit it, then enforce it with a timer that reverts it |
 | [Responses](docs/responses.md) | Acting on a detection: proposals, approval, and the guardrails |
 | [VMM tripwires](docs/vmm-tripwires.md) | What a QEMU process should never do, and what the program that watches for it costs |
 | [Learned baselines](docs/baselines.md) | What is new for a VM, with no rule to write |

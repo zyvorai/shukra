@@ -3,6 +3,7 @@ import Nav, { type Page } from './components/Nav';
 import PageHero, { type HeroTint } from './components/PageHero';
 import Login from './components/Login';
 import Actions from './pages/Actions';
+import Policy from './pages/Policy';
 import Advice from './pages/Advice';
 import Contention from './pages/Contention';
 import Overview from './pages/Overview';
@@ -14,7 +15,7 @@ import { Detections, Isolate } from './pages/Security';
 import { token, setToken } from './api';
 import { applyTheme, readStoredTheme, toggleTheme, type Theme } from './theme';
 
-const pages: Page[] = ['overview', 'vms', 'recorder', 'explain', 'kvm', 'sched', 'contention', 'advice', 'block', 'programs', 'connections', 'drops', 'detections', 'actions', 'isolate'];
+const pages: Page[] = ['overview', 'vms', 'recorder', 'explain', 'kvm', 'sched', 'contention', 'advice', 'block', 'programs', 'connections', 'drops', 'detections', 'actions', 'policy', 'isolate'];
 
 function readPage(): Page {
   const m = window.location.hash.match(/page=([a-z]+)/);
@@ -36,6 +37,7 @@ const heroes: Partial<Record<Page, { eyebrow: string; title: string; lede: strin
   drops: { eyebrow: 'Network', title: 'Where packets die.', lede: "What the kernel dropped on each VM's tap and why, with Shukra's own isolation subtracted. Another program dropping traffic shows up here.", tint: 'red' },
   detections: { eyebrow: 'Security', title: 'New destinations.', lede: 'Rule hits. A detection only notices. Isolating is a separate, deliberate step.', tint: 'red' },
   actions: { eyebrow: 'Security', title: 'Decide what happens.', lede: 'What responses proposed or did when a detection fired. A proposal changes nothing until a person approves it, and lapses if nobody does.', tint: 'red' },
+  policy: { eyebrow: 'Security', title: 'Where a VM may connect.', lede: 'The networks each VM may start connections to. Audit first: it drops nothing. Enforcing reverts unless someone confirms.', tint: 'red' },
   isolate: { eyebrow: 'Security', title: 'Hold the VM.', lede: "Drops the VM's tap traffic except your management allow list. Nothing happens until you confirm.", tint: 'red' },
 };
 
@@ -88,6 +90,7 @@ export default function App() {
     drops: <Drops />,
     detections: <Detections />,
     actions: <Actions />,
+    policy: <Policy />,
     isolate: <Isolate />,
   }[page];
   const hero = heroes[page];
