@@ -29,6 +29,7 @@ func helpSections() []helpSection {
 		{title: "🔍  Investigate", cmds: []helpCmd{
 			{"vms [--json]", "Virtual machines from the host (QEMU and FluxVM)"},
 			{"explain <vm> [--window 5m|lifetime] [--at TIME|-90m]", "Why this VM looks slow, from the last minute by default, or at a past time from stored history"},
+			{"policy [<vm>] | learn <vm> | apply <vm> --mode audit|enforce [--allow a,b | --from-baseline] [--confirm 5m | --permanent] | confirm <vm> | remove <vm>", "Which networks each VM may start connections to: learned from its baseline, audited (drops nothing), then enforced with a timer that reverts it unless confirmed"},
 			{"baseline [<vm>] [--items] [--forget]", "What each VM has learned as normal (networks, sites, inbound peers), and where its learning period stands"},
 			{"advise [--vm NAME] [--window 5m]", "Is each VM the right size? Over-provisioned, starved, or fine, with the numbers behind it"},
 			{"actions [--all] [--bundle <id> [--out FILE]]", "What responses decided: proposals waiting for a person, and (with --all) what was done or refused"},

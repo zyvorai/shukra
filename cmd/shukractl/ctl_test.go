@@ -1025,3 +1025,189 @@ func TestWatchLinesNameTheDNSNameAndTheTLSServerName(t *testing.T) {
 		t.Fatalf("the two kinds must not borrow each other's fields: %q", lines)
 	}
 }
+
+// policyServer answers every request with body and remembers the last one.
+func policyServer(t *testing.T, code int, body string) (method, path, query, sent *string) {
+	t.Helper()
+	var m, p, q, b string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m, p, q = r.Method, r.URL.EscapedPath(), r.URL.RawQuery
+		raw, _ := io.ReadAll(r.Body)
+		b = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("SHUKRA_URL", srv.URL)
+	return &m, &p, &q, &b
+}
+
+const policyList = `{"enabled":true,"persisted":true,"orphans":[{"vm":"old","tap":"tapold","mode":"enforce"}],"policies":[
+	{"vm":"web","mode":"enforce","allow":["203.0.113.0/24","10.0.0.0/8"],"source":"baseline","by":"alice","applied":"2026-09-20T03:00:00Z","present":true,
+	 "revert":{"until":"2026-09-20T03:05:00Z","to":"audit with 3 networks"},
+	 "taps":[{"tap":"tapweb","kernel":"enforce","checked":120,"auditPackets":0,"auditBytes":0,"droppedPackets":14,"droppedBytes":1400}]},
+	{"vm":"db","mode":"audit","allow":["198.51.100.0/24"],"source":"manual","by":"bob","applied":"2026-09-20T02:00:00Z","present":false,"problem":"the kernel has tapdb in mode off, and the policy says audit",
+	 "taps":[{"tap":"tapdb","kernel":"off","checked":40,"auditPackets":7,"auditBytes":700,"droppedPackets":0,"droppedBytes":0}]}]}`
+
+func TestPolicyListsEveryVMsPolicyWithWhatItHasDoneAndWhatIsWrong(t *testing.T) {
+	_, path, query, _ := policyServer(t, 200, policyList)
+	var buf bytes.Buffer
+	if err := run([]string{"policy"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if *path != "/api/v1/policy" || *query != "" {
+		t.Fatalf("%s?%s", *path, *query)
+	}
+	for _, want := range []string{
+		"EGRESS POLICY  2 VMs",
+		"web  enforce  2 networks (baseline), set by alice at 2026-09-20T03:00:00Z",
+		"UNCONFIRMED: goes back to audit with 3 networks at 2026-09-20T03:05:00Z unless confirmed: shukractl policy confirm web",
+		"tapweb  kernel enforce  judged 120 new connections, 14 dropped (1400 bytes)",
+		"db  audit  1 networks (manual), set by bob", "(VM not running)",
+		"tapdb  kernel off  judged 40 new connections, 7 would have been dropped (700 bytes)",
+		"PROBLEM  the kernel has tapdb in mode off",
+		"ORPHAN  old (tapold) is enforce: the kernel applies a policy nobody has a record of. shukractl policy remove old",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("missing %q:\n%s", want, buf.String())
+		}
+	}
+	if strings.Contains(buf.String(), "dropped (0 bytes)") || strings.Contains(buf.String(), "would have been dropped (0") {
+		t.Fatalf("a zero is not worth saying:\n%s", buf.String())
+	}
+	buf.Reset()
+	if err := run([]string{"policy", "web"}, &buf); err != nil || *query != "vm=web" {
+		t.Fatalf("%v %s", err, *query)
+	}
+}
+
+func TestPolicySaysWhenThereIsNoneAndWhenTheBuildHasNoEngine(t *testing.T) {
+	policyServer(t, 200, `{"enabled":true,"persisted":false,"policies":[],"orphans":[]}`)
+	var buf bytes.Buffer
+	if err := run([]string{"policy"}, &buf); err != nil || !strings.Contains(buf.String(), "0 VMs") || !strings.Contains(buf.String(), "audit only: enforcing needs -data-dir") || !strings.Contains(buf.String(), "policy learn <vm>") {
+		t.Fatalf("%v %q", err, buf.String())
+	}
+	policyServer(t, 200, `{"enabled":false,"policies":[],"orphans":[]}`)
+	buf.Reset()
+	if err := run([]string{"policy"}, &buf); err != nil || !strings.Contains(buf.String(), "not available") {
+		t.Fatalf("%v %q", err, buf.String())
+	}
+}
+
+func TestPolicyLearnShowsWhatWouldBeAllowedAndHowItDiffersFromWhatThereIs(t *testing.T) {
+	_, path, query, _ := policyServer(t, 200, `{"vm":"web","learning":true,"allow":["198.51.100.0/24","203.0.113.0/24"],"current":["203.0.113.0/24","192.0.2.0/24"],"added":["198.51.100.0/24"],"removed":["192.0.2.0/24"],"note":"still learning until later"}`)
+	var buf bytes.Buffer
+	if err := run([]string{"policy", "learn", "web"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if *path != "/api/v1/policy/proposal" || *query != "vm=web" {
+		t.Fatalf("%s?%s", *path, *query)
+	}
+	for _, want := range []string{"POLICY PROPOSAL  web  2 networks  (still learning", "still learning until later", "    198.51.100.0/24", "+ 198.51.100.0/24  (against its current policy)", "- 192.0.2.0/24  (against its current policy)", "policy apply web --mode audit --from-baseline"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("missing %q:\n%s", want, buf.String())
+		}
+	}
+	if err := run([]string{"policy", "learn"}, &buf); err == nil {
+		t.Fatal("a VM is required")
+	}
+	if err := run([]string{"policy", "learn", "--json"}, &buf); err == nil {
+		t.Fatal("a flag is not a VM")
+	}
+}
+
+func TestPolicyApplySendsExactlyWhatWasAskedFor(t *testing.T) {
+	method, path, _, sent := policyServer(t, 200, `{"policy":{"vm":"web","mode":"enforce","allow":["203.0.113.0/24"],"source":"manual","by":"shukractl","applied":"2026-09-20T03:00:00Z","present":true,"revert":{"until":"2026-09-20T03:05:00Z","to":"no policy"},"taps":[]}}`)
+	var buf bytes.Buffer
+	err := run([]string{"policy", "apply", "web", "--mode", "enforce", "--allow", "203.0.113.0/24, 10.0.0.1 ,", "--confirm", "5m"}, &buf)
+	if err != nil || *method != "POST" || *path != "/api/v1/policy/apply" {
+		t.Fatalf("%v %s %s", err, *method, *path)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(*sent), &got); err != nil {
+		t.Fatal(err)
+	}
+	allow, _ := got["allow"].([]any)
+	if got["vm"] != "web" || got["mode"] != "enforce" || got["confirm"] != "5m" || len(allow) != 2 || allow[0] != "203.0.113.0/24" || allow[1] != "10.0.0.1" || got["permanent"] != nil || got["fromBaseline"] != nil {
+		t.Fatalf("%s", *sent)
+	}
+	if !strings.Contains(buf.String(), "web: egress policy applied") || !strings.Contains(buf.String(), "UNCONFIRMED") {
+		t.Fatalf("%q", buf.String())
+	}
+	buf.Reset()
+	if err := run([]string{"policy", "apply", "web", "--mode", "audit", "--from-baseline"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	got = nil
+	_ = json.Unmarshal([]byte(*sent), &got)
+	if got["fromBaseline"] != true || got["allow"] != nil || got["confirm"] != nil {
+		t.Fatalf("%s", *sent)
+	}
+	if err := run([]string{"policy", "apply", "web", "--mode", "enforce", "--allow", "10.0.0.0/8", "--permanent"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	got = nil
+	_ = json.Unmarshal([]byte(*sent), &got)
+	if got["permanent"] != true {
+		t.Fatalf("%s", *sent)
+	}
+}
+
+func TestPolicyApplyAsksForAModeAndAVMBeforeItSendsAnything(t *testing.T) {
+	_, path, _, _ := policyServer(t, 200, `{}`)
+	var buf bytes.Buffer
+	if err := run([]string{"policy", "apply", "web"}, &buf); err == nil || !strings.Contains(err.Error(), "--mode") || !strings.Contains(err.Error(), "audit first") {
+		t.Fatalf("%v", err)
+	}
+	if err := run([]string{"policy", "apply"}, &buf); err == nil || !strings.Contains(err.Error(), "policy apply <vm>") {
+		t.Fatalf("%v", err)
+	}
+	if err := run([]string{"policy", "apply", "--mode", "audit"}, &buf); err == nil {
+		t.Fatal("a flag is not a VM")
+	}
+	if *path != "" {
+		t.Fatalf("something was sent: %s", *path)
+	}
+}
+
+func TestPolicyConfirmAndRemoveSayWhatHappened(t *testing.T) {
+	method, path, _, sent := policyServer(t, 200, `{"policy":{"vm":"web","mode":"enforce","allow":[],"source":"manual","applied":"2026-09-20T03:00:00Z","present":true,"taps":[]}}`)
+	var buf bytes.Buffer
+	if err := run([]string{"policy", "confirm", "web"}, &buf); err != nil || *method != "POST" || *path != "/api/v1/policy/confirm" || *sent != `{"vm":"web"}` || !strings.Contains(buf.String(), "web: egress policy confirmed") {
+		t.Fatalf("%v %s %s %s %q", err, *method, *path, *sent, buf.String())
+	}
+	policyServer(t, 200, `{"policy":{"vm":"web","mode":"off","allow":[],"present":true,"taps":[]}}`)
+	buf.Reset()
+	if err := run([]string{"policy", "remove", "web"}, &buf); err != nil || !strings.Contains(buf.String(), "web: the egress policy is removed. Nothing is judged on its taps now.") {
+		t.Fatalf("%v %q", err, buf.String())
+	}
+	for _, sub := range []string{"confirm", "remove"} {
+		if err := run([]string{"policy", sub}, &buf); err == nil {
+			t.Fatalf("%s needs a VM", sub)
+		}
+	}
+}
+
+func TestPolicyShowsARefusalWithItsReasonAndAVMNameIsEscaped(t *testing.T) {
+	policyServer(t, 409, "refused: enforcing needs the management allow list (-isolate-allow)")
+	err := run([]string{"policy", "apply", "web", "--mode", "enforce", "--allow", "10.0.0.0/8", "--permanent"}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "enforcing needs the management allow list") {
+		t.Fatalf("the reason must reach the person: %v", err)
+	}
+	_, _, query, _ := policyServer(t, 200, `{"vm":"a b/c","allow":[],"added":[],"removed":[],"current":[]}`)
+	if err := run([]string{"policy", "learn", "a b/c"}, &bytes.Buffer{}); err != nil || *query != "vm=a+b%2Fc" {
+		t.Fatalf("%v %q", err, *query)
+	}
+	if err := run([]string{"policy", "a b/c"}, &bytes.Buffer{}); err != nil || *query != "vm=a+b%2Fc" {
+		t.Fatalf("the list filter is escaped too: %v %q", err, *query)
+	}
+}
+
+func TestPolicyJSONIsPassedThrough(t *testing.T) {
+	policyServer(t, 200, `{"policy":{"vm":"web","mode":"audit"}}`)
+	var buf bytes.Buffer
+	if err := run([]string{"policy", "apply", "web", "--mode", "audit", "--allow", "10.0.0.0/8", "--json"}, &buf); err != nil || !strings.Contains(buf.String(), `"policy":{"vm":"web","mode":"audit"}`) {
+		t.Fatalf("%v %q", err, buf.String())
+	}
+}

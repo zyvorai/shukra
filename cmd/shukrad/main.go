@@ -21,6 +21,7 @@ import (
 	"github.com/zyvorai/shukra/internal/baseline"
 	"github.com/zyvorai/shukra/internal/observe"
 	"github.com/zyvorai/shukra/internal/persist"
+	"github.com/zyvorai/shukra/internal/policy"
 	"github.com/zyvorai/shukra/internal/response"
 	"github.com/zyvorai/shukra/internal/sink"
 	"github.com/zyvorai/shukra/internal/state"
@@ -129,7 +130,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("isolate-allow: %v", err)
 	}
-	st.SetEnforcer(observe.NewEnforcer(allow))
+	enforcer := observe.NewEnforcer(allow)
+	st.SetEnforcer(enforcer)
 	observe.SetDNSEvents(*dnsEvents)
 	observe.SetTLSEvents(*tlsEvents)
 	st.SetTapSource(func() []state.TapStat {
@@ -183,6 +185,21 @@ func main() {
 	st.OnDetection(engine.OnDetection)
 	stopEngine := make(chan struct{})
 	go engine.Run(stopEngine)
+	// Egress policy: which networks each VM may start connections to. It keeps its record under the data
+	// directory, because the kernel keeps enforcing without the daemon and the record must survive with it.
+	var policyStore policy.Store
+	var pastPolicies []policy.Policy
+	if *dataDir != "" {
+		ps, past, err := persist.OpenPolicies(*dataDir)
+		if err != nil {
+			log.Fatalf("data-dir %s: %v", *dataDir, err)
+		}
+		policyStore, pastPolicies = ps, past
+	}
+	egress := policy.New(st, observe.NewEgressKernel(enforcer), policyStore)
+	egress.Restore(pastPolicies)
+	st.SetPolicy(egress)
+	go egress.Run(stopEngine)
 	var sinkNames []string
 	for _, k := range sinks {
 		sinkNames = append(sinkNames, k.Name())
@@ -196,6 +213,7 @@ func main() {
 		ReadOnlyKey: readOnlyKey != "", DataDir: *dataDir, Sinks: sinkNames, IsolateAllow: allowNames, RulesFile: *watch,
 	})
 	ag.Refresh()
+	egress.Reconcile() // a timer that ran out while the daemon was down reverts now, not on the next tick
 
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)

@@ -78,6 +78,53 @@ func writeMetrics(w io.Writer, st *state.State) {
 			fmt.Fprintf(w, "shukra_actions{status=%q} %d\n", s, counts[s])
 		}
 	}
+	// Egress policy: only for a VM that has one. A VM with no policy has no series, which is not the same as one
+	// that has a policy and has not been tested.
+	if pv := st.Policy(); pv != nil {
+		if rows := pv.List(); len(rows) > 0 {
+			type series struct {
+				name, kind, help string
+				val              func(t state.PolicyTap) uint64
+			}
+			modeOf := func(k string) uint64 {
+				switch k {
+				case "audit":
+					return 1
+				case "enforce":
+					return 2
+				}
+				return 0
+			}
+			gauge("shukra_egress_policy_mode", "The egress policy's mode on a tap as the kernel has it: 0 off, 1 audit, 2 enforce.")
+			for _, r := range rows {
+				for _, t := range r.Taps {
+					fmt.Fprintf(w, "shukra_egress_policy_mode{%s,tap=%q} %d\n", lbl(r.VM), t.Tap, modeOf(t.Kernel))
+				}
+			}
+			gauge("shukra_egress_policy_unconfirmed", "1 while an enforcing policy is waiting to be confirmed, after which it goes back to what it replaced.")
+			for _, r := range rows {
+				v := 0
+				if r.Revert != nil {
+					v = 1
+				}
+				fmt.Fprintf(w, "shukra_egress_policy_unconfirmed{%s} %d\n", lbl(r.VM), v)
+			}
+			for _, x := range []series{
+				{"shukra_egress_checked_total", "counter", "New TCP connections and UDP datagrams the egress policy judged.", func(t state.PolicyTap) uint64 { return t.Checked }},
+				{"shukra_egress_audit_packets_total", "counter", "What the egress policy would have dropped, in audit mode.", func(t state.PolicyTap) uint64 { return t.AuditPkts }},
+				{"shukra_egress_audit_bytes_total", "counter", "The bytes of what the egress policy would have dropped, in audit mode.", func(t state.PolicyTap) uint64 { return t.AuditBytes }},
+				{"shukra_egress_dropped_packets_total", "counter", "What the egress policy dropped, when enforcing.", func(t state.PolicyTap) uint64 { return t.DroppedPkts }},
+				{"shukra_egress_dropped_bytes_total", "counter", "The bytes of what the egress policy dropped, when enforcing.", func(t state.PolicyTap) uint64 { return t.DroppedBytes }},
+			} {
+				counter(x.name, x.help)
+				for _, r := range rows {
+					for _, t := range r.Taps {
+						fmt.Fprintf(w, "%s{%s,tap=%q} %d\n", x.name, lbl(r.VM), t.Tap, x.val(t))
+					}
+				}
+			}
+		}
+	}
 	counter("shukra_detections_suppressed_total", "Detections held back as repeats of one already raised.")
 	fmt.Fprintf(w, "shukra_detections_suppressed_total %d\n", st.Suppressed())
 	if sinks := st.SinkStats(); len(sinks) > 0 {

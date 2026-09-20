@@ -62,6 +62,10 @@ jobs:
         run: |
           go test -c -tags shukrabpf -o "$RUNNER_TEMP/observe.test" ./internal/observe
           sudo SHUKRA_BPF_TEST=1 "$RUNNER_TEMP/observe.test" -test.run TestKernelIntegration -test.v
+      - name: Tap program egress policy (packet by packet)
+        # The tap program runs as a private copy on hand-built packets (BPF_PROG_TEST_RUN): the kernel's own
+        # verdict for every rule of the egress policy, with no namespace, veth or VM.
+        run: scripts/test-tap-progrun.sh
       - name: Tap program and isolation (network namespace, no KVM)
         # A namespace stands in for the guest and a veth for its tap. Needs Linux 6.6+
         # for TCX, so a red step here on an old runner kernel is a real answer.

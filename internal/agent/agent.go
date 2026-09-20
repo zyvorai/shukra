@@ -346,6 +346,33 @@ func (a *Agent) ingestGuest(e event.Event, cfg *detect.Config) {
 		return det
 	})
 	a.observeBaseline(e, cfg)
+	a.policyRules(e, cfg)
+}
+
+// policyRules reports a connection that the VM's egress policy judged to be outside it (ingestGuest has already
+// joined the event to its VM). The tap program marks the
+// event, so there is nothing to configure: a VM under a policy is reported when it strays. In audit mode it is
+// what would have been dropped (low), and under enforcement what was (medium). It is held back per VM, mode and
+// network, as a baseline's first sighting is, so a VM that keeps trying one place is one detection.
+func (a *Agent) policyRules(e event.Event, cfg *detect.Config) {
+	proto := e.Proto
+	if proto == "" {
+		proto = "tcp"
+	}
+	var rule, severity, what string
+	switch e.Policy {
+	case "audit":
+		rule, severity, what = "egress-policy-audit", "low", "would have been dropped (audit mode)"
+	case "enforce":
+		rule, severity, what = "egress-policy-blocked", "medium", "was dropped"
+	default:
+		return // no verdict, or one this build does not know
+	}
+	det := e
+	det.Kind = event.KindDetection
+	det.Rule, det.Severity = rule, severity
+	det.Message = fmt.Sprintf("%s opened %s to %s:%d, outside its egress policy: it %s", e.VM.Name, proto, e.Dst, e.DPort, what)
+	a.raise(e.TS, cfg, "policy|"+e.Policy+"|"+e.VM.Name+"|"+baseline.Prefix(e.Dst)+"|"+proto, det)
 }
 
 func allowedExec(comm string) bool {

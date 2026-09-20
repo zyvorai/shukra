@@ -142,6 +142,8 @@ Still not measured: the guest's own CPU steal counter (the host's view is vCPU p
 
 ## Isolate
 
+Isolation drops everything but the management network. To drop only what a VM starts outside a list of networks it is allowed, and to try that list out first without dropping anything, see [egress policy](egress-policy.md), which uses the same allow list as its floor and the same pinned maps to outlive the daemon.
+
 `shukractl isolate <vm>` sets a flag on the VM's tap. While it is set, the program drops every frame on that tap except:
 
 - ARP, and IPv6 neighbour discovery (ICMPv6 types 133 to 137), so the guest can still find an allowed address

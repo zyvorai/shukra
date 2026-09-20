@@ -78,3 +78,7 @@ Items not seen for `max_age` (30 days) are forgotten, and are new again if they 
 ## Where it is
 
 `shukractl baseline`, `GET /api/v1/baseline` (`?vm=web-01&items=1` for the items), `POST /api/v1/baseline/forget`, and `/metrics`: `shukra_baseline_learning{vm}`, `shukra_baseline_items{vm,kind}`, `shukra_baseline_new_total{vm}` and `shukra_baseline_suppressed_total{vm}` (present only while the section is on). What is learned is kept in `baselines.json` under `-data-dir`, mode 0600: it lists the networks and names each VM talks to, so treat it like the event list.
+
+## From a baseline to a policy
+
+What a VM's baseline holds as `destination` is what an [egress policy](egress-policy.md) can be proposed from: `shukractl policy learn <vm>` lists those networks, `policy apply <vm> --mode audit --from-baseline` puts the VM under them in audit mode, and nothing is dropped until a person enforces it. A VM still inside its learning period gets a proposal that says so, because what it has not done yet is not on it.

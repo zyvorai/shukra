@@ -48,6 +48,8 @@ J()    { python3 -c "import sys,json;d=json.load(sys.stdin);print($1)"; }
 D="$(mktemp -d /tmp/shukra-live.XXXXXX)"
 ID=""; IDB=""
 cleanup() {
+  # An egress policy is a record on the daemon: never leave one behind for a VM that is about to be deleted.
+  [ -n "${POLVM:-}" ] && api -X POST -d "{\"vm\":\"$POLVM\"}" "$URL/api/v1/policy/remove" >/dev/null 2>&1
   for i in "$ID" "$IDB"; do [ -n "$i" ] && sudo "$FLUXCTL" delete "$i" >/dev/null 2>&1; done
   rm -rf "$D"
 }
@@ -293,6 +295,14 @@ while time.time() < end:
             break
     time.sleep(2)
 PY
+# An egress policy in audit mode on the guest under test: its peer and the bridge's gateway are on the list, and
+# nothing else, so the guest's connect to 203.0.113.9 and its flows to 203.0.113.53 are outside it. Audit drops
+# nothing and needs no management allow list, so this changes nothing the guest can do.
+POLVM="$VMNAME"
+POLICY_CODE=$(api -s -o /dev/null -w '%{http_code}' -X POST -d "{\"vm\":\"$VMNAME\",\"mode\":\"audit\",\"allow\":[\"$PEER_IP/32\",\"$BR_NET.1/32\"]}" "$URL/api/v1/policy/apply")
+check "an egress policy in audit mode is accepted for the guest under test" "[ '$POLICY_CODE' = 200 ]"
+check "the program on its tap is in audit mode" "api $URL/api/v1/policy?vm=$VMNAME | J \"[t['kernel'] for t in d['policies'][0]['taps']]\" | grep -q \"'audit'\""
+
 : > "$D/guest.jsonl"
 python3 "$D/collect.py" "$URL" "$KEY" "$TAP" "$D/guest.jsonl" "$BOOT_WAIT" 1
 check "this test's own TCP connect and UDP flow both arrived as events" "grep -q '\"dst\": \"203.0.113.9\"' $D/guest.jsonl && grep -q '\"dst\": \"203.0.113.53\"' $D/guest.jsonl"
@@ -340,6 +350,9 @@ print("dnsok", int(bool(dna) and all(e.get("dst") == "203.0.113.53" and e.get("d
 tlsv = [e for e in ev if e["kind"] == "guest_tls" and e.get("sni") == "live-tls.shukra-test.invalid"]
 print("tls", len(tlsv))
 print("tlsok", int(bool(tlsv) and all(e.get("dst") == peer_ip and e.get("dport") == 9000 and e.get("proto") == "tcp" and e.get("alpn") == "h2" and e.get("tls_version") == "1.2" and len(e.get("ja3", "")) == 32 and not e.get("tls_truncated") and e["guest_attributed"] and e["vm"]["name"] == vm for e in tlsv)))
+aud = [e for e in ev if e.get("policy") == "audit"]
+aud_dst = {e.get("dst") for e in aud}
+print("policy", len(aud), int("203.0.113.9" in aud_dst and "203.0.113.53" in aud_dst), int(peer_ip not in aud_dst and "192.168.122.1" not in aud_dst))
 for e in ev[:8]:
     print("show %-13s %-4s %s -> %s:%s attributed=%s attr=%s" % (e["kind"], e.get("proto"), e.get("src"), e.get("dst"), e.get("dport"), e["guest_attributed"], e["attribution"]))
 PY
@@ -359,6 +372,10 @@ NDA=$(sed -n 's/^dnsA \([0-9]*\) .*/\1/p' "$D/verify.out")
 NDAAAA=$(sed -n 's/^dnsA .* dnsAAAA \([0-9]*\) .*/\1/p' "$D/verify.out")
 check "the guest's DNS lookup arrives as a guest_dns event with exactly the name it asked for, lower-cased, and its type (A events $NDA, AAAA $NDAAAA)" "[ '$NDA' -ge 1 ] && [ '$NDAAAA' -ge 1 ] && [ \"\$(val dnsok)\" = 1 ]"
 check "five lookups of one name in two spellings are one event per cycle, not five (A events $NDA, cycles $NT)" "[ \$(( $NT - $NDA )) -ge 0 ] && [ \$(( $NT - $NDA )) -le 1 ]"
+check "the guest's connect and flow to places its egress policy does not list are events marked audit" "[ \"\$(sed -n 's/^policy [0-9]* \\([01]\\) [01]\$/\\1/p' $D/verify.out)\" = 1 ]"
+check "and what it does that the policy does list (its peer, the gateway) is not marked" "[ \"\$(sed -n 's/^policy [0-9]* [01] \\([01]\\)\$/\\1/p' $D/verify.out)\" = 1 ]"
+check "the policy's counters say what audit would have dropped, that it judged more than that, and that nothing was dropped" "api $URL/api/v1/policy?vm=$VMNAME | J \"(lambda t: t['auditPackets']>=2 and t['checked']>t['auditPackets'] and t['droppedPackets']==0)(d['policies'][0]['taps'][0])\" | grep -q True"
+check "it is a low detection, guest-attributed, naming the guest and the place" "api $URL/api/v1/events | J \"any(e['guest_attributed'] and e['vm']['name']=='$VMNAME' and e['severity']=='low' and '203.0.113.9:443' in e['message'] for e in d['events'] if e['kind']=='detection' and e.get('rule')=='egress-policy-audit')\" | grep -q True"
 NTLS=$(sed -n 's/^tls \([0-9]*\)$/\1/p' "$D/verify.out")
 check "the guest's TLS hello arrives as a guest_tls event with the name it asked for, lower-cased, its protocol and a fingerprint (events $NTLS)" "[ '$NTLS' -ge 1 ] && [ \"\$(val tlsok)\" = 1 ]"
 check "and it is one event per connection, not more (events $NTLS, cycles $NT)" "[ '$NTLS' -le '$NT' ]"
@@ -413,6 +430,10 @@ for tp in $TAP $TAPB; do
   echo "  attached to $tp besides Shukra's programs: $(sudo bpftool net show dev "$tp" 2>/dev/null | grep -E 'clsact|tcx|xdp' | grep -v shukra_tap | tr -s ' ' | sed 's/^ //' | tr '\n' ';')"
 done
 
+
+echo "== 5c. the policy is taken off again, and leaves nothing behind"
+api -s -o /dev/null -X POST -d "{\"vm\":\"$VMNAME\"}" "$URL/api/v1/policy/remove"; POLVM=""
+check "removing it leaves no policy for the guest, and the program on its tap is off" "api $URL/api/v1/policy | J \"[p['vm'] for p in d['policies']]\" | grep -qv \"$VMNAME\" && api $URL/api/v1/policy | J \"len(d['orphans'])\" | grep -q '^0\$'"
 
 echo "== 6. delete both VMs: the tap programs come off"
 sudo "$FLUXCTL" delete "$ID" >/dev/null 2>&1; ID=""

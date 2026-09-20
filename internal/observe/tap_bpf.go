@@ -188,6 +188,7 @@ func decodeTap(b []byte, name func(ifindex uint32) string) (event.Event, bool) {
 		Iface:   name(binary.LittleEndian.Uint32(b[8:12])),
 		DPort:   binary.LittleEndian.Uint16(b[12:14]),
 		Blocked: b[17] != 0,
+		Policy:  policyName(b[20]),
 	}
 	// A TCP SYN is a connect and a new UDP flow is a flow. proto 0 is a TCP event
 	// from a build that predates the field, which the previous program can still
@@ -282,3 +283,52 @@ func (e *Enforcer) Isolate(taps []string) ([]string, error) { return e.set(taps,
 
 // Release clears the flag. It returns the taps that were cleared.
 func (e *Enforcer) Release(taps []string) ([]string, error) { return e.set(taps, false) }
+
+// EgressKernel is what the egress policy engine uses to reach the kernel program.
+type EgressKernel struct{ enf *Enforcer }
+
+// NewEgressKernel is the kernel side of the egress policy. Enforcement needs the management allow list that
+// isolation needs, because that list is the floor no policy can take away: without one, a wrong policy could
+// cut a VM off from the host that manages it. Auditing needs only the program.
+func NewEgressKernel(enf *Enforcer) *EgressKernel { return &EgressKernel{enf: enf} }
+
+// Available says whether the tap program is loaded, and if not, why not.
+func (*EgressKernel) Available() (bool, string) {
+	loaded, _, err := bpfgen.TapStatus()
+	if err != nil {
+		return false, err.Error()
+	}
+	return loaded, "not loaded"
+}
+
+// CanEnforce says whether a policy may be set to enforce, and if not, why not.
+func (k *EgressKernel) CanEnforce() (bool, string) {
+	if k.enf == nil {
+		return false, "no management allow list is configured"
+	}
+	return k.enf.Available()
+}
+
+// Set puts a tap under an egress policy. mode is 0 (off), 1 (audit) or 2 (enforce).
+func (*EgressKernel) Set(tap string, mode uint8, prefixes []netip.Prefix) error {
+	return bpfgen.SetTapEgress(tap, mode, prefixes)
+}
+
+// Mode is the egress mode a tap is in: what was last set, or read back from the kernel when the tap was adopted.
+func (*EgressKernel) Mode(tap string) uint8 { return bpfgen.TapEgress(tap) }
+
+// Stats is what each attached tap's policy has done.
+func (*EgressKernel) Stats() []EgressCounters {
+	stats := bpfgen.TapEgressStats()
+	var out []EgressCounters
+	for _, name := range bpfgen.TapAttached() {
+		iface, err := net.InterfaceByName(name)
+		if err != nil {
+			continue
+		}
+		s := stats[uint32(iface.Index)]
+		out = append(out, EgressCounters{Tap: name, Mode: bpfgen.TapEgress(name), Checked: s.Checked, AuditPkts: s.AuditPkts, AuditBytes: s.AuditBytes, DropPkts: s.DropPkts, DropBytes: s.DropBytes})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Tap < out[j].Tap })
+	return out
+}

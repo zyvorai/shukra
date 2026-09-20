@@ -111,6 +111,18 @@ export function fixtureResponse(path: string, init?: RequestInit): unknown {
       ],
     };
   }
+  if (url.pathname === '/api/v1/policy') {
+    return {
+      enabled: true,
+      persisted: true,
+      note: 'Sample rows.',
+      orphans: [],
+      policies: [
+        { vm: 'payment-prod-03', mode: 'enforce', allow: ['10.0.4.0/24', '10.0.0.0/24', '198.51.100.0/24', '203.0.113.0/24'], source: 'baseline', by: 'alice', applied: '2026-09-20T03:00:00Z', present: true, revert: { until: '2026-09-20T03:10:00Z', to: 'audit with 4 networks' }, taps: [{ tap: 'tap7', kernel: 'enforce', checked: 4210, auditPackets: 0, auditBytes: 0, droppedPackets: 14, droppedBytes: 1400 }] },
+        { vm: 'api-01', mode: 'audit', allow: ['10.0.0.0/24'], source: 'manual', by: 'bob', applied: '2026-09-19T14:00:00Z', present: true, taps: [{ tap: 'tap1', kernel: 'audit', checked: 88, auditPackets: 7, auditBytes: 700, droppedPackets: 0, droppedBytes: 0 }] },
+      ],
+    };
+  }
   if (url.pathname === '/api/v1/advice') {
     return {
       note: 'Sample rows.',
