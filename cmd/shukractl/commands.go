@@ -410,7 +410,7 @@ func formatPrograms(w io.Writer, m map[string]any) {
 func formatTraceList(w io.Writer, m map[string]any) {
 	fmt.Fprintln(w, "TRACE")
 	fmt.Fprintln(w, "  kvm     kvm_exit kvm_entry kvm_mmio kvm_pio counters, not per-exit events")
-	fmt.Fprintln(w, "  sched   sched_switch sched_wakeup exec. Delay samples only when slow")
+	fmt.Fprintln(w, "  sched   sched_switch sched_wakeup exec: on-CPU time, run-queue delay, vCPU preemption")
 	fmt.Fprintln(w, "  block   block_rq_issue/complete log2 histogram. p50/p99 in userspace")
 	fmt.Fprintln(w, "  net     tcp_v4/v6_connect (exact) and sampled retransmits. QEMU process, not the guest")
 	fmt.Fprintln(w, "  tap     TCX on each VM tap: the guest's own traffic, and isolation")

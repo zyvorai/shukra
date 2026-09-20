@@ -39,6 +39,7 @@ Flags:
 | `-no-auth` | off | Serve without a bearer key. Otherwise `SHUKRA_API_KEY`, or the dev token with a warning |
 | `-tls-cert`, `-tls-key` | off | Serve HTTPS. `SIGHUP` reloads the certificate |
 | `-isolate-allow` | empty | Comma-separated CIDRs an isolated VM can still reach. Without it, isolate is refused. See [guest traffic](../tap.md) |
+| `-dns-events` | on | Record the names a guest looks up (`guest_dns` events). `-dns-events=false` makes the tap program not read DNS at all. See [DNS names](../tap.md#dns-names) |
 | `-detach-all` | off | Remove every pinned tap program and its isolation, then exit. Works while the daemon is stopped |
 | `-version` | off | Print the version and exit |
 

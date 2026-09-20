@@ -52,14 +52,14 @@ sched     attached    4 hooks
 block     attached    2 hooks
 net       attached    3 hooks
 drops     attached    1 hooks
-tap       attached    9 taps, enforcement survives a daemon restart
+tap       attached    9 taps, enforcement survives a daemon restart   # 9 is however many VM taps are up
 ```
 
 `tap` reports `detached` with `no VM tap interfaces to attach to yet` until a VM with a tap is running, then `attached` with how many. That is a state of the host, not a fault.
 
 `net` has three hooks: `tcp_v4_connect`, `tcp_v6_connect` and the retransmit tracepoint. On arm64 `kvm` reports `3/4 hooks` because `kvm_pio` does not exist there. What each program records, and where it is only bucketed or unproven, is in [signals](../signals.md).
 
-Confirm the kernel still has them after the CLI returns. The daemon keeps the links for the life of the process. A second `shukractl programs` a few seconds later should still say attached. If the process exits, the hooks go with it. This build does not pin into `/sys/fs/bpf`.
+Confirm the kernel still has them after the CLI returns. The daemon keeps the links for the life of the process. A second `shukractl programs` a few seconds later should still say attached. For `kvm`, `sched`, `block`, `net` and `drops`, if the process exits the hooks go with it. The `tap` program is different on purpose: its links and maps are pinned under `/sys/fs/bpf/shukra/tap`, so an isolated VM stays isolated when the daemon stops (see [guest traffic and isolation](../tap.md)).
 
 ## What "attached" is not
 

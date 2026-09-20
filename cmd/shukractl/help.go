@@ -23,11 +23,11 @@ func helpSections() []helpSection {
 			{"install-cli [--prefix DIR]", "Copy this binary onto PATH"},
 		}},
 		{title: "🔬  Trace", cmds: []helpCmd{
-			{"trace list", "kvm, sched, block, net and tap programs"},
+			{"trace list", "kvm, sched, block, net, tap and drops programs"},
 			{"trace kvm|sched|block|net|tap|drops [--vm NAME] [--json]", "Per-VM counters from the daemon"},
 		}},
 		{title: "🔍  Investigate", cmds: []helpCmd{
-			{"vms [--json]", "QEMU virtual machines from the host"},
+			{"vms [--json]", "Virtual machines from the host (QEMU and FluxVM)"},
 			{"explain <vm> [--window 5m|lifetime]", "Why this VM looks slow, from the last minute by default"},
 			{"recorder <vm> [--window 60s]", "Replay the flight recorder"},
 			{"watch [--json] [--once]", "Stream discrete events"},

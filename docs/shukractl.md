@@ -19,7 +19,7 @@ shukractl isolate payment-prod-03
 | Command | What it does |
 |---|---|
 | `status [--json] [--wait]` | Daemon board: mode, programs, VMs, detections. `--wait` retries for up to two minutes while the daemon starts, which is what the deploy script uses |
-| `doctor [--json] [--strict]` | Audit the daemon: exposure, what is attached, what it cannot see. Only findings that need attention are printed, worst first, each with a fix. `--strict` exits non-zero on a warning too |
+| `doctor [--json] [--strict]` | Audit the daemon: exposure, what is attached, what it cannot see. Only findings that need attention are printed, worst first, each with a fix. Every check is listed in [doctor](doctor.md). `--strict` exits non-zero on a warning too |
 | `programs` | Which observation programs are attached (`kvm`, `sched`, `block`, `net`, `drops`, `tap`), how many hooks, and why one is not |
 | `trace list`, `trace kvm\|sched\|block\|net\|tap\|drops [--vm NAME]` | Per-VM counters from the daemon. `tap` adds the guest's connections and their outcomes; `drops` says what the kernel dropped on each tap and whether it was Shukra |
 | `vms [--json]` | QEMU and FluxVM virtual machines found on the host |
