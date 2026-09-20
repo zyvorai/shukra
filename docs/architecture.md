@@ -101,6 +101,8 @@ A detection keeps the attribution of the event that caused it, so a rule that fi
 
 By default everything is in memory. With `-data-dir`, detections and isolation records are appended to JSONL logs (rolling at 16 MiB), and the recorder is saved every minute and on a clean shutdown. Counters and the event list are not saved: they are read back from the kernel or rebuilt.
 
+**History for past verdicts.** The in-memory history is six minutes, which is right for "why is it slow now". So every 5 minutes (`state.RollEvery`) the daemon also appends one snapshot to `snapshots.jsonl`: per VM the counters summed over its threads, its vCPU threads on their own (only the fields a scheduling verdict reads: on-CPU, wakeup delay and its histogram, preemption and who took the CPU), and per tap what the kernel dropped and what became of its TCP handshakes, each only while its program was measuring. `explain --at` and `incident` read the file on demand (they list the snapshots' times and load only the two they need), so none of it sits in memory. A verdict for a past time is the difference between the snapshot at or before that time and the one a window earlier, built with the same code as a live one, and it says the resolution. The file rolls at 16 MiB like the other logs, so retention is set by size: about a day at ten VMs, less for a bigger fleet. A snapshot is 0600 and, like the event list, names your VMs.
+
 ## Privilege and trust
 
 The unit runs as root with six capabilities and a read-only filesystem apart from its data directory:
@@ -133,7 +135,7 @@ A build without root, clang or BTF still serves discovered VMs and reports every
 | `internal/observe` | Reads the maps, decodes events, joins the loaders to the rest. Has a stub for builds without BPF |
 | `internal/identity` | Finds QEMU and FluxVM VMMs, their threads, and the host interface to trace |
 | `internal/aggregate` | Turns per-thread maps into per-VM rows, deltas and clones |
-| `internal/state` | The in-memory truth, history, Explain, [doctor](doctor.md) |
+| `internal/state` | The in-memory truth, history and the stored-snapshot rollup (`rollup.go`), Explain, incident bundles, [doctor](doctor.md) |
 | `internal/detect`, `internal/agent` | Rules, thresholds, suppression, and the loop that applies them |
 | `internal/api`, `internal/sink`, `internal/persist` | The HTTP API and metrics, alert sinks, on-disk logs |
 | `cmd/shukrad`, `cmd/shukractl` | The daemon and the CLI |

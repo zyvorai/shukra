@@ -205,6 +205,15 @@ func add(dst, src *Counters) {
 	dst.Retransmits += src.Retransmits
 }
 
+// Sum adds counters together into a new Counters that shares no memory with the inputs.
+func Sum(list []Counters) Counters {
+	var out Counters
+	for i := range list {
+		add(&out, &list[i])
+	}
+	return out
+}
+
 func addHist(a, b []uint64) []uint64 {
 	if len(b) == 0 {
 		return a

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -637,5 +638,89 @@ func TestTraceSchedShowsWhoTookTheVCPUsCPU(t *testing.T) {
 		if !strings.Contains(buf.String(), want) {
 			t.Fatalf("missing %q:\n%s", want, buf.String())
 		}
+	}
+}
+
+func TestExplainAtSendsAnEscapedTimeAndShowsWhenAndHowCoarse(t *testing.T) {
+	var query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"question":"why was this VM slow?","window":"5m0s","at":"2026-09-20T03:12:00Z","resolution":"5m0s snapshots: the verdict stands on A and B","findings":[],"evidence":[],"missing":[]}`))
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+	var buf bytes.Buffer
+	if err := run([]string{"explain", "db", "--at", "2026-09-20T09:12:00+05:30", "--window", "15m"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if query != "at=2026-09-20T09%3A12%3A00%2B05%3A30&vm=db&window=15m" {
+		t.Fatalf("a + in a time must not become a space: %q", query)
+	}
+	for _, want := range []string{"(at: 2026-09-20T03:12:00Z)", "resolution: 5m0s snapshots"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("missing %q:\n%s", want, buf.String())
+		}
+	}
+}
+
+func incidentServer(t *testing.T) *string {
+	t.Helper()
+	var query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"product":"shukra","vm":"db","at":"2026-09-20T03:12:00Z","window":"15m0s",
+			"explain":{"question":"why was this VM slow?","window":"15m0s","findings":[{"cause":"cpu_preempted","confidence":"high","summary":"s","evidence":["e1"]}],"evidence":[],"missing":[]},
+			"detections":[{"ts":"2026-09-20T03:10:00Z","severity":"high","message":"new destination"}],"events":[{},{}],"isolations":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("SHUKRA_URL", srv.URL)
+	return &query
+}
+
+func TestIncidentPrintsASummaryAndPointsToTheWholeBundle(t *testing.T) {
+	query := incidentServer(t)
+	var buf bytes.Buffer
+	if err := run([]string{"incident", "db", "--at", "-90m", "--window", "15m"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if *query != "at=-90m&vm=db&window=15m" {
+		t.Fatalf("%q", *query)
+	}
+	for _, want := range []string{"INCIDENT  vm=db", "cpu_preempted", "detections (1)", "new destination", "recorder events: 2", "--out FILE"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("missing %q:\n%s", want, buf.String())
+		}
+	}
+	if err := run([]string{"incident"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("a VM is required")
+	}
+	if err := run([]string{"incident", "--at", "-1h"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("a VM is required before the flags")
+	}
+}
+
+func TestIncidentOutWritesAPrivateFileAndDoesNotPrintTheBundle(t *testing.T) {
+	incidentServer(t)
+	file := filepath.Join(t.TempDir(), "inc.json")
+	var buf bytes.Buffer
+	if err := run([]string{"incident", "db", "--out", file}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(file)
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("the bundle names VMs and addresses and must be private: %v %v", fi, err)
+	}
+	b, _ := os.ReadFile(file)
+	if !strings.Contains(string(b), `"product":"shukra"`) || strings.Contains(buf.String(), "new destination") {
+		t.Fatalf("file %q output %q", b, buf.String())
+	}
+	if !strings.Contains(buf.String(), "wrote "+file) || !strings.Contains(buf.String(), "treat it like the event list") {
+		t.Fatalf("%q", buf.String())
+	}
+	var raw bytes.Buffer
+	if err := run([]string{"incident", "db", "--json"}, &raw); err != nil || !strings.HasPrefix(raw.String(), "{") {
+		t.Fatalf("--json prints the document: %v %q", err, raw.String())
 	}
 }

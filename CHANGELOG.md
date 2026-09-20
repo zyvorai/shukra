@@ -4,6 +4,13 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### Explain a past time, and incident bundles
+
+- With `-data-dir` the daemon stores a coarse snapshot every 5 minutes (`snapshots.jsonl`, read on demand, bounded by size). `shukractl explain <vm> --at TIME|-3h [--window 15m]` answers "why *was* it slow then" from the two snapshots around that time, says how coarse that is, and says why when nothing is stored (`no_history`) instead of guessing.
+- `shukractl incident <vm> [--at ...] [--out FILE]` and `GET /api/v1/incident`: one bundle for a ticket (verdict, the window's detections, recorder events, isolate requests, allow list, programs). It holds nothing from the daemon's configuration except the allow list, and `--out` writes it with mode 0600.
+- The Explain page has an **At** field and a **Download incident bundle** button.
+- Fixed: a live Explain with no recorder events returned `"events": null` instead of `[]`.
+
 ### Events: a share for each kind
 
 - The daemon's 2048-event list is no longer one oldest-first queue. Each kind of event has a share that a flood of another kind cannot take (guest 512, host network 512, and 256 each for notable, process, latency and other), so a guest's DNS name or an inbound connect is no longer evicted within minutes by a k3s node's connects or slow-block samples. A kind may still use every slot while nothing else wants them. See [architecture](docs/architecture.md#state-windows-and-history).
