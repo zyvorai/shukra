@@ -82,6 +82,11 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 - **Windowed Explain:** the last minute by default, `--window` up to five minutes, or the lifetime.
 - Detections, isolations and the flight recorder survive a restart with `-data-dir`.
 
+### Documentation, third pass
+
+- New: [investigate after the fact](docs/tutorials/09-after-the-fact.md), a walkthrough of `explain --at`, `trace contention` and `incident` with real output from a hypervisor and what each cannot tell you.
+- Updated for what merged since the last pass: the console tests (what they pin and why), a checklist for a new view (API route, CLI, console page), a pull-request policy (one feature each, based on `main`, never stacked, with the reason), the `no_history`, `unknown_vm` and `not_measured` causes in tutorial 4, `snapshots.jsonl` in tutorials 1 and 3, the event-list shares in `signals.md`, and the README's endpoint table.
+
 ### Documentation (#4 and the passes since)
 
 - New: [API reference](docs/api.md), [architecture](docs/architecture.md), [testing](docs/testing.md), [development](docs/development.md), [Where packets die](docs/drops.md) and tutorial 08, [Find out why traffic is lost](docs/tutorials/08-lost-traffic.md).

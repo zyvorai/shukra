@@ -73,6 +73,15 @@ A constant and an entry in `metrics` (`internal/detect/config.go`), a field in `
 
 In `diagnose` (`internal/state/verdict.go`), from windowed rows (`Delta`), with constants for the floor and the confidence lines, and evidence that names numbers from the window. A finding that cannot name its evidence is not a finding. Add the cause to the list in [tutorial 4](tutorials/04-shukractl.md) and, if the question needs its own page, a guide.
 
+### A new view: an API route, the CLI and a console page
+
+The pattern that `contention` and `explain --at` followed. The logic lives in `internal/state` and returns plain structs whose lists are never nil. Then:
+
+1. **The route** in `internal/api/server.go`, with `orEmpty` (or an explicitly non-nil list) for every list, and its own argument parsing that returns `400` with a sentence. A test asserts the empty response has `[]`, not `null`.
+2. **The CLI**: a `case` in `run` (or a kind in `traceCmd`), a `format…` function, a line in `help.go`, and a test that checks the query string it sends (times are escaped: a `+` in a zone offset must not become a space) and the text it prints.
+3. **The console page**: a `Page` in `components/Nav.tsx`, an entry in `pages` and `heroes` and the body map in `App.tsx`, the component, a fixture route in `fixtures.ts`, and a test of what it says when there is nothing.
+4. **The docs**: [API](api.md), [shukractl](shukractl.md), the console tutorial, the README's endpoint table, and the CHANGELOG.
+
 ### A new doctor check
 
 An `add(id, status, title, detail, fix)` in `internal/state/doctor.go`, with the fix in words an operator can act on, and a row in [doctor](doctor.md). A check reads state and never probes.
@@ -86,6 +95,12 @@ Never change an existing pinned map's layout: add a new map, or old pins are rep
 - A length passed to a helper such as `bpf_skb_load_bytes` must have a provable lower bound. A comparison against zero on a 32-bit value does not give the verifier one, and it reports `invalid zero-sized read`. Build the bound by arithmetic on a 64-bit value: `m = have - 1; if (m > MAX - 1) m = MAX - 1; have = m + 1;`.
 - When a parse can be done in userspace, do it there. The kernel side of DNS only checks the header and copies the question.
 - A tracepoint record read by field name (`struct trace_event_raw_<name>`) survives kernel changes. A hard-coded offset does not.
+
+## Pull requests
+
+One feature per pull request, each based on `main`. **Do not stack them**: a pull request whose base is another feature branch, when merged, updates that branch and not `main`, and the work never lands (this happened to two of them; it was found because `main` lacked a file the merged PR added). If a change needs another that has not merged yet, wait for it, or say so in the description and rebase when it has. When two open pull requests touch the top of the CHANGELOG or the same import, the one that merges second resolves the conflict by keeping both.
+
+Before opening one: `go vet ./...`, `go test ./...`, `npm test` and `npm run build` in `web/`, the docs link check, and, for a BPF change, the deploy and the live guest test described in [testing](testing.md). Say in the description what was verified where, and what was **not**.
 
 ## Repository layout
 
