@@ -13,6 +13,7 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 ### Documentation refresh
 
 - Every guide was re-checked against the code and rewritten where it had drifted: seven programs and 31 attach points (the architecture and README still said six), the persistence table for every file under `-data-dir`, the trust boundaries (what a guest or a taken-over VMM controls and how each table is bounded), a complete API and metrics reference, every `shukractl` command with real output, all 20 `doctor` checks with the condition that fires each, and the exceptions to "no payloads" named wherever it is claimed.
+- **The product brochure is 22 pages** (from 16) and the social card says seven programs. New pages: what it costs (measured), which sites a VM talks to (DNS and TLS names), watching the VMM, where a VM may connect (egress policy), acting on a detection safely, and who can do what. Every count and claim has a row in the claims table, recounted from the code: 7 programs, 31 attach points, 16 console pages, 37 routes (8 that change state), 21 `shukractl` commands, 545 Go test functions, 56 console tests. `capture.sh` works again (the console keeps its token in memory, so it signs in through the form).
 - Two new tutorials: [an egress policy, from learning to enforcing](docs/tutorials/10-egress-policy.md) and [watching the VMM itself](docs/tutorials/11-vmm-tripwires.md).
 
 ### Egress policy: which networks a VM may connect to

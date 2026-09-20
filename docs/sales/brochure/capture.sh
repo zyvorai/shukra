@@ -28,22 +28,25 @@ import os, sys
 from playwright.sync_api import sync_playwright
 
 port, out = os.environ["PORT"], os.environ["OUT"]
-ALL = ["overview", "vms", "recorder", "explain", "kvm", "sched", "contention", "block",
-       "programs", "connections", "drops", "detections", "isolate", "advice"]
+ALL = ["overview", "vms", "recorder", "explain", "kvm", "sched", "contention", "advice", "block",
+       "programs", "connections", "drops", "detections", "actions", "policy", "isolate"]
 pages = sys.argv[1:] or ALL
 
-# Fixture mode signs in with the token "shukra"; the console keeps it in sessionStorage.
-INIT = "sessionStorage.setItem('shukra-token', 'shukra');"
+# Fixture mode accepts the token "shukra" on the sign-in form. The console keeps the token in memory only, so each
+# page signs in and then moves to its hash route (a hash change does not reload the page, so the sign-in stays).
 # The overview says "Fixture data..." in a warning. The brochure captions carry that statement instead.
 HIDE = "document.querySelectorAll('p.warning').forEach(p => { if (p.textContent.startsWith('Fixture data')) p.remove(); });"
 
 with sync_playwright() as p:
     b = p.chromium.launch(args=["--lang=en-US"])
     ctx = b.new_context(viewport={"width": 1440, "height": 900}, device_scale_factor=1, color_scheme="dark", locale="en-US")
-    ctx.add_init_script(INIT)
     for name in pages:
         page = ctx.new_page()
-        page.goto(f"http://127.0.0.1:{port}/#page={name}")
+        page.goto(f"http://127.0.0.1:{port}/")
+        page.get_by_label("API token").fill("shukra")
+        page.get_by_role("button", name="Continue").click()
+        page.wait_for_selector("main")
+        page.evaluate(f"window.location.hash = 'page={name}'")
         page.wait_for_load_state("networkidle")
         page.wait_for_timeout(600)
         page.evaluate(HIDE)

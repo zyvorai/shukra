@@ -1,28 +1,52 @@
-<section class="page" data-title="The six programs"><div class="body">
-<h1>The six eBPF programs</h1>
-<p class="lede">Each program is a separate object with its own hooks and its own switch. A host that cannot run one loses only that program, and says why. Hot paths stay in maps; every source of events is sampled or rate-limited.</p>
+<section class="page" data-title="The seven programs"><div class="body">
+<h1>The seven eBPF programs</h1>
+<p class="lede">Seven programs, 31 attach points (4 + 4 + 2 + 3 + 2 + 1 + 15). Each is a separate object with its own hooks. A host that cannot run one loses only that program, and says why.</p>
 <table>
 <tr><th>Program</th><th>Hooks</th><th>What it records</th><th>Needs</th></tr>
 <tr><td class="k">kvm</td><td><code>kvm_exit</code>, <code>kvm_entry</code>, <code>kvm_mmio</code>, <code>kvm_pio</code></td><td>exit counts by reason, exit handling time as a histogram (halts excluded) and time per reason</td><td>BTF, Linux 5.8+</td></tr>
 <tr><td class="k">sched</td><td>wakeup, switch, exec, exit</td><td>on-CPU time, run-queue delay per thread, <b>vCPU preemption</b> (runnable but off a host CPU, and who had it), exec and exit of QEMU children</td><td>BTF, Linux 5.8+</td></tr>
 <tr><td class="k">block</td><td><code>block_rq_issue</code>, <code>block_rq_complete</code></td><td>latency histogram, requests, bytes and the slowest request, per direction</td><td>BTF, Linux 5.8+</td></tr>
 <tr><td class="k">net</td><td><code>tcp_v4_connect</code>, <code>tcp_v6_connect</code>, sampled <code>tcp_retransmit_skb</code></td><td>exact connect counts (IPv4 and IPv6) and 1-in-64 retransmit samples: <b>the QEMU process's</b> sockets</td><td>BTF, Linux 5.8+</td></tr>
-<tr><td class="k">tap</td><td>TCX ingress and egress on each VM tap</td><td>the guest's own traffic: per-tap counters, one event per TCP connect, new UDP flow, connection made <i>to</i> the guest, the name in each plain DNS query, what became of each handshake, and isolation</td><td>Linux 6.6+, <code>CAP_NET_ADMIN</code></td></tr>
+<tr><td class="k">tap</td><td>TCX ingress and egress on each VM tap</td><td>the guest's own traffic: per-tap counters; an event per TCP connect, new UDP flow and connection made <i>to</i> the guest; the name in each DNS query and TLS ClientHello; each handshake's outcome; isolation and egress policy</td><td>Linux 6.6+, <code>CAP_NET_ADMIN</code></td></tr>
+<tr><td class="k">vmm</td><td>13 syscall tracepoints (three opens, ten calls a VMM never makes), plus process fork and exit</td><td>for a QEMU process and what it started: each file it opens and each sensitive call it makes (<code>ptrace</code>, <code>mount</code>, <code>setns</code>, module loads). A steady-state VMM does none</td><td>BTF, Linux 5.8+</td></tr>
 <tr><td class="k">drops</td><td><code>skb:kfree_skb</code> on each VM tap</td><td>what the kernel dropped on the tap, by its own reason and the function that freed it, with Shukra's own isolation subtracted</td><td>Linux 5.17+</td></tr>
 </table>
 <div class="cards c2">
 <div class="card on"><h3>Never in the way of other tools</h3><p>The tap program returns <code>TCX_NEXT</code>, never <code>TCX_PASS</code>, so any other program on the same tap (Cilium, FluxVM's egress program, a <code>tc</code> filter) still runs after it. Its links and maps are pinned under <code>/sys/fs/bpf/shukra/tap</code>.</p></div>
-<div class="card warm"><h3>Kernel baselines</h3><p>Any program needs BTF at <code>/sys/kernel/btf/vmlinux</code> and <code>CAP_BPF</code> (Linux 5.8+). Drop reasons need 5.17, TCX and isolation need 6.6. On arm64, <code>kvm_pio</code> does not exist, so <code>kvm</code> attaches 3 of its 4 hooks.</p></div>
+<div class="card warm"><h3>Kernel baselines</h3><p>Any program needs BTF at <code>/sys/kernel/btf/vmlinux</code> and <code>CAP_BPF</code> (Linux 5.8+). Drop reasons need 5.17; TCX, egress policy and isolation need 6.6. On arm64, <code>kvm_pio</code> does not exist, so <code>kvm</code> attaches 3 of its 4 hooks.</p></div>
 </div>
 <h2>Identity comes from the host</h2>
-<p>Shukra names a VM from the QEMU command line (<code>-name</code> or <code>guest=</code>, <code>-uuid</code>, <code>ifname=</code>) and, for libvirt taps passed as file descriptors, the process's <code>fdinfo</code>. A FluxVM guest (QEMU, Cloud Hypervisor, Firecracker or <code>fluxvm-hypervisor</code>) is named from FluxVM's own record and traced on its host veth. A PID that is not a VMM rolls up to <code>_host</code> as <code>unattributed</code>. It is never given a made-up VM name.</p>
+<p>Shukra names a VM from the QEMU command line (<code>-name</code> or <code>guest=</code>, <code>-uuid</code>, <code>ifname=</code>) and, for libvirt taps passed as file descriptors, the process's <code>fdinfo</code>. A FluxVM guest (QEMU, Cloud Hypervisor, Firecracker or <code>fluxvm-hypervisor</code>) is named from FluxVM's own record and traced on its host veth. A PID that is not a VMM rolls up to <code>_host</code> as <code>unattributed</code>, never a made-up VM name.</p>
 <h2>What a host reports when a program cannot run</h2>
 <table>
 <tr><th>Host</th><th>Program</th><th>Reported</th></tr>
-<tr><td>hv-1</td><td>tap</td><td>attached, one tap per running VM</td></tr>
 <tr><td>hv-2</td><td>tap</td><td>detached, with the reason: the kernel is older than 6.6</td></tr>
+<tr><td>hv-3</td><td>vmm</td><td>detached: turned off with <code>-vmm-tripwires=false</code></td></tr>
 </table>
 <p class="tiny">Illustrative. <code>shukractl programs</code> shows this per host, and a VM with no measurement has no series at all: "not measured" is never rendered as zero. Percentiles come from log2 buckets and can read up to 2x high.</p>
+</div></section>
+
+<section class="page" data-title="What it costs"><div class="body">
+<h1>What it costs, measured</h1>
+<p class="lede">A program that runs on every packet or every open has to be cheap, and has to say what it costs. Each figure below was measured by the project and is quoted from its own documentation. Scale it by your own kernel, hardware and traffic.</p>
+<table>
+<tr><th>What</th><th>Measured cost</th><th>Where, and the caveat</th></tr>
+<tr><td class="k">drops</td><td>about 255 ns per drop; 69 a second is 0.002% of one CPU</td><td>12-CPU Xeon hypervisor. It runs once per packet dropped anywhere on the host, so scale by your drop rate: a million a second is about a quarter of a CPU</td></tr>
+<tr><td class="k">sched</td><td>about 490 ns per switch with no VM watched, about 615 ns with ten; about 435 ns before preemption tracking</td><td>same host, ten VMs, about 60,000 switches a second: about 11 ms of CPU per second more, under 0.1% of the host. Includes the kernel's own run-time accounting, switched on for the measurement</td></tr>
+<tr><td class="k">vmm</td><td>about 183 ns per open; 0.161% of one core at about 8,100 tracepoint hits a second; about 2% of a core at 100,000 opens a second</td><td>Intel Xeon E-2336, Linux 6.8, a k3s and Cilium node. The tracepoints fire for every process, so each first finds out whether the caller is a VMM. <code>-vmm-tripwires=false</code> on a host that busy</td></tr>
+<tr><td class="k">tap: TLS server names</td><td>about 10 to 15 ns added to a data segment; nothing to an ACK or a UDP datagram; about 60 to 85 ns for the one segment per connection that is a hello</td><td>same Xeon, on a private copy of the program. A floor: the same packet run over and over, caches warm. About 1 to 1.5% of a core at a million data segments a second</td></tr>
+<tr><td class="k">tap: egress policy</td><td>with no policy on a tap, one extra read and compare per packet: about 7 to 10 ns (a data segment 76 to 78 ns before, 86 to 87 ns after)</td><td>about 1% of a core at a million packets a second. A tap under a policy adds a trie lookup per new connection or datagram</td></tr>
+<tr><td class="k">the daemon</td><td>5 to 9% of a core and about 88 MB, down from about 55% and 155 MB, with the same output</td><td>found by profiling <code>shukrad</code> on a 12-core production node: 10 VMs, k3s and Cilium. Nearly all the old cost was garbage collection</td></tr>
+</table>
+<p class="tiny">Measured on lab and production hypervisors of the project's own. Costs of <code>kvm</code>, <code>block</code> and <code>net</code> are not published.</p>
+<h2>How the daemon went from about 55% of a core to 5 to 9%</h2>
+<div class="cards c3">
+<div class="card"><h3>The flight recorder is a real ring</h3><p>Once a VM's ring was full, every event copied all 4,096 events into a new slice: over a megabyte of pointers for the garbage collector, per event. Adding to a full ring now allocates nothing, and a test asserts it.</p></div>
+<div class="card"><h3>Thread counters are summed as read</h3><p>The scheduler maps hold every thread that has run on the host, about 64,000 on that node. Each 2-second refresh built a record for each only to add it into the host row. They are now added into one slot as they are read.</p></div>
+<div class="card"><h3>Large maps are read in batches</h3><p>One system call for up to 2,048 entries instead of two per entry: over 200,000 system calls per refresh on that node. A kernel or map that cannot batch falls back to the old walk.</p></div>
+</div>
+<div class="callout"><b>Same output, and tests that say so.</b> A test feeds the same readings through the old and new paths and checks that the scheduler rows and per-thread rows the API serves are identical.</div>
+<p class="small"><b>Measure your own host.</b> <code>scripts/bench-tap.sh</code> reports what the tap program costs per packet on your kernel. It runs <code>BPF_PROG_TEST_RUN</code> on a private copy with its own maps, attached to nothing, so it is safe on a production host.</p>
 </div></section>
 
 <section class="page" data-title="Scenario 1"><div class="body">

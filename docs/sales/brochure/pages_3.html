@@ -56,40 +56,166 @@ BASELINE  learning period 24h0m0s, at most 20 new-item alerts per VM per day
 <div class="callout red"><b>A guest can hide inside its own learning period.</b> Whatever it does in the first 24 hours becomes normal. Start a VM you do not trust under a watchlist (<code>destinations</code>, <code>dns</code>), not a baseline. Past the daily cap, new items are still learned and counted but not reported, and one <code>baseline-cap</code> detection says so.</div>
 </div></section>
 
+<section class="page" data-title="Names a guest asks for"><div class="body">
+<div class="eyebrow">Beyond the incident &middot; names</div>
+<h1>Which sites is this VM talking to?</h1>
+<p class="lede">A guest reaches a site by address, by a DNS lookup or by a TLS connection, and the last two say the name. Shukra reads that name from the first packet on the VM's own tap, so a guest that skips DNS, or asks a resolver over HTTPS, is still seen going somewhere.</p>
+<div class="cards c2">
+<div class="card"><h3>DNS names</h3><p>The first question of a plain query on UDP port 53, IPv4 or IPv6. The tap program copies at most 128 bytes and the daemon decodes the name and type. A repeat is announced once a minute. Not seen: answers, DNS over TCP, TLS or HTTPS, and a second question.</p></div>
+<div class="card on"><h3>TLS server names</h3><p>A ClientHello goes out before anything is encrypted and holds no application data. For a segment that starts one, the kernel copies up to 1,504 bytes; the daemon decodes it into one <code>guest_tls</code> event and throws the bytes away. It has its own budget of 100 events per tap per second.</p></div>
+</div>
+<table>
+<tr><th>guest_tls field</th><th>What it says</th></tr>
+<tr><td class="k">sni</td><td>the server name, lower-cased and printable. Empty when the hello has none, and never half a name</td></tr>
+<tr><td class="k">alpn, tls_version</td><td>the protocols offered (at most 8, such as <code>h2,http/1.1</code>) and the highest version the client offered</td></tr>
+<tr><td class="k">ja3</td><td>a fingerprint of the hello, present only when the whole hello was seen. It says what kind of client library made it, not who the client is</td></tr>
+<tr><td class="k">ech</td><td>the hello uses Encrypted Client Hello, so <code>sni</code> is at most the outer, public name and says nothing about the real site</td></tr>
+<tr><td class="k">tls_truncated</td><td>the hello did not end inside the copy</td></tr>
+</table>
+<div class="row">
+<div class="col"><h2 style="margin-top:6px">Where it stops</h2>
+<ul class="small">
+<li><b>Cut short, and said so.</b> A hello longer than the copy, or split over segments (a hello with a post-quantum key share is about 1.5 KB), is read as far as it goes. The name is usually in the first bytes; there is no JA3, because a fingerprint of part of a hello would be a different fingerprint.</li>
+<li><b>Hidden names.</b> With ECH only the outer name is visible. QUIC and HTTP/3 (UDP) are not read.</li>
+<li><b>Only the hello,</b> not the server's answer: not whether the connection worked, or its certificate.</li>
+</ul></div>
+<div class="col"><h2 style="margin-top:6px">What you do with it</h2>
+<ul class="small">
+<li><code>tls:</code> rules match a name by suffix, exact or contains, like <code>dns:</code> rules; the two do not judge each other's names.</li>
+<li>Learned baselines count a server name as the site it names, so a site looked up by DNS is not new when the VM connects to it.</li>
+<li><code>shukractl watch</code> prints <code>sni=</code>, and the console lists the names, searchable by name, protocol and fingerprint.</li>
+<li><code>-tls-events=false</code> makes the program read no TCP payload at all; <code>-dns-events=false</code> does the same for DNS.</li>
+</ul></div>
+</div>
+<figure style="margin:6px 0 4px"><div class="crop" style="height:1.62in"><img style="margin-top:-100.9%" src="shots/connections.png" alt=""></div><figcaption>Illustrative: the Host connections page, rendered from fixture data. The first row is a hello cut short: no protocols, no fingerprint.</figcaption></figure>
+<div class="callout red"><b>A name is sensitive.</b> It says what a VM is doing, and a fingerprint what software it runs. Both are held in the event list, the flight recorder and an incident bundle, so treat them like the addresses beside them.</div>
+</div></section>
+
+<section class="page" data-title="Watching the VMM"><div class="body">
+<div class="eyebrow">Protect &middot; the VMM itself</div>
+<h1>Is the VMM doing something a VMM never does?</h1>
+<p class="lede">A QEMU process in steady state is quiet in a particular way: its disk images are already open and it makes none of the calls a normal program makes to reach around itself. So when one opens a file, or calls <code>ptrace</code>, <code>mount</code> or a module load, something is wrong: a guest that escaped into the VMM, or a person with a shell in it.</p>
+<figure class="dia" style="width:94%;margin:4px auto">{{dia:tripwire}}</figure>
+<div class="cards c2">
+<div class="card on"><h3>Nothing to configure</h3><p>On the reference hypervisor, ten running QEMU processes made no <code>openat</code>, <code>openat2</code>, <code>open</code>, <code>ptrace</code>, <code>mount</code>, <code>unshare</code> or <code>setns</code> call in thirty seconds. So any one is worth a look, and the reports are very few.</p></div>
+<div class="card"><h3>What counts as sensitive</h3><p>A built-in list: <code>/etc/shadow</code>, sudoers, ssh keys, <code>/proc/*/mem</code>, the docker and containerd sockets, k3s server files, and <code>/etc/shukra</code> and <code>/var/lib/shukra</code>, which hold Shukra's own key and data. A <code>vmm:</code> section adds <code>paths</code>, exempts some with <code>ignore</code> (a VM image under a watched directory) or narrows the calls.</p></div>
+</div>
+<table>
+<tr><th>Detection</th><th>When</th><th>Severity</th></tr>
+<tr><td class="k">vmm-sensitive-open</td><td>a watched process opens a path on the sensitive list</td><td>critical (configurable)</td></tr>
+<tr><td class="k">vmm-syscall</td><td>a watched process makes one of the ten calls</td><td>critical for <code>ptrace</code>, <code>process_vm_writev</code>, module loads and <code>kexec</code>; high for <code>process_vm_readv</code>, <code>mount</code>, <code>unshare</code>, <code>setns</code></td></tr>
+<tr><td class="k">vmm-flood</td><td>a VMM, with all it started, made more than 300 opens and calls in a second</td><td>critical</td></tr>
+</table>
+<pre class="term">vmm-sensitive-open  critical  cat (pid 4321) in web's VMM process tree opened /etc/shadow, which matches /etc/shadow: a VMM has no reason to
+vmm-syscall         critical  gdb (pid 77) in web's VMM process tree called ptrace (request 16 (ATTACH) on pid 1): a VMM has no business doing that
+<span class="d">as printed in docs/vmm-tripwires.md. A VMM starting or stopping opens a few files: those are events, not detections</span></pre>
+<div class="row">
+<div class="col"><div class="callout red" style="margin-top:0"><b>A tripwire, not a sandbox.</b> The path is read when the call starts and a symlink is not followed. A VMM that does none of these is not seen. An open that fails still counts: a detection means a VMM process tried, not that it read the file.</div></div>
+<div class="col"><div class="callout" style="margin-top:0"><b>What it records, and costs.</b> The path (up to 256 bytes) with the program name and pid, never contents. About 183 ns per open, 0.161% of one core on the reference host; <code>-vmm-tripwires=false</code> does not load it.</div></div>
+</div>
+</div></section>
+
+<section class="page" data-title="Egress policy"><div class="body">
+<div class="eyebrow">Protect &middot; egress policy</div>
+<h1>Where may this VM connect?</h1>
+<p class="lede">A VM's baseline says where it normally connects. An egress policy turns that into a list the tap program holds it to: the VM may start connections to these networks and no others. A wrong policy cuts a working VM off, so it is built to be tried before it is believed. Nothing changes for a VM until one is applied.</p>
+<figure class="dia" style="width:88%;margin:2px auto">{{dia:policyflow}}</figure>
+<div class="cards c2">
+<div class="card"><h3>What it judges</h3><p>What the guest <b>starts</b>: a TCP SYN, or a UDP datagram that is not multicast and not an answer. A server keeps working under enforcement. ICMP, established connections, multicast and broadcast are not judged. Networks only, not ports or names.</p></div>
+<div class="card"><h3>What enforcing needs</h3><p>The allow list (<code>-isolate-allow</code>), a <code>-data-dir</code>, a non-empty list, and <code>--confirm</code> (30 seconds to 24 hours) or <code>--permanent</code>. Audit needs none of them. Apply, confirm and remove need the admin key.</p></div>
+</div>
+<h2>What stops a wrong policy doing harm</h2>
+<ul class="small">
+<li><b>The record is saved before the kernel is changed</b>, and a change that fails is put back.</li>
+<li><b>The kernel keeps enforcing without the daemon</b> through a crash, a restart or a stop. A tap enforcing a policy nobody recorded is an orphan that <code>doctor</code> flags.</li>
+<li><b>Every change is a detection</b> (<code>policy-applied</code>, <code>-confirmed</code>, <code>-reverted</code>, <code>-removed</code>), so a webhook hears of it. A stray connection is a low <code>egress-policy-audit</code> or a medium <code>egress-policy-blocked</code>.</li>
+</ul>
+<figure style="margin:6px 0 4px"><div class="crop" style="height:1.7in"><img style="margin-top:-22.2%" src="shots/policy.png" alt=""></div><figcaption>Illustrative: the Egress policy page, rendered from fixture data. One policy waits to be confirmed; the other is auditing.</figcaption></figure>
+<div class="callout red"><b>It is not a firewall.</b> A resolver or time server the VM uses is a destination like any other: leave it off the list and lookups stop. A new tap has no policy for up to two seconds.</div>
+</div></section>
+
+<section class="page" data-title="Responses and bundles"><div class="body">
+<div class="eyebrow">Protect &middot; responses</div>
+<h1>Acting on a detection, safely</h1>
+<p class="lede">A detection tells a person something is wrong. A response can also do something about it, and the only thing it can do is isolate the VM. Because that cuts a running workload off, it is built so it cannot happen by accident. It is off until the rules file has a <code>responses:</code> section.</p>
+<figure class="dia">{{dia:responseflow}}</figure>
+<table>
+<tr><th>Guardrail</th><th>What it does</th></tr>
+<tr><td class="k">never_isolate</td><td>no response may isolate a listed VM, not even an approved proposal</td></tr>
+<tr><td class="k">isolate must work</td><td>nothing is attempted without <code>-isolate-allow</code> and the tap program. A dry run is still recorded</td></tr>
+<tr><td class="k">max_per_hour, cooldown</td><td>at most 3 automatic isolations an hour by default (1 to 100); a VM is left alone for an hour after an action, so a storm is one action</td></tr>
+<tr><td class="k">expire, release_after</td><td>a proposal nobody decides lapses (30 minutes by default); a timed release survives a restart. Approving checks the guardrails again</td></tr>
+</table>
+<div class="row">
+<div class="col"><h2 style="margin-top:6px">The incident bundle</h2>
+<p class="small">Every proposal carries the bundle <code>shukractl incident</code> gives: the verdict, the window's detections, up to 500 recorder events, the VM's isolate requests, the allow list and the programs, over the 15 minutes before the detection. Nothing from the daemon's configuration. Stored per action, mode 0600, as sensitive as the event list. <code>incident --at</code> gives the same for a past time.</p></div>
+<div class="col"><h2 style="margin-top:6px">What is recorded</h2>
+<p class="small">Each decision is an action with an id, the detection behind it, who decided and what the isolate request answered. Each step is announced as a detection, so a webhook can page whoever approves. "Who" is a label the caller sends, <code>shukractl</code> or <code>api</code>: the API key is one key, not a login.</p></div>
+</div>
+<figure style="margin:4px 0 4px"><div class="crop" style="height:1.85in"><img style="margin-top:-22.2%" src="shots/actions.png" alt=""></div><figcaption>Illustrative: the Actions page, rendered from fixture data. One proposal waits; one was approved and releases itself; one was refused by <code>never_isolate</code>.</figcaption></figure>
+<div class="callout red"><b>One action, and only at the tap.</b> A response does not stop a VM, kill a process or change a firewall. A guest can cause a detection, so with an <code>enforce</code> response for a rule it can trigger it can get <i>itself</i> isolated, never another VM. Keep enforce rules narrow, and try one as <code>dry_run</code> first.</div>
+</div></section>
+
 <section class="page" data-title="What Shukra reads"><div class="body">
 <h1>What Shukra reads, and what it never does</h1>
-<p class="lede">The accurate promise is stronger than "no agent": nothing runs inside a guest, no application data is read, and the one thing read beyond headers is stated here, can be turned off, and is bounded.</p>
+<p class="lede">The accurate promise is stronger than "no agent": nothing runs inside a guest, and no application data is read, with three named exceptions. Each is bounded, decoded in the daemon, and has a switch.</p>
 <div class="cards c3">
 <div class="card on"><h3>By default</h3><p><b>Metadata only.</b> Counters and histograms from the host: exits, scheduling, block requests, TCP connects, tap packet counts. From a tap: headers, so flow addresses and ports, handshake outcomes and kernel drop reasons. VM names from the QEMU command line.</p></div>
-<div class="card"><h3>One bounded exception</h3><p><b>DNS names.</b> For a plain DNS query on UDP port 53, the first question (at most 128 bytes: the name and the type). <code>-dns-events=false</code> turns it off. Answers, DNS over TCP, TLS and HTTPS are not read.</p></div>
+<div class="card"><h3>Three bounded exceptions</h3><p>The name in a plain <b>DNS</b> query, the server name in a <b>TLS ClientHello</b>, and the <b>file names</b> a VMM opens. Answers, the rest of a TLS connection and file contents are not read. Host task names (<code>comm</code>) also appear.</p></div>
 <div class="card"><h3>Never</h3><p>Anything inside a guest. Application payloads. The guest's own steal counter. Which process in the guest made a connection. Keys in any API response, in <code>doctor</code> or in <code>systemctl show</code>.</p></div>
 </div>
 <table>
+<tr><th>Exception to "no payloads"</th><th>How much is copied, and what is kept</th><th>Turn it off</th></tr>
+<tr><td class="k">DNS names</td><td>the first question of a plain query on UDP port 53: at most 128 bytes, kept as the name (cut at 253 bytes) and the type</td><td><code>-dns-events=false</code></td></tr>
+<tr><td class="k">TLS ClientHello</td><td>up to 1,504 bytes of the segment that starts a handshake, before anything is encrypted. The daemon keeps the server name, protocols, version and a JA3 fingerprint, and discards the bytes</td><td><code>-tls-events=false</code>: no TCP payload is read at all</td></tr>
+<tr><td class="k">VMM file names</td><td>the path a QEMU process, or a program it started, opens (up to 256 bytes) with the program name and pid. Never the contents</td><td><code>-vmm-tripwires=false</code></td></tr>
+</table>
+<p class="tiny">All three are sensitive: a name says what a VM is doing, a fingerprint what software it runs, and a path can name a person or a secret. The scheduler program also records the command name of a host task that took a vCPU's CPU, so names such as <code>kubectl</code> can appear in the API.</p>
+<table>
 <tr><th>Question</th><th>Answer</th></tr>
 <tr><td class="k">Does anything run inside the VM?</td><td>No. There is no agent. Everything is read from the host: <code>/proc</code>, kernel tracepoints, and the host side of each VM's tap.</td></tr>
-<tr><td class="k">Are host TCP events the guest's?</td><td>No. Host connects are the QEMU process's own sockets, labelled <code>qemu-process</code> and <code>guest_attributed: false</code>. Only events seen on a VM's tap are <code>guest-tap</code> and guest-attributed, and only for a tap that belongs to a VM in the current scan. A tap no VM owns stays <code>unattributed</code>.</td></tr>
-<tr><td class="k">Can a guest change what is attributed to it?</td><td>No. Attribution comes from the tap's owner, found on the host, not from anything in a packet.</td></tr>
-<tr><td class="k">Can a hostile guest hurt the daemon?</td><td>It can generate load, not growth. Tables keyed by packet contents are fixed-size LRUs; events from a tap are rate-limited to 200 per second; DNS names are cut at 253 bytes with every non-printable byte replaced, so a name cannot carry an escape sequence into a log.</td></tr>
-<tr><td class="k">Can a guest game the baselines?</td><td>Only its own learning period: whatever it does in the first 24 hours becomes normal. Its sets are fixed-size, alerts are capped per VM per day with one <code>baseline-cap</code> detection, and a forget request is recorded with who made it. Untrusted VMs belong under a watchlist.</td></tr>
+<tr><td class="k">Are host TCP events the guest's?</td><td>No. Host connects are the QEMU process's own sockets, labelled <code>qemu-process</code> and <code>guest_attributed: false</code>, as is what a VMM opens or calls. Only events seen on a VM's tap are <code>guest-tap</code> and guest-attributed, and only for a tap that belongs to a VM in the current scan. A tap no VM owns stays <code>unattributed</code>.</td></tr>
+<tr><td class="k">Can a guest change what is attributed to it?</td><td>No. Attribution comes from the tap's owner, found on the host, not from anything in a packet. A guest cannot make another VM's traffic look like its own, and a detection names the VM whose tap it was seen on.</td></tr>
 <tr><td class="k">Does the advisor change anything?</td><td>No. Right-size advice is text for a person, with the evidence and a confidence. Nothing resizes a VM.</td></tr>
-<tr><td class="k">Who can isolate a VM?</td><td>The admin key only, which is also the only key that can forget a learned baseline. A separate read-only key reads everything, including <code>/metrics</code> and the stream, and cannot change anything. Give that one to Prometheus.</td></tr>
-<tr><td class="k">What does an incident bundle expose?</td><td>VM names, addresses and DNS names, as the event list does. It holds nothing from the daemon's configuration except the allow list. It is written with mode 0600.</td></tr>
-<tr><td class="k">What does the daemon need to run?</td><td>Root with six capabilities and a read-only filesystem apart from its data directory (<code>0700</code>). <code>CAP_SYS_PTRACE</code> and <code>CAP_DAC_READ_SEARCH</code> are used only to read a libvirt VM's tap names from <code>/proc/&lt;pid&gt;/fd</code>; drop them if you run no libvirt VMs.</td></tr>
+<tr><td class="k">What does an incident bundle expose?</td><td>VM names, addresses, DNS and TLS names and file paths, as the event list does. Nothing from the daemon's configuration except the allow list. It is written with mode 0600.</td></tr>
 </table>
-<div class="callout"><b>What this release will not pretend.</b> It can say <i>which VM and which address</i>, not <i>which process inside the guest</i>. A VM with user-mode networking has no tap and so no guest traffic, and <code>shukractl doctor</code> names it. The scheduler program records the command name of a host task that took a vCPU's CPU, so names like <code>kubectl</code> can appear in the API. Treat the data directory as sensitive, and alert sinks as a place that data leaves the host.</div>
+<div class="callout"><b>What this release will not pretend.</b> It can say <i>which VM and which address</i>, not <i>which process inside the guest</i>. A VM with user-mode networking has no tap and so no guest traffic, and <code>shukractl doctor</code> names it. Treat the data directory as sensitive, and alert sinks as a place that data leaves the host.</div>
+</div></section>
+
+<section class="page" data-title="Who can do what"><div class="body">
+<h1>Who can do what to Shukra, and to your VMs</h1>
+<p class="lede">Shukra is a privileged daemon on a hypervisor, next to the VMs it watches. The parties that touch it are not equally trusted, and every table a guest can fill is bounded.</p>
+<table>
+<tr><th>Party</th><th>Trusted?</th><th>What it can do, and what limits it</th></tr>
+<tr><td class="k">The host: kernel, root, <code>/proc</code></td><td>entirely</td><td>Shukra believes <code>/proc</code>. Host root can stop, replace or read it: it is <b>not a defence against a compromised hypervisor</b>.</td></tr>
+<tr><td class="k">The operator, with the admin key</td><td>yes</td><td>Isolate or release any VM, apply, confirm or remove an egress policy, approve or reject a response, forget a baseline. One key, no per-person identity: the recorded actor is a label the caller supplies.</td></tr>
+<tr><td class="k">A holder of the read-only key</td><td>for reading</td><td>Reads everything, including <code>/metrics</code>, the stream, the recorder and incident bundles. Cannot change anything: every request that is not <code>GET</code> or <code>HEAD</code> is refused. Give this one to Prometheus.</td></tr>
+<tr><td class="k">A caller with no key</td><td>no</td><td>Gets <code>/healthz</code>, <code>/readyz</code> and the console's static files, and nothing else.</td></tr>
+<tr><td class="k">A guest</td><td>no</td><td>Chooses every byte it sends. It can make Shukra do work and record events, within fixed limits. It cannot change what is attributed to it, cannot read or write anything of Shukra's through the tap, and cannot get another VM isolated, dropped by a policy or blamed.</td></tr>
+<tr><td class="k">A VMM: QEMU and what it starts</td><td>watched, not trusted</td><td>It is where a guest escape lands, so it is what the tripwires watch. A taken-over VMM can rewrite its own command line, which is how Shukra names a VM's tap. A VMM that is root on the host is host root, above.</td></tr>
+<tr><td class="k">Where alerts go</td><td>not with your data</td><td>A webhook, syslog or file receives every detection, which names VMs and addresses. The webhook is signed when a secret is set.</td></tr>
+</table>
+<div class="cards c2">
+<div class="card"><h3>What a guest can do is generate load</h3><p>A very high packet rate costs CPU in the tap program on that tap, and a flood of unanswered SYNs makes the pending table forget its oldest entries. Neither hides the flood: the counters see every frame. Text from a guest is lower-cased, cut at 253 bytes and made printable before it goes anywhere.</p></div>
+<div class="card"><h3>Every table is bounded</h3><p>Pending handshakes and UDP flows 65,536 each, tables of names already seen 16,384 each, a VMM's reported calls 300 a second, the event list 2,048 events in six classes with guaranteed shares, the flight recorder 4,096 per VM. At the bound the oldest entry is forgotten and the counters still count.</p></div>
+<div class="card"><h3>Privilege</h3><p>The service runs as root with six capabilities, <code>NoNewPrivileges</code>, a read-only filesystem apart from its data directory, and a restricted set of address families. <code>CAP_SYS_PTRACE</code> and <code>CAP_DAC_READ_SEARCH</code> only read a libvirt VM's tap names from <code>/proc/&lt;pid&gt;/fd</code>: drop them if you run no libvirt VMs.</p></div>
+<div class="card"><h3>What enforcement does not cover</h3><p>Isolation and a policy drop what crosses a VM's tap. They do not touch vhost-user or SR-IOV interfaces, a tap outside the host's network namespace, or anything that is not network traffic (vsock, virtio-serial). ARP and IPv6 neighbour discovery always pass under isolation.</p></div>
+</div>
+<div class="callout red"><b>The API key is the admin key.</b> With the dev key, anyone who can reach the port can read everything Shukra knows and isolate any VM on the host. See the deploy page, and run <code>shukractl doctor</code> on every host.</div>
 </div></section>
 
 <section class="page" data-title="Console tour"><div class="body">
-<h1>The console: fourteen pages, five groups</h1>
+<h1>The console: sixteen pages, five groups</h1>
 <p class="lede">The console is served by the daemon on port 30970 and talks only to its API. Every page says what it knows, how it knows it, and what it cannot see.</p>
-<div class="cards c4" style="margin-bottom:6px">
-<div class="card warm"><h3>Overview</h3><p>Programs attached, VMs found, detections, and the host banner.</p></div>
+<div class="cards" style="grid-template-columns:repeat(5,1fr);margin-bottom:6px">
+<div class="card warm"><h3>Overview</h3><p>Programs attached, VMs found, detections.</p></div>
 <div class="card warm"><h3>Investigate</h3><p>Virtual machines, Flight recorder, Explain.</p></div>
 <div class="card warm"><h3>Diagnostics</h3><p>KVM, Scheduler, Contention, Right-size, Block, Programs.</p></div>
-<div class="card warm"><h3>Network + Security</h3><p>Host connections, Drops. Detections, Isolate.</p></div>
+<div class="card warm"><h3>Network</h3><p>Host connections (with TLS names), Drops.</p></div>
+<div class="card warm"><h3>Security</h3><p>Detections, Actions, Egress policy, Isolate.</p></div>
 </div>
 <figure style="margin:8px 0 4px"><div class="crop" style="height:2.9in"><img style="margin-top:-18.5%" src="shots/explain.png" alt=""></div><figcaption>Explain: ranked findings in the daemon's own words, an At field for a past time, and the incident bundle download.</figcaption></figure>
 <figure style="margin:8px 0 4px"><div class="crop" style="height:1.5in"><img style="margin-top:-20.8%" src="shots/drops.png" alt=""></div><figcaption>Drops: what the kernel dropped on each tap, by reason and freeing function, and whether it was Shukra.</figcaption></figure>
 <figure style="margin:8px 0 4px"><div class="crop" style="height:1.75in"><img style="margin-top:-20.8%" src="shots/isolate.png" alt=""></div><figcaption>Isolate: cut a VM off except the management network, with a confirmation step and what survives a daemon crash.</figcaption></figure>
-<p class="tiny" style="text-align:center">Illustrative: all captures are rendered from the console's fixture data. They are not a live host or customer data.</p>
+<p class="tiny" style="text-align:center">Illustrative: all captures are rendered from the console's fixture data. They are not a live host or customer data. Contention, Right-size, Host connections, Egress policy and Actions appear on earlier pages.</p>
 </div></section>

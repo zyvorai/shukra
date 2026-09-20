@@ -186,7 +186,7 @@ Be clear about what that does. **Isolation cuts the guest's network at its tap. 
 
 - `TestKernelIntegrationVMMTripwires` loads the real program and checks it against calls the test makes itself, with the test process standing in for a QEMU process: a file it opens, one a child opens, eight levels down, a process whose parent has exited, one that was already running before the VMM was seen, an unwatched process, each call, the limit and the flood report, a long path, a relative one. It runs in CI, and on a production host too, since its maps are its own. The kernel program was mutation-checked: fifteen deliberate breakages of the C, each caught.
 - Section 16 of `scripts/test-tap.sh` runs the daemon against a fake VMM whose child opens sensitive files and makes each call, and checks the detections, the cleaning of a path, the rules-file overrides, the flood, that an unwatched process is not seen, and the off switch.
-- The live-guest test checks that a real KVM guest's QEMU is on the kernel's watched list and raises no tripwire detection while it boots and runs.
+- The live-guest test checks that a real KVM guest's QEMU is on the kernel's watched list and raises no tripwire detection while it boots and runs, and then asks that QEMU, over its own QMP socket, to open `/etc/shadow` and requires a critical `vmm-sensitive-open` for that VM, attributed to the VMM.
 
 ## See also
 
