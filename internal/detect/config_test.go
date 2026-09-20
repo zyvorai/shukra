@@ -143,7 +143,7 @@ func TestShippedExampleParses(t *testing.T) {
 	for _, line := range strings.Split(string(raw), "\n") {
 		body, isComment := strings.CutPrefix(line, "# ")
 		switch {
-		case isComment && regexp.MustCompile(`^(suppress|ports|dns|baselines|responses|guardrails|exec_allow|thresholds):`).MatchString(body):
+		case isComment && regexp.MustCompile(`^(suppress|ports|dns|tls|baselines|responses|guardrails|exec_allow|thresholds):`).MatchString(body):
 			live = true
 			on = append(on, body)
 		case live && strings.HasPrefix(line, "#  "):
@@ -159,7 +159,7 @@ func TestShippedExampleParses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("with examples enabled: %v\n%s", err, strings.Join(on, "\n"))
 	}
-	if len(full.Ports) != 3 || full.Ports[1].Proto != "udp" || full.Ports[2].Dir != "in" || len(full.DNS) != 2 || full.Baselines == nil || len(full.Responses) != 1 || full.Guard.MaxPerHour != 3 || len(full.Guard.NeverIsolate) != 1 || full.Baselines.Learn != 24*time.Hour || len(full.Thresholds) != 1 || len(full.ExecAllow) != 1 || full.Suppress != DefaultSuppress {
+	if len(full.Ports) != 3 || full.Ports[1].Proto != "udp" || full.Ports[2].Dir != "in" || len(full.DNS) != 2 || len(full.TLS) != 2 || full.TLS[0].Name != "doh-resolver" || full.Baselines == nil || len(full.Responses) != 1 || full.Guard.MaxPerHour != 3 || len(full.Guard.NeverIsolate) != 1 || full.Baselines.Learn != 24*time.Hour || len(full.Thresholds) != 1 || len(full.ExecAllow) != 1 || full.Suppress != DefaultSuppress {
 		t.Fatalf("%+v", full)
 	}
 }
@@ -429,5 +429,67 @@ func TestResponsesRejectWhatWouldActTooWidelyOrNotAtAll(t *testing.T) {
 	// A response may share a name with the rule it answers.
 	if _, err := Parse([]byte("ports:\n  - {port: 25, name: smtp}\nresponses:\n  - {name: smtp, action: isolate, rules: [smtp]}\n")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTLSRulesAreNameRulesThatDNSRulesDoNotShare(t *testing.T) {
+	c, err := Parse([]byte(`
+dns:
+  - {name: pool-dns, suffix: nanopool.org}
+tls:
+  - {name: doh, suffix: .Dns.Google.}
+  - {name: exact, exact: Login.Example.com, severity: medium}
+  - {suffix: cloudflare-dns.com}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range []struct {
+		name string
+		rule string
+	}{
+		{"dns.google", "doh"},
+		{"A.DNS.google", "doh"},
+		{"notdns.google", ""}, // not on a label boundary
+		{"login.example.com", "exact"},
+		{"x.login.example.com", ""},
+		{"mozilla.cloudflare-dns.com", "tls-cloudflare-dns.com"}, // an unnamed rule is named after what it matches
+		{"nanopool.org", ""},                                     // a dns rule does not judge a TLS name
+		{"", ""},
+	} {
+		r, ok := c.MatchTLS(x.name)
+		if x.rule == "" && ok || x.rule != "" && (!ok || r.Name != x.rule) {
+			t.Errorf("%q: got %+v %v, want rule %q", x.name, r, ok, x.rule)
+		}
+	}
+	if r, _ := c.MatchTLS("login.example.com"); r.Severity != "medium" {
+		t.Errorf("severity: %+v", r)
+	}
+	if r, _ := c.MatchTLS("dns.google"); r.Severity != "high" {
+		t.Errorf("a rule with no severity is high: %+v", r)
+	}
+	if _, ok := c.MatchDNS("dns.google"); ok {
+		t.Error("a tls rule judged a DNS name")
+	}
+	if _, ok := (*Config)(nil).MatchTLS("dns.google"); ok {
+		t.Error("a nil config matched")
+	}
+	if len(DefaultConfig().TLS) != 0 {
+		t.Error("no tls rules by default")
+	}
+}
+
+func TestATLSRuleIsHeldToTheSameRulesAsADNSRule(t *testing.T) {
+	for name, y := range map[string]string{
+		"none of the three":     "tls:\n  - {name: a}\n",
+		"two of the three":      "tls:\n  - {name: a, suffix: a.com, exact: b.com}\n",
+		"a bad severity":        "tls:\n  - {name: a, suffix: a.com, severity: urgent}\n",
+		"a name used twice":     "tls:\n  - {name: a, suffix: a.com}\n  - {name: a, suffix: b.com}\n",
+		"a name a dns rule has": "dns:\n  - {name: a, suffix: a.com}\ntls:\n  - {name: a, suffix: b.com}\n",
+		"a typo in the key":     "tls:\n  - {name: a, sufix: a.com}\n",
+	} {
+		if _, err := Parse([]byte(y)); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
 	}
 }

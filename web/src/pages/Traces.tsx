@@ -164,6 +164,7 @@ export function LimitedTrace({ title, rows, cols, format, filtered }: { title: s
 
 const vmCell = (v: unknown) => String((v as { name?: string } | undefined)?.name ?? '—');
 const droppedCell = (v: unknown) => (v ? 'dropped' : '—');
+const yesCell = (v: unknown) => (v ? 'yes' : '—');
 
 export function Connections() {
   const { data, err } = useAPI<{ events: Row[] }>('/api/v1/events', { refreshMs: LIVE_MS });
@@ -175,6 +176,7 @@ export function Connections() {
   const host = all.filter((e) => e.kind === 'tcp_connect' || e.kind === 'tcp_retransmit');
   const guest = all.filter((e) => e.kind === 'guest_connect' || e.kind === 'guest_flow' || e.kind === 'guest_inbound');
   const names = all.filter((e) => e.kind === 'guest_dns');
+  const hellos = all.filter((e) => e.kind === 'guest_tls');
   const filtered = vm !== '' || q.trim() !== '';
   return (
     <div>
@@ -214,6 +216,15 @@ export function Connections() {
           rows={names}
           cols={['ts', 'vm', 'dns_name', 'qtype', 'src', 'dst', 'blocked']}
           format={{ vm: vmCell, blocked: droppedCell }}
+          filtered={filtered}
+        />
+      )}
+      {(hellos.length > 0 || filtered) && (
+        <LimitedTrace
+          title="Server names the guest asked for (TLS ClientHello, seen on the VM tap)"
+          rows={hellos}
+          cols={['ts', 'vm', 'sni', 'alpn', 'tls_version', 'dst', 'dport', 'ja3', 'ech', 'tls_truncated', 'blocked']}
+          format={{ vm: vmCell, blocked: droppedCell, ech: yesCell, tls_truncated: yesCell }}
           filtered={filtered}
         />
       )}

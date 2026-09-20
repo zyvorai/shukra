@@ -50,7 +50,7 @@ sleep 1
 printf '#!/bin/bash\nwhile true; do /bin/true; sleep 0.2; done\n' > "$D/loop.sh"; chmod +x "$D/loop.sh"
 bash -c "exec -a /usr/bin/qemu-system-x86_64 bash $D/loop.sh -name taptest -uuid 9999 -netdev tap,id=n0,ifname=vethh,script=no" >/dev/null 2>&1 &
 
-printf 'destinations:\n  - cidr: 10.99.0.3/32\n    name: watched-host\n    severity: high\nports:\n  - port: 5300\n    name: udp-watch\n    proto: udp\n  - port: 8090\n    name: guest-inbound-watch\n    dir: in\n  - port: 5311\n    name: response-enforce\n    proto: udp\n  - port: 5312\n    name: response-ask\n    proto: udp\ndns:\n  - name: dns-watch\n    suffix: watched.test\n    severity: high\nresponses:\n  - {name: rig-ask, action: isolate, rules: [response-ask]}\n  - {name: rig-auto, action: isolate, mode: enforce, rules: [response-enforce], release_after: 1m}\n' > $D/rules.yaml
+printf 'destinations:\n  - cidr: 10.99.0.3/32\n    name: watched-host\n    severity: high\nports:\n  - port: 5300\n    name: udp-watch\n    proto: udp\n  - port: 8090\n    name: guest-inbound-watch\n    dir: in\n  - port: 5311\n    name: response-enforce\n    proto: udp\n  - port: 5312\n    name: response-ask\n    proto: udp\ndns:\n  - name: dns-watch\n    suffix: watched.test\n    severity: high\ntls:\n  - name: tls-watch\n    suffix: watched.test\n    severity: high\nresponses:\n  - {name: rig-ask, action: isolate, rules: [response-ask]}\n  - {name: rig-auto, action: isolate, mode: enforce, rules: [response-enforce], release_after: 1m}\n' > $D/rules.yaml
 A="Authorization: Bearer k"; U=127.0.0.1:30990
 guest() { sudo ip netns exec g1 "$@"; }
 code4() { guest curl -s -o /dev/null -m 2 -w %{http_code} "http://$1:8080/"; }
@@ -371,6 +371,79 @@ check "but the flow to port 53 still is (the program is running, it just does no
 stopd; start -isolate-allow 10.99.0.1/32,fd99::1/128
 dq 10.99.0.1 public.example.com 1 1
 check "and starting again without the flag turns names back on, whatever the last run left in the map" "[ \"\$(dnsn public.example.com A)\" = 1 ]"
+
+echo "== 14. guest TLS server names"
+# The program recognises the first segment of a ClientHello (handshake record, type 1) and copies it; the name, the
+# protocols and the fingerprint are decoded in the daemon. Real hellos come from openssl, the odd ones are built by hand.
+# The listener is the plain HTTP server: it accepts the connection, which is all a hello needs.
+tls() { guest timeout 5 openssl s_client -connect "$1" -servername "$2" "${@:3}" </dev/null >/dev/null 2>&1; sleep 1; }
+tlsn() { api "$U/api/v1/events" | J "len([e for e in d['events'] if e['kind']=='guest_tls' and e.get('sni','')=='$1'])"; }
+tlsall() { api "$U/api/v1/events" | J "len([e for e in d['events'] if e['kind']=='guest_tls'])"; }
+cat > "$D/hello.py" <<'PY'
+import socket, struct, sys
+# hello.py DST PORT NAME PAD: a ClientHello with the name first and PAD bytes of a padding extension after it
+dst, port, name, pad = sys.argv[1], int(sys.argv[2]), sys.argv[3].encode(), int(sys.argv[4])
+def ext(t, d): return struct.pack(">HH", t, len(d)) + d
+exts = ext(0, struct.pack(">HBH", len(name) + 3, 0, len(name)) + name)
+if pad: exts += ext(21, b"\0" * pad)
+body = b"\x03\x03" + b"\0" * 32 + b"\0" + struct.pack(">H", 2) + b"\x13\x01" + b"\x01\x00" + struct.pack(">H", len(exts)) + exts
+hs = b"\x01" + len(body).to_bytes(3, "big") + body
+rec = b"\x16\x03\x01" + struct.pack(">H", len(hs)) + hs
+s = socket.socket(socket.AF_INET6 if ":" in dst else socket.AF_INET)
+s.settimeout(3)
+s.connect((dst, port))
+s.sendall(rec)
+PY
+
+tls 10.99.0.1:8080 WwW.ExAmPlE.CoM -alpn h2,http/1.1
+check "a real ClientHello is ONE event with the name lower-cased" "[ \"\$(tlsn www.example.com)\" = 1 ]"
+check "it names the VM, the guest and the server, the tap and the port, and is guest-attributed" \
+  "api $U/api/v1/events | J \"any(e['guest_attributed'] and e['attribution']=='guest-tap' and e['vm']['name']=='taptest' and e.get('proto')=='tcp' and e.get('src')=='10.99.0.2' and e.get('dst')=='10.99.0.1' and e.get('iface')=='vethh' and e['dport']==8080 and not e.get('blocked') and not e.get('tls_truncated') for e in d['events'] if e['kind']=='guest_tls' and e['sni']=='www.example.com')\" | grep -q True"
+check "it carries the protocols offered, the highest TLS version, and a 32-hex JA3" \
+  "api $U/api/v1/events | J \"any(e.get('alpn')=='h2,http/1.1' and e.get('tls_version')=='1.3' and len(e.get('ja3',''))==32 and not e.get('ech') for e in d['events'] if e['kind']=='guest_tls' and e['sni']=='www.example.com')\" | grep -q True"
+tls 10.99.0.1:8080 www.example.com -alpn h2,http/1.1
+check "each connection is its own event (a hello is not announced by name)" "[ \"\$(tlsn www.example.com)\" = 2 ]"
+check "and the same client library has the same fingerprint both times" \
+  "api $U/api/v1/events | J \"len(set(e['ja3'] for e in d['events'] if e['kind']=='guest_tls' and e.get('sni')=='www.example.com'))\" | grep -q '^1$'"
+check "the flow it belongs to is still its own guest_connect event" "api $U/api/v1/events | J \"any(e['dport']==8080 and e.get('dst')=='10.99.0.1' for e in d['events'] if e['kind']=='guest_connect')\" | grep -q True"
+tls "[fd99::1]:8080" v6.example.com
+check "a hello over IPv6 is an event with the IPv6 addresses" "api $U/api/v1/events | J \"any(e['src']=='fd99::2' and e['dst']=='fd99::1' for e in d['events'] if e['kind']=='guest_tls' and e.get('sni')=='v6.example.com')\" | grep -q True"
+guest timeout 5 openssl s_client -connect 10.99.0.1:8080 -noservername </dev/null >/dev/null 2>&1; sleep 1
+check "a hello with no name is an event with none: it is what a client that hides where it goes looks like" \
+  "api $U/api/v1/events | J \"any(not e.get('sni') and e.get('tls_version')=='1.3' and len(e.get('ja3',''))==32 for e in d['events'] if e['kind']=='guest_tls')\" | grep -q True"
+
+N0=$(tlsall)
+guest curl -s -m 2 -o /dev/null http://10.99.0.1:8080/
+guest python3 -c "
+import socket
+s=socket.create_connection(('10.99.0.1',8080),timeout=3)
+s.sendall(bytes([0x16,3,3,0,5,2,0,0,1,0]))       # a handshake record, but a ServerHello
+s.sendall(bytes([0x17,3,3,0,5,1,2,3,4,5]))       # application data
+"; sleep 1
+check "plain HTTP, a ServerHello and application data each produce no event" "[ \"\$(tlsall)\" = \"$N0\" ]"
+
+L=$(python3 -c "print('.'.join(['b'*60]*3) + '.example.org')")
+guest python3 "$D/hello.py" 10.99.0.1 8080 "$L" 0; sleep 1
+check "a long name (194 characters) is kept whole" "[ \"\$(tlsn $L)\" = 1 ]"
+guest python3 "$D/hello.py" 10.99.0.1 8080 big.example.com 1800; sleep 1
+check "a hello longer than the copy keeps its name, says it is cut short, and has no fingerprint" \
+  "api $U/api/v1/events | J \"any(e.get('tls_truncated') and not e.get('ja3') for e in d['events'] if e['kind']=='guest_tls' and e.get('sni')=='big.example.com')\" | grep -q True"
+
+tls 10.99.0.1:8080 c2.watched.test
+tls 10.99.0.1:8080 quiet.example.org
+check "a tls rule fires on the name, guest-attributed, and names it" \
+  "api $U/api/v1/events | J \"any(e['guest_attributed'] and e['vm']['name']=='taptest' and 'c2.watched.test' in e['message'] for e in d['events'] if e['kind']=='detection' and e.get('rule')=='tls-watch')\" | grep -q True"
+check "and only on the names it matches" "api $U/api/v1/events | J \"len([e for e in d['events'] if e['kind']=='detection' and e.get('rule')=='tls-watch'])\" | grep -q '^1$'"
+check "and the dns rule for the same suffix did not judge the TLS name (it still has its one detection, from the lookup)" "api $U/api/v1/events | J \"len([e for e in d['events'] if e['kind']=='detection' and e.get('rule')=='dns-watch'])\" | grep -q '^1$'"
+
+# The switch lives in a pinned map, so the daemon sets it on every start, whatever a previous run left there.
+stopd; start -isolate-allow 10.99.0.1/32,fd99::1/128 -tls-events=false
+tls 10.99.0.1:8080 private.example.com
+check "-tls-events=false: the name is not recorded at all" "[ \"\$(tlsn private.example.com)\" = 0 ]"
+check "but the connection still is (the program is running, it just does not read the payload)" "api $U/api/v1/events | J \"len([e for e in d['events'] if e['kind']=='guest_connect' and e['dport']==8080])\" | grep -qv '^0$'"
+stopd; start -isolate-allow 10.99.0.1/32,fd99::1/128
+tls 10.99.0.1:8080 public.example.com
+check "and starting again without the flag turns names back on, whatever the last run left in the map" "[ \"\$(tlsn public.example.com)\" = 1 ]"
 
 echo "== 13. responses: a proposal changes nothing until a person approves it, and an enforced one acts and releases itself"
 # Two trigger ports used only here (5312 is answered by a response that proposes, 5311 by one that enforces), so no

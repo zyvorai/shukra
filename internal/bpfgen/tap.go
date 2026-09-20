@@ -521,3 +521,23 @@ func SetTapDNS(on bool) error {
 	}
 	return m.Put(uint32(0), off)
 }
+
+// SetTapTLS turns TLS server name events on or off in the kernel program, as SetTapDNS does for DNS names.
+// With it off the program does not read a TCP payload at all. A program from before TLS names has no such
+// map, which is reported and is not a failure of anything else.
+func SetTapTLS(on bool) error {
+	tapMgr.mu.Lock()
+	defer tapMgr.mu.Unlock()
+	if err := loadTapLocked(); err != nil {
+		return err
+	}
+	m := tapMgr.coll.Maps["tls_cfg"]
+	if m == nil {
+		return errors.New("the tap program has no tls_cfg map")
+	}
+	var off uint32
+	if !on {
+		off = 1
+	}
+	return m.Put(uint32(0), off)
+}

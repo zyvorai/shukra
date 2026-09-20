@@ -82,7 +82,7 @@ fi
 python3 - "$D" "$NAME" "$NAMEB" "$IMAGE" "$BRIDGE" "$MAC_A" "$MAC_B" "$PEER_IP" <<'PY'
 import json, sys
 d, name, nameb, image, bridge, mac_a, mac_b, peer = sys.argv[1:9]
-common = '''import socket, time
+common = '''import socket, struct, time
 def say(m):
     try:
         open("/dev/console", "w").write("SHUKRA-LIVE %s\\n" % m)
@@ -135,6 +135,25 @@ def dnsq(name, qtype, n):
 dnsq("live-probe.shukra-test.invalid", 1, 3)
 dnsq("Live-Probe.Shukra-Test.INVALID", 1, 2)
 dnsq("live-probe.shukra-test.invalid", 28, 1)
+# A TLS ClientHello, built by hand and sent to the peer guest (which accepts the connection, and that is all a
+# hello needs): the server name in mixed case, and one protocol. No byte here needs an escape.
+def tlsh(ip, port, name, alpn):
+    def ext(t, d):
+        return struct.pack(">HH", t, len(d)) + d
+    n = name.encode()
+    p = alpn.encode()
+    exts = ext(0, struct.pack(">HBH", len(n) + 3, 0, len(n)) + n) + ext(16, struct.pack(">HB", len(p) + 1, len(p)) + p)
+    body = bytes([3, 3]) + bytes(32) + bytes([0]) + struct.pack(">H", 2) + bytes([0x13, 1]) + bytes([1, 0]) + struct.pack(">H", len(exts)) + exts
+    hs = bytes([1]) + len(body).to_bytes(3, "big") + body
+    rec = bytes([0x16, 3, 1]) + struct.pack(">H", len(hs)) + hs
+    try:
+        s = socket.create_connection((ip, port), 3)
+        s.sendall(rec)
+        time.sleep(0.3)
+        s.close()
+    except Exception:
+        pass
+tlsh("@PEER@", 9000, "Live-TLS.Shukra-Test.INVALID", "h2")
 # From the fourth cycle on, something this VM has never done: a network and a site it has not used. A daemon
 # running learned baselines with a short learning period reports both once; otherwise it is only more traffic.
 try:
@@ -258,7 +277,7 @@ while time.time() < end:
         last = max([last] + [e["seq"] for e in d["events"]])
         with open(out, "a") as f:
             for e in d["events"]:
-                if e["kind"] in ("guest_connect", "guest_flow", "guest_dns") and e.get("iface") == tap and e["seq"] not in seen:
+                if e["kind"] in ("guest_connect", "guest_flow", "guest_dns", "guest_tls") and e.get("iface") == tap and e["seq"] not in seen:
                     seen[e["seq"]] = 1
                     f.write(json.dumps(e) + "\n")
     except Exception:
@@ -318,6 +337,9 @@ dna = [e for e in dns if e.get("dns_name") == "live-probe.shukra-test.invalid" a
 dnaaaa = [e for e in dns if e.get("dns_name") == "live-probe.shukra-test.invalid" and e.get("qtype") == "AAAA"]
 print("dnsA", len(dna), "dnsAAAA", len(dnaaaa), "dnsall", len(dns))
 print("dnsok", int(bool(dna) and all(e.get("dst") == "203.0.113.53" and e.get("dport") == 53 and e.get("proto") == "udp" and e["guest_attributed"] and e["vm"]["name"] == vm and not e.get("dns_truncated") for e in dna)))
+tlsv = [e for e in ev if e["kind"] == "guest_tls" and e.get("sni") == "live-tls.shukra-test.invalid"]
+print("tls", len(tlsv))
+print("tlsok", int(bool(tlsv) and all(e.get("dst") == peer_ip and e.get("dport") == 9000 and e.get("proto") == "tcp" and e.get("alpn") == "h2" and e.get("tls_version") == "1.2" and len(e.get("ja3", "")) == 32 and not e.get("tls_truncated") and e["guest_attributed"] and e["vm"]["name"] == vm for e in tlsv)))
 for e in ev[:8]:
     print("show %-13s %-4s %s -> %s:%s attributed=%s attr=%s" % (e["kind"], e.get("proto"), e.get("src"), e.get("dst"), e.get("dport"), e["guest_attributed"], e["attribution"]))
 PY
@@ -337,6 +359,9 @@ NDA=$(sed -n 's/^dnsA \([0-9]*\) .*/\1/p' "$D/verify.out")
 NDAAAA=$(sed -n 's/^dnsA .* dnsAAAA \([0-9]*\) .*/\1/p' "$D/verify.out")
 check "the guest's DNS lookup arrives as a guest_dns event with exactly the name it asked for, lower-cased, and its type (A events $NDA, AAAA $NDAAAA)" "[ '$NDA' -ge 1 ] && [ '$NDAAAA' -ge 1 ] && [ \"\$(val dnsok)\" = 1 ]"
 check "five lookups of one name in two spellings are one event per cycle, not five (A events $NDA, cycles $NT)" "[ \$(( $NT - $NDA )) -ge 0 ] && [ \$(( $NT - $NDA )) -le 1 ]"
+NTLS=$(sed -n 's/^tls \([0-9]*\)$/\1/p' "$D/verify.out")
+check "the guest's TLS hello arrives as a guest_tls event with the name it asked for, lower-cased, its protocol and a fingerprint (events $NTLS)" "[ '$NTLS' -ge 1 ] && [ \"\$(val tlsok)\" = 1 ]"
+check "and it is one event per connection, not more (events $NTLS, cycles $NT)" "[ '$NTLS' -le '$NT' ]"
 check "no event on an ordinary run is marked blocked (nothing is isolated)" "[ \"\$(val notblocked)\" = 1 ]"
 check "host tcp_connect events are still not guest-attributed" "api $URL/api/v1/events | J \"any(e['guest_attributed'] for e in d['events'] if e['kind']=='tcp_connect')\" | grep -q False"
 check "the guest's vCPU preemption is measured: a row with a preemptor list (never null), and a time below the VM's lifetime" "api $URL/api/v1/trace/sched | J \"[(r['vcpuPreemptedNs'], isinstance(r['topPreemptors'], list)) for r in d['rows'] if r['vm']=='$VMNAME'][0]\" | awk -F'[(), ]+' '\$3==\"True\" && \$2<300000000000{f=1} END{exit !f}'"

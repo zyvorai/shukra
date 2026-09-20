@@ -5,6 +5,7 @@ package identity
 
 import (
 	"bytes"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -152,8 +153,8 @@ func Scan(root, hypervisor string) ([]VM, error) {
 		if !ent.IsDir() {
 			continue
 		}
-		pid, err := strconv.Atoi(ent.Name())
-		if err != nil || pid <= 0 {
+		pid, ok := parsePID(ent.Name())
+		if !ok {
 			continue
 		}
 		dir := filepath.Join(root, ent.Name())
@@ -187,8 +188,8 @@ func threads(dir string, pid int) ([]int, []Thread) {
 	var ids []int
 	var info []Thread
 	for _, ent := range entries {
-		id, err := strconv.Atoi(ent.Name())
-		if err != nil || id <= 0 {
+		id, ok := parsePID(ent.Name())
+		if !ok {
 			continue
 		}
 		ids = append(ids, id)
@@ -220,16 +221,42 @@ func Role(comm string) string {
 	}
 }
 
+// PID32 is n as a uint32 process id. It is 0 when n is not a live pid or does
+// not fit in 32 bits, so a parsed id is never narrowed by truncation.
+func PID32(n int) uint32 {
+	if n <= 0 {
+		return 0
+	}
+	v := uint64(n)
+	if v <= math.MaxUint32 {
+		return uint32(v)
+	}
+	return 0
+}
+
+// parsePID reads a /proc directory name. Only values that fit in a uint32 pid
+// are accepted; anything else is skipped rather than truncated.
+func parsePID(name string) (int, bool) {
+	n, err := strconv.Atoi(name)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	if uint64(n) > math.MaxUint32 {
+		return 0, false
+	}
+	return n, true
+}
+
 // Owns reports whether pid is the QEMU process or one of its threads.
 func (vm VM) Owns(pid uint32) bool {
 	if pid == 0 {
 		return false
 	}
-	if int(pid) == vm.PID {
+	if PID32(vm.PID) == pid {
 		return true
 	}
 	for _, t := range vm.Threads {
-		if int(pid) == t {
+		if PID32(t) == pid {
 			return true
 		}
 	}

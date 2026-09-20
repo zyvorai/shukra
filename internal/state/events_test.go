@@ -35,7 +35,7 @@ func TestTheSharesAddUpToTheWholeList(t *testing.T) {
 
 func TestEveryKindBelongsToAClassAndAnUnknownOneToOther(t *testing.T) {
 	want := map[event.Kind]eventClass{
-		event.KindGuestConnect: classGuest, event.KindGuestFlow: classGuest, event.KindGuestInbound: classGuest, event.KindGuestDNS: classGuest,
+		event.KindGuestConnect: classGuest, event.KindGuestFlow: classGuest, event.KindGuestInbound: classGuest, event.KindGuestDNS: classGuest, event.KindGuestTLS: classGuest,
 		event.KindDetection: classNotable, event.KindVMStart: classNotable, event.KindVMStop: classNotable,
 		event.KindExec: classProcess, event.KindExit: classProcess,
 		event.KindBlockSlow: classLatency, event.KindSchedDelay: classLatency,

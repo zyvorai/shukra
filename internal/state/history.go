@@ -46,8 +46,9 @@ func (s *State) recordLocked(now time.Time) {
 	for _, vm := range s.vms {
 		m := map[uint32]aggregate.Counters{}
 		for _, tid := range vm.Threads {
-			if c, ok := s.byPID[uint32(tid)]; ok {
-				m[uint32(tid)] = c.Clone()
+			id := identity.PID32(tid)
+			if c, ok := s.byPID[id]; ok && id != 0 {
+				m[id] = c.Clone()
 			}
 		}
 		snap.threads[vm.Name] = m
@@ -89,11 +90,15 @@ func (s *State) windowedInputs(vm identity.VM, now time.Time, window time.Durati
 	old := base.threads[vm.Name]
 	out := make(map[uint32]aggregate.Counters, len(vm.Threads))
 	for _, tid := range vm.Threads {
-		cur, ok := s.byPID[uint32(tid)]
+		id := identity.PID32(tid)
+		if id == 0 {
+			continue
+		}
+		cur, ok := s.byPID[id]
 		if !ok {
 			continue
 		}
-		out[uint32(tid)] = aggregate.Delta(cur, old[uint32(tid)]) // a thread new in the window has no base: all of it is the window's
+		out[id] = aggregate.Delta(cur, old[id]) // a thread new in the window has no base: all of it is the window's
 	}
 	return out, span, true
 }

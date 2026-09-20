@@ -129,6 +129,14 @@ func StartTap(handler func(event.Event)) {
 				lost.Add(1)
 			}
 		}
+		if m := coll.Maps["tap_tls"]; m != nil {
+			// The same for a program from before TLS names.
+			if tls, err := ringbuf.NewReader(m); err == nil {
+				readTapRing(tls, handler, decodeTLS)
+			} else {
+				lost.Add(1)
+			}
+		}
 	})
 }
 
@@ -159,6 +167,14 @@ func readTapRing(rd *ringbuf.Reader, handler func(event.Event), decode func([]by
 func SetDNSEvents(on bool) {
 	if err := bpfgen.SetTapDNS(on); err != nil {
 		log.Printf("tap program: DNS name events: %v", err)
+	}
+}
+
+// SetTLSEvents turns TLS server name events on or off in the kernel program. It is set on every start, for
+// the same reason as SetDNSEvents. With it off the program reads no TCP payload at all.
+func SetTLSEvents(on bool) {
+	if err := bpfgen.SetTapTLS(on); err != nil {
+		log.Printf("tap program: TLS name events: %v", err)
 	}
 }
 

@@ -28,6 +28,7 @@ These come from the tap program and the drops program, and are the only ones tha
 - **Handshake time** is SYN to SYN-ACK of the guest's accepted outbound connections, as a log2 histogram, seen at the host's tap.
 - **Kernel drops** are what the kernel dropped on the tap, by its own reason. Shukra's isolation shows as `TC_INGRESS`/`TC_EGRESS` and is subtracted, a full queue (`FULL_RING`) is a guest not reading its NIC, and the rest is `other`.
 - **DNS names.** `guest_dns` events carry the first question of a UDP/53 query. They are announced once a minute per tap, name and type, and are not counters: there is no series for them. They are omitted entirely under `-dns-events=false`.
+- **TLS server names.** `guest_tls` events carry the server name, protocols, version and fingerprint of a ClientHello. One per connection (a retransmitted hello is not another), at most 100 a second per tap, and not counters: there is no series for them. They are omitted entirely under `-tls-events=false`.
 - **Windows.** Explain, doctor and the threshold rules read these over the last minute, not the life of the daemon.
 
 ## Latency is bucketed

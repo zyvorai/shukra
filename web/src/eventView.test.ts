@@ -3,6 +3,7 @@ import { type Ev, hasText, inVM, newestFirst, NO_VM, page, PAGE, vmOf } from './
 
 const web: Ev = { ts: '2026-09-20T03:00:02Z', kind: 'guest_connect', vm: { name: 'web-01' }, dst: '203.0.113.9', dport: 443 };
 const db: Ev = { ts: '2026-09-20T03:00:01Z', kind: 'guest_dns', vm: { name: 'db-01' }, dns_name: 'Pool.Example.org', qtype: 'A' };
+const tls: Ev = { ts: '2026-09-20T03:00:04Z', kind: 'guest_tls', vm: { name: 'web-01' }, sni: 'Api.Example.org', alpn: 'h2', ja3: '375c6162a492dfbf2795909110ce8424', dport: 443 };
 const k3s: Ev = { ts: '2026-09-20T03:00:03Z', kind: 'tcp_connect', vm: {}, dst: '10.43.0.1', dport: 443, attribution: 'unattributed' };
 
 test('a VM filter keeps that VM, and "host processes" keeps only events that belong to no VM', () => {
@@ -20,6 +21,9 @@ test('a search matches address, port, name and kind, ignoring case, and an empty
   expect(hasText(db, 'pool.example')).toBe(true);
   expect(hasText(db, ' POOL ')).toBe(true);
   expect(hasText(web, 'guest_connect')).toBe(true);
+  expect(hasText(tls, 'api.example')).toBe(true);
+  expect(hasText(tls, 'H2')).toBe(true);
+  expect(hasText(tls, '375c6162')).toBe(true);
   expect(hasText(web, 'nanopool')).toBe(false);
   expect(hasText(k3s, '')).toBe(true);
   expect(hasText(k3s, '   ')).toBe(true);
