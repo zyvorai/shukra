@@ -539,13 +539,13 @@ kill $GSRV $GUDP 2>/dev/null; sudo pkill -f 'http.server 8091' 2>/dev/null
 echo "-- the timer: unconfirmed, the policy goes back"
 echo "  waiting for the confirmation to run out (a minute from when it was applied, checked every two seconds)"
 for _ in $(seq 60); do [ "$(polq "d['policies'][0]['mode']")" = audit ] && break; sleep 2; done
-check "the VM went back to the audit it had, with its list" "polq \"d['policies'][0]['mode']=='audit' and d['policies'][0]['revert'] is None and len(d['policies'][0]['allow'])==2\" | grep -q True"
+check "the VM went back to the audit it had, with its list" "polq \"d['policies'][0]['mode']=='audit' and d['policies'][0].get('revert') is None and len(d['policies'][0]['allow'])==2\" | grep -q True"
 check "and the kernel with it: the outside address is reachable again" "[ \"\$(code4 10.99.0.4)\" = 200 ]"
 check "the reversion was announced as a medium detection" "[ \"\$(pdet policy-reverted 'gone back to audit')\" -ge 1 ]"
 
 echo "-- confirmed, it stays; and it outlives the daemon"
 check "enforcing again, permanently" "[ \"\$(apply '{\"vm\":\"taptest\",\"mode\":\"enforce\",\"permanent\":true}')\" = 200 ]"
-check "there is nothing waiting to be confirmed" "polq \"d['policies'][0]['revert'] is None\" | grep -q True"
+check "there is nothing waiting to be confirmed" "polq \"d['policies'][0].get('revert') is None\" | grep -q True"
 check "the doctor says nothing is waiting" "! api $U/api/v1/doctor | grep -q 'waiting to be confirmed'"
 check "confirming what is not waiting is refused" "[ \"\$(api -s -o /dev/null -w %{http_code} -X POST -d '{\"vm\":\"taptest\"}' $U/api/v1/policy/confirm)\" = 409 ]"
 check "the outside address is cut off" "[ \"\$(code4 10.99.0.4)\" = 000 ]"
