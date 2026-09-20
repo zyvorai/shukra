@@ -97,7 +97,7 @@ func TestKernelIntegrationVMMTripwires(t *testing.T) {
 		}
 	})
 
-	t.Run("a program the watched process starts is seen, with its own name, and so are its children to three deep", func(t *testing.T) {
+	t.Run("a program the watched process starts is seen, with its own name, and so are its children", func(t *testing.T) {
 		child := unique("child")
 		_ = exec.Command("cat", child).Run()
 		e, ok := found(openOf(child))
@@ -116,12 +116,49 @@ func TestKernelIntegrationVMMTripwires(t *testing.T) {
 		}
 	})
 
-	t.Run("a process four levels down is not the VMM's and is not seen", func(t *testing.T) {
-		four := unique("four")
-		_ = exec.Command("sh", "-c", `sh -c "sh -c 'cat `+four+`; true'; true"; true`).Run()
-		time.Sleep(500 * time.Millisecond) // long enough for the ring reader, which has proved itself above
-		if _, ok := found(openOf(four)); ok {
-			t.Fatal("it was reported: the walk is longer than it says")
+	t.Run("a process is the VMM's however deep it goes", func(t *testing.T) {
+		// a script that runs itself one level less deep until it is at the bottom, where it opens the file: eight
+		// shells down, where the walk through parents reaches three, so this is the fork tracking
+		f, err := os.CreateTemp("", "shukra-deep-*.sh")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(f.Name())
+		_, _ = f.WriteString("n=$1\nif [ \"$n\" -gt 0 ]; then sh \"$0\" $((n-1)) \"$2\"; true; else cat \"$2\"; true; fi\n")
+		f.Close()
+		deep := unique("deep")
+		_ = exec.Command("sh", f.Name(), "8", deep).Run()
+		if e, ok := found(openOf(deep)); !ok || e.Comm != "cat" || e.TGID != me {
+			t.Fatalf("%+v %v", e, ok)
+		}
+	})
+
+	t.Run("a process whose parent has exited is still the VMM's: a shell that daemonises does not escape", func(t *testing.T) {
+		orphan := unique("orphan")
+		// the shell starts a background job and exits at once, so the job is re-parented to init before it opens anything
+		_ = exec.Command("sh", "-c", "(sleep 0.4; cat "+orphan+") & exit 0").Run()
+		if e, ok := found(openOf(orphan)); !ok || e.Comm != "cat" || e.TGID != me {
+			t.Fatalf("%+v %v", e, ok)
+		}
+	})
+
+	t.Run("a process that was already running when the VMM was first seen is found through its parents", func(t *testing.T) {
+		SetWatched(nil)
+		early := unique("early")
+		cmd := exec.Command("sh", "-c", "read x; cat "+early+"; true")
+		in, err := cmd.StdinPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		SetWatched([]uint32{me}) // the shell was forked before this, so it is not in the kernel's table of descendants
+		_, _ = in.Write([]byte("go\n"))
+		in.Close()
+		_ = cmd.Wait()
+		if e, ok := found(openOf(early)); !ok || e.Comm != "cat" || e.TGID != me {
+			t.Fatalf("%+v %v", e, ok)
 		}
 	})
 

@@ -7,10 +7,13 @@
    what descends from them, and for no one else.
 
    The tracepoints fire for every process on the host, so the first thing each does is find out whether the
-   caller is a VMM: one lookup for itself and up to three ancestors, which is all a shell and the program it
-   runs need. A host that is not a VMM's costs a few map lookups and returns. The path of an open is
-   copied out as it was given, and userspace decides which are sensitive, so the list can change without a
-   new program; the kernel only limits how many a VMM can report a second.
+   caller is a VMM or descends from one. What descends from a VMM is worked out when the process is created:
+   a fork by a VMM, or by something that descends from one, records the child (vmm_desc), and its exit removes
+   it. So a shell keeps its lineage when its parent exits and it is re-parented to init, and it does not matter
+   how deep it goes. A process that was already running when the VMM was first seen is not in the table, and
+   is found through its parents, up to three of them. A host that is not a VMM's costs a few map lookups and
+   returns. The path of an open is copied out as it was given, and userspace decides which are sensitive, so
+   the list can change without a new program; the kernel only limits how many a VMM can report a second.
 
    It is a tripwire and not a sandbox. The path is read when the call starts, so a path that is changed after
    that is not seen; a relative path is reported as it was given; and a process that does none of these
@@ -78,6 +81,15 @@ struct {
 	__type(value, __u8);
 } vmm_watched SEC(".maps");
 
+/* Processes that descend from a VMM, by tgid, and which VMM. Filled when a watched process forks. An LRU of a fixed
+   size: a process cannot grow it, only turn it over. */
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, 8192);
+	__type(key, __u32);
+	__type(value, __u32);
+} vmm_desc SEC(".maps");
+
 struct vmm_rate {
 	__u64 window_ns;
 	__u64 count;
@@ -91,12 +103,15 @@ struct {
 	__type(value, struct vmm_rate);
 } vmm_rate SEC(".maps");
 
-/* The VMM the caller is, or descends from through at most three parents: a shell started by a VMM, and the
-   program the shell runs. 0 when it is neither. */
+/* The VMM the caller is or descends from: 0 when it is neither. A process forked from a VMM's tree is in vmm_desc;
+   one that was already running is found through at most three parents. */
 static __always_inline __u32 vmm_root(void) {
 	__u32 tgid = bpf_get_current_pid_tgid() >> 32;
 	if (bpf_map_lookup_elem(&vmm_watched, &tgid))
 		return tgid;
+	__u32 *known = bpf_map_lookup_elem(&vmm_desc, &tgid);
+	if (known)
+		return *known;
 	struct task_struct *t = (struct task_struct *)bpf_get_current_task();
 #pragma unroll
 	for (int i = 0; i < 3; i++) {
@@ -265,4 +280,26 @@ int vmm_kexec_load(struct trace_event_raw_sys_enter *ctx) {
 SEC("tracepoint/syscalls/sys_enter_kexec_file_load")
 int vmm_kexec_file_load(struct trace_event_raw_sys_enter *ctx) {
 	return vmm_call(VMM_KEXEC_FILE_LOAD, 0, 0);
+}
+
+/* A process is created: if the parent is a VMM, or descends from one, so does the child. This runs in the parent's
+   context, before the child has run, so its first call is already watched. For a new thread the child id is a
+   thread id that nothing looks up, which is harmless. */
+SEC("tracepoint/sched/sched_process_fork")
+int vmm_fork(struct trace_event_raw_sched_process_fork *ctx) {
+	__u32 root = vmm_root();
+	if (!root)
+		return 0;
+	__u32 child = BPF_CORE_READ(ctx, child_pid);
+	bpf_map_update_elem(&vmm_desc, &child, &root, BPF_ANY);
+	return 0;
+}
+
+/* A task exits: whatever it was, it is not in the table any more, so a process id that is used again does not
+   inherit a VMM. */
+SEC("tracepoint/sched/sched_process_exit")
+int vmm_exit(struct trace_event_raw_sched_process_template *ctx) {
+	__u32 pid = BPF_CORE_READ(ctx, pid);
+	bpf_map_delete_elem(&vmm_desc, &pid);
+	return 0;
 }

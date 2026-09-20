@@ -6,7 +6,7 @@ The `vmm` program watches for exactly that, with no configuration. On the refere
 
 ## What is watched
 
-- **Which processes.** The QEMU processes of the scan (or a FluxVM backend), the same set the scheduler program watches, and **anything they started, up to three levels down**: a shell a VMM started, and the program the shell ran. The kernel names the VMM it descends from, so the event belongs to that VM.
+- **Which processes.** The QEMU processes of the scan (or a FluxVM backend), the same set the scheduler program watches, and **anything they started, however deep**: a shell a VMM started, the program the shell ran, and what that ran. Descent is recorded when a process is *created* (a fork by a VMM, or by something that descends from one, marks the child; its exit clears it), so a shell that starts a background job and exits, which re-parents the job to init, has not shaken it off. The kernel names the VMM each process descends from, so the event belongs to that VM. A process that was already running when a VMM was first seen has no such record, and is found through its parents, up to three of them.
 - **What is reported.**
 
 | Event | What it is |
@@ -57,12 +57,12 @@ vmm:
 
 ## What it costs
 
-The tracepoints fire for **every** process on the host, so the first thing each does is find out whether the caller is a VMM: one lookup for itself and up to three ancestors. Measured on the reference host (Intel Xeon E-2336, Linux 6.8, about 7,700 opens a second across a k3s and Cilium node), with an empty watched list so every call takes that path:
+The tracepoints fire for **every** process on the host, so the first thing each does is find out whether the caller is a VMM or descends from one: a lookup for itself, one in the table of descendants, and, for a process that is in neither, a walk through up to three parents. Two more hooks keep that table (a fork, and an exit) and fire on every process creation and exit. Measured on the reference host (Intel Xeon E-2336, Linux 6.8, about 8,100 tracepoint hits a second across a k3s and Cilium node), with an empty watched list so every call takes the slow path:
 
 | | |
 |---|---|
-| Per call | about **190 ns** for `openat` |
-| Whole program | **0.147% of one core** |
+| Per call | about **183 ns** for `openat`, about 860 ns for a fork and 550 ns for an exit (about 100 a second each here) |
+| Whole program | **0.161% of one core** |
 
 That is inside the 0.2% the design allowed, and it scales with how many opens the host does: **at 100,000 opens a second it would be about 2% of a core**. A host that busy can turn it off with `-vmm-tripwires=false`; the cost is not in the events, which are almost none, but in deciding for every open that it is not a VMM's. The cost of a call by a VMM is more, and bounded: a per-VMM limit of 300 reported calls a second.
 
@@ -72,13 +72,14 @@ It is a **tripwire, not a sandbox**.
 
 - **The path is read when the call starts.** One that changes after that is not seen, and a symlink is not followed: `/tmp/x` that points at `/etc/shadow` is `/tmp/x`.
 - **A relative path is resolved from `/proc` while the process is still there.** A short-lived process is often gone by the time the event is read, and then the path stays as it was given, and cannot be judged: `cd /etc; cat shadow` from a process that has exited is `shadow`. (The event says when it resolved one, and how.)
-- **Four levels down is not seen.** A VMM, its shell, that shell's child and *its* child is the deepest that is reached. Shukra's [exec detection](tap.md#which-process) still sees what a VMM starts.
+- **A process that was already running when its VMM was first seen** is found through its parents, up to three, because nothing recorded its lineage. This matters only for a shell someone left running before Shukra started watching.
+- **A process table that overflows forgets.** Descendants are kept in a fixed-size table of 8,192, least recently used first, so a VMM that forks more than that between two of a process's calls could push a slow one out; such a process is found again through its parents while they live. That a VMM forks that much is itself worth a look, and Shukra's [exec detection](tap.md#which-process) sees what a VMM starts.
 - **A VMM that does none of these** is not seen at all: it does not have to open a file to be compromised.
 - **A flood hides nothing that was reported before it**, but calls past the limit are counted and not listed, so what is inside a flood is not visible. That a VMM flooded is itself the detection.
 - **Not other hosts' VMMs**: only the VMM processes of this host's scan.
 
 ## Checked
 
-- `TestKernelIntegrationVMMTripwires` loads the real program and checks it against calls the test makes itself, with the test process standing in for a QEMU process: a file it opens, one a child opens, three levels down and not four, an unwatched process, each call, the limit and the flood report, a long path, a relative one. It runs in CI, and on a production host too, since its maps are its own. The kernel program was mutation-checked: ten deliberate breakages of the C, each caught.
+- `TestKernelIntegrationVMMTripwires` loads the real program and checks it against calls the test makes itself, with the test process standing in for a QEMU process: a file it opens, one a child opens, eight levels down, a process whose parent has exited, one that was already running before the VMM was seen, an unwatched process, each call, the limit and the flood report, a long path, a relative one. It runs in CI, and on a production host too, since its maps are its own. The kernel program was mutation-checked: fifteen deliberate breakages of the C, each caught.
 - Section 16 of `scripts/test-tap.sh` runs the daemon against a fake VMM whose child opens sensitive files and makes each call, and checks the detections, the cleaning of a path, the rules-file overrides, the flood, that an unwatched process is not seen, and the off switch.
 - The live-guest test checks that a real KVM guest's QEMU is on the kernel's watched list and raises no tripwire detection while it boots and runs.

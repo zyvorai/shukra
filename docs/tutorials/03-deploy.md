@@ -62,7 +62,7 @@ Anything `shukrad` takes can be added the same way, in `SHUKRA_EXTRA_ARGS` in `/
 |---|---|
 | `-isolate-allow 10.0.0.0/24` | Enables isolate. Without a management allow list it is refused |
 | `-dns-events=false` | Do not record the names guests look up. The tap program then does not read DNS at all |
-| `-vmm-tripwires=false` | Do not load the program that watches QEMU processes for the files they open and the calls they make. It runs on every open on the host, about 190 ns each |
+| `-vmm-tripwires=false` | Do not load the program that watches QEMU processes for the files they open and the calls they make. It runs on every open on the host, about 200 ns each, plus a hook on every process creation and exit |
 | `-tls-events=false` | Do not record the server names in guests' TLS hellos. The tap program then reads no TCP payload at all |
 | `-webhook-url`, `-syslog`, `-alert-file` | Where detections go. See [alert sinks](07-alert-sinks.md) |
 | `-listen 127.0.0.1:30970` | Bind only locally |
