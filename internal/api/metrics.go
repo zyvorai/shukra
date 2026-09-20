@@ -29,7 +29,7 @@ func writeMetrics(w io.Writer, st *state.State) {
 	}
 	lbl := func(vm string) string { return `vm="` + labelEscaper.Replace(vm) + `"` }
 
-	gauge("shukra_vms", "QEMU VMs found in the last /proc scan.")
+	gauge("shukra_vms", "VMs found in the last scan (QEMU processes, and the VMs a runtime such as fluxvm manages).")
 	fmt.Fprintf(w, "shukra_vms %d\n", s.VMs)
 	gauge("shukra_program_attached", "1 when the eBPF program is attached.")
 	for _, p := range st.Programs() {
@@ -248,7 +248,7 @@ func writeMetrics(w io.Writer, st *state.State) {
 			fmt.Fprintf(w, "shukra_tap_packets_total{%s,tap=%q,direction=\"from_guest\"} %d\nshukra_tap_packets_total{%s,tap=%q,direction=\"to_guest\"} %d\n",
 				lbl(t.VM), t.Tap, t.FromPkts, lbl(t.VM), t.Tap, t.ToPkts)
 		}
-		counter("shukra_tap_dropped_packets_total", "Packets isolation dropped on a VM tap.")
+		counter("shukra_tap_dropped_packets_total", "Packets Shukra dropped on a VM tap: isolation, and an enforcing egress policy.")
 		for _, t := range taps {
 			fmt.Fprintf(w, "shukra_tap_dropped_packets_total{%s,tap=%q} %d\n", lbl(t.VM), t.Tap, t.DroppedPkts)
 		}

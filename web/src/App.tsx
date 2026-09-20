@@ -32,7 +32,7 @@ const heroes: Partial<Record<Page, { eyebrow: string; title: string; lede: strin
   contention: { eyebrow: 'Diagnostics', title: 'Who took whose CPU.', lede: 'Which VM preempted which, how much of a VM\'s preemption it accounts for, and what that VM was doing meanwhile. The host\'s view, not the guest\'s steal counter.', tint: 'red' },
   advice: { eyebrow: 'Diagnostics', title: 'Right-sized?', lede: 'Idle VMs with more vCPUs than they use, and busy ones that are not getting the CPU they want. Advice for a person, with the numbers and how sure it is.', tint: 'green' },
   block: { eyebrow: 'Diagnostics', title: 'Block latency.', lede: 'Requests, bytes, worst case and the latency distribution, from a log2 histogram on the QEMU I/O thread.', tint: 'amber' },
-  programs: { eyebrow: 'Diagnostics', title: 'What is attached.', lede: 'kvm, sched, block, net, tap and drops. Detached is an honest state.', tint: 'green' },
+  programs: { eyebrow: 'Diagnostics', title: 'What is attached.', lede: 'kvm, sched, block, net, vmm, tap and drops. Detached is an honest state.', tint: 'green' },
   connections: { eyebrow: 'Network', title: 'Host connections.', lede: "QEMU's own connects, and the guest's own on its tap when the tap program is attached.", tint: 'purple' },
   drops: { eyebrow: 'Network', title: 'Where packets die.', lede: "What the kernel dropped on each VM's tap and why, with Shukra's own isolation subtracted. Another program dropping traffic shows up here.", tint: 'red' },
   detections: { eyebrow: 'Security', title: 'New destinations.', lede: 'Rule hits. A detection only notices. Isolating is a separate, deliberate step.', tint: 'red' },
