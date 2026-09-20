@@ -84,6 +84,18 @@ shukractl recorder osboxes-debian --window 60s
 
 `explain` answers from evidence on hand. The causes it can give are `host_cpu_contention`, `cpu_preempted` (the vCPUs were taken off a host CPU, and it says by whom), `noisy_neighbour` (most of that went to one other VM), `storage_latency`, `kvm_exit_handling`, `tcp_retransmits`, and, from the guest's tap, `guest_traffic_dropped` (something other than Shukra is dropping its packets), `guest_not_reading_nic` and `guest_connects_failing`; otherwise `no_host_cause`, which says the cause may be inside the guest. The missing list is part of the answer: the guest's own CPU steal counter, in-guest process, and guest tap attribution when the tap program is off. If those lines are present, Shukra is telling you it cannot see them.
 
+### A verdict for a past time
+
+An incident is often found an hour after it happened, and the last minute is no help then. With `-data-dir` the daemon stores a coarse snapshot every 5 minutes, and
+
+```bash
+shukractl explain osboxes-debian --at 2026-09-20T03:12:00Z --window 30m
+shukractl explain osboxes-debian --at -3h          # three hours ago
+shukractl incident osboxes-debian --at -3h --out osboxes-incident.json
+```
+
+`explain --at` weighs what the counters did in the window ending at that time, from the two stored snapshots around it, and prints how coarse that is (`resolution:`). If nothing is stored for the time it says why: no data directory, nothing that old, the daemon was not running, or not enough before it. It does not guess. `incident` adds the window's detections, the recorder's events and the VM's isolate requests, and `--out` writes a private file to attach to a ticket. See [past verdicts](../shukractl.md#past-verdicts-and-incident-bundles).
+
 `recorder` replays the bounded per-VM ring, default cap 4096, default window 60s. With `-data-dir` the ring is saved every minute and on clean shutdown and reloaded at start; without it the ring starts empty after a restart. Kinds you will actually see: `exec`, `tcp_connect`, `tcp_retransmit`, `block_slow` (at least 10ms), `sched_delay` (at least 20ms), `detection`, process exit, and, when the tap program is attached, the guest's own `guest_connect`, `guest_flow`, `guest_inbound` and `guest_dns` events. The recorder holds the DNS names a guest looked up, so it is as sensitive as the event list: see [SECURITY](../../SECURITY.md). Counters do not each become an event.
 
 ```bash

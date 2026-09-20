@@ -15,7 +15,7 @@ Five of the six programs see the **VMM process** from the host: QEMU, or a FluxV
 
 `exec` and `exit` are emitted only for a watched VMM and its children, not for every process on the host. The watched set is every `qemu-system*` pid and every live FluxVM VMM pid. `shukrad` tells the kernel which processes those are through a `watched` map, refreshed on each scan, so a child that starts in the first couple of seconds after a VM appears can be missed. Each event carries the parent's tgid from the kernel, which is how a short-lived child is still joined to its VM after it has gone. An unrelated parent stays unattributed.
 
-Without that filter, 300 runs of `/bin/true` produced 330 exec and 328 exit events on a test host. That is enough to push connects and detections out of the 2048-event list within seconds on a busy hypervisor.
+Without that filter, 300 runs of `/bin/true` produced 330 exec and 328 exit events on a test host. That would be enough to push connects and detections out of the 2048-event list within seconds on a busy hypervisor, which is why the filter exists, and why the list keeps a share for each kind of event so no one kind can take the rest.
 
 ## Guest traffic signals
 

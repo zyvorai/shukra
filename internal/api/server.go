@@ -152,12 +152,44 @@ func routes(st *state.State) *http.ServeMux {
 		})
 	})
 	mux.HandleFunc("GET /api/v1/explain", func(w http.ResponseWriter, r *http.Request) {
-		window, err := parseExplainWindow(r.URL.Query().Get("window"))
+		q := r.URL.Query()
+		if q.Get("at") != "" {
+			at, err := parseAt(q.Get("at"), time.Now().UTC())
+			window, werr := parseAtWindow(q.Get("window"))
+			if err != nil || werr != nil {
+				http.Error(w, firstErr(err, werr).Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, st.ExplainAt(q.Get("vm"), at, window))
+			return
+		}
+		window, err := parseExplainWindow(q.Get("window"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		writeJSON(w, http.StatusOK, st.ExplainOver(r.URL.Query().Get("vm"), time.Now().UTC(), window))
+		writeJSON(w, http.StatusOK, st.ExplainOver(q.Get("vm"), time.Now().UTC(), window))
+	})
+	mux.HandleFunc("GET /api/v1/incident", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("vm") == "" {
+			http.Error(w, "vm is required", http.StatusBadRequest)
+			return
+		}
+		var at time.Time
+		var err error
+		if q.Get("at") != "" {
+			if at, err = parseAt(q.Get("at"), time.Now().UTC()); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		window, werr := parseAtWindow(q.Get("window"))
+		if werr != nil {
+			http.Error(w, werr.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, st.Incident(q.Get("vm"), at, window))
 	})
 	mux.HandleFunc("GET /api/v1/export", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, st.Export())
@@ -226,6 +258,46 @@ func parseExplainWindow(raw string) (time.Duration, error) {
 		return 0, fmt.Errorf("window must be a duration from 10s to %s, or 0 for lifetime", state.MaxExplainWindow)
 	}
 	return d, nil
+}
+
+// parseAt reads a moment: an RFC 3339 time, or a negative duration for "that long ago" ("-90m").
+func parseAt(raw string, now time.Time) (time.Time, error) {
+	if strings.HasPrefix(raw, "-") {
+		d, err := time.ParseDuration(raw)
+		if err != nil || d >= 0 {
+			return time.Time{}, fmt.Errorf("at must be an RFC 3339 time, or a negative duration such as -90m")
+		}
+		return now.Add(d), nil
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("at must be an RFC 3339 time, or a negative duration such as -90m")
+	}
+	if t.After(now.Add(time.Minute)) {
+		return time.Time{}, fmt.Errorf("at is in the future")
+	}
+	return t, nil
+}
+
+// parseAtWindow reads how far back a verdict for a past time looks: RollEvery to MaxAtWindow.
+func parseAtWindow(raw string) (time.Duration, error) {
+	if raw == "" {
+		return state.DefaultAtWindow, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < state.RollEvery || d > state.MaxAtWindow {
+		return 0, fmt.Errorf("window must be a duration from %s to %s", state.RollEvery, state.MaxAtWindow)
+	}
+	return d, nil
+}
+
+func firstErr(errs ...error) error {
+	for _, e := range errs {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
 }
 
 func parseSince(raw string) (uint64, error) {

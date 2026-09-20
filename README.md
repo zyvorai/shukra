@@ -23,6 +23,7 @@ Observe. Protect. Explain.
 | The question | Where the answer is |
 |---|---|
 | Why is this VM slow right now? | `shukractl explain <vm>`: ranked host-side causes over the last minute, with evidence and a list of what Shukra cannot see |
+| Why *was* it slow at 03:12, hours ago? | `shukractl explain <vm> --at 2026-09-20T03:12:00Z`, and `shukractl incident <vm> --at -3h --out bundle.json`: a verdict and a bundle for a past time, from stored snapshots |
 | Is the host, the disk or a noisy neighbour to blame? | `trace kvm`, `trace sched`, `trace block`: exit handling time, run-queue delay per vCPU thread, block latency histograms |
 | Who took my vCPU's CPU? | `trace sched`, `explain` (`cpu_preempted`): how long the vCPUs were runnable but off a host CPU, and which VM or host process had it |
 | Which VM is the noisy neighbour? | `trace contention`, `explain` (`noisy_neighbour`): who took whose CPU across VMs, how much of a VM's preemption one other VM accounts for, and what that VM was doing meanwhile |
@@ -111,6 +112,8 @@ shukractl trace kvm --vm osboxes-debian     # also sched, block, net, tap, drops
 shukractl trace tap --vm osboxes-debian     # the guest's traffic and what became of its connections
 shukractl trace drops --vm osboxes-debian   # what the kernel dropped on its tap, and whether it was Shukra
 shukractl recorder osboxes-debian --window 60s
+shukractl explain osboxes-debian --at -3h   # a past time, from stored 5-minute snapshots
+shukractl incident osboxes-debian --at -3h --out bundle.json   # verdict, detections, events, isolations
 shukractl watch --json                      # stream events, resuming from the last one seen
 shukractl security osboxes-debian           # rule hits for one VM
 shukractl isolate osboxes-debian            # needs -isolate-allow; prints whether it was applied
@@ -176,6 +179,7 @@ By default everything is in memory. `shukrad -data-dir /var/lib/shukra` (the sys
 | `detections.jsonl` | on every detection | last 2048 |
 | `isolations.jsonl` | on every isolate request | last 2048 |
 | `recorder.json` | every minute and on clean shutdown | the per-VM flight recorder |
+| `snapshots.jsonl` | every 5 minutes | read on demand by `explain --at` and `incident`; not loaded into memory |
 
 Counters and the event list are not saved: they are read from the kernel or rebuilt. After a crash the recorder can be up to a minute behind; detections and isolations are not. Each log rolls to `.1` at 16 MiB. The directory is `0700`, files `0600`, because they name your VMs and addresses.
 

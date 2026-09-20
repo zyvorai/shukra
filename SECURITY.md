@@ -39,7 +39,7 @@ The deployed service runs as root with six capabilities and a read-only filesyst
 
 The last two are broad. They are used only to read `/proc/<pid>/fd` and `fdinfo`, and the daemon never calls `ptrace`. If you run no libvirt VMs you can drop them; those VMs then have no known tap. Each was verified necessary by removing it under systemd. No program needs `CAP_SYSLOG`: the drops program asks the kernel to name a function itself.
 
-The daemon's data directory is `0700` and its files `0600`, because detections and isolation records name your VMs and addresses.
+The daemon's data directory is `0700` and its files `0600` (including `snapshots.jsonl`, the coarse history that past verdicts stand on, and any incident bundle `shukractl incident --out` writes), because detections and isolation records name your VMs and addresses.
 
 ## A hostile guest
 

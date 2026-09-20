@@ -78,7 +78,8 @@ All take `?vm=<name>` to narrow to one VM. Every response has a `rows` list.
 
 | Route | Returns |
 |---|---|
-| `GET /api/v1/explain?vm=<name>&window=<dur>` | `vm`, `question`, ranked `findings` (`cause`, `confidence`, `summary`, `evidence`), `window`, `basis`, `evidence`, `missing`, `events`. `window` is `10s` to `5m`, or `0`/`lifetime`; the default is the last minute. Anything else is `400`. `missing` is part of the answer: what Shukra cannot see |
+| `GET /api/v1/explain?vm=<name>&at=<time>&window=<dur>` | `vm`, `question`, ranked `findings` (`cause`, `confidence`, `summary`, `evidence`), `window`, `basis`, `evidence`, `missing`, `events`. `window` is `10s` to `5m`, or `0`/`lifetime`; the default is the last minute. Anything else is `400`. `missing` is part of the answer: what Shukra cannot see. With `at` (an RFC 3339 time, or a negative age such as `-90m`) the verdict is for a past time, built from the stored snapshots between `at - window` and `at`: `window` is then `5m` to `6h` (default `15m`), and the answer adds `at` and `resolution`. If nothing is stored for that time the one finding is `no_history` and its summary says why (no `-data-dir`, nothing that old, the daemon was not running, or not enough before it). A time in the future is `400` |
+| `GET /api/v1/incident?vm=<name>&at=<time>&window=<dur>` | One document about a VM around a moment, for a ticket: `explain` (live, or for `at` as above), the window's `detections`, recorder `events` (at most 500), the VM's `isolations`, `enforcement` and `allowList`, `programs`, and a `note`. Every list is `[]` and never `null`. It holds VM names, addresses and DNS names, and nothing from the daemon's configuration except the allow list. `vm` is required |
 | `GET /api/v1/recorder?vm=<name>&window=<dur>` | The bounded per-VM flight recorder (default 60s window, cap 4096 events) |
 
 Findings Shukra can give: `host_cpu_contention`, `storage_latency`, `kvm_exit_handling`, `tcp_retransmits`, `guest_traffic_dropped`, `guest_not_reading_nic`, `guest_connects_failing`, and `no_host_cause` (which says the cause may be inside the guest). `unknown_vm` and `not_measured` are returned alone.
@@ -103,7 +104,7 @@ An event carries `seq` (only grows), `product: "shukra"`, `kind`, `ts`, `vm` (`n
 
 | Route | Returns |
 |---|---|
-| `GET /api/v1/events?since=<seq>&vm=<name>` | `{"seq", "events"}`: events newer than `seq`, so a poller never misses one or repeats one. The daemon keeps the last 2048 |
+| `GET /api/v1/events?since=<seq>&vm=<name>` | `{"seq", "events"}`: events newer than `seq`, so a poller never misses one or repeats one. The daemon keeps 2048 in all, with a share reserved for each kind of event so a flood of one cannot push out the others (see [architecture](architecture.md#state-windows-and-history)) |
 | `GET /api/v1/stream?since=<seq>&vm=<name>` | The same as server-sent events. Each frame's `id` is the event `seq`, so a reconnect resumes with `Last-Event-ID` |
 | `GET /api/v1/detections?vm=<name>` | Detections, capped like events |
 

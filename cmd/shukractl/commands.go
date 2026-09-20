@@ -49,11 +49,16 @@ func run(args []string, out io.Writer) error {
 		if len(args) < 2 {
 			return fmt.Errorf("explain <vm>")
 		}
-		path := "/api/v1/explain?vm=" + args[1]
+		q := url.Values{"vm": {args[1]}}
 		if w := flagValue(args[2:], "--window", ""); w != "" {
-			path += "&window=" + w
+			q.Set("window", w)
 		}
-		return getBoard(out, path, has(args[2:], "--json"), formatExplain)
+		if at := flagValue(args[2:], "--at", ""); at != "" {
+			q.Set("at", at) // a past time, from the stored history
+		}
+		return getBoard(out, "/api/v1/explain?"+q.Encode(), has(args[2:], "--json"), formatExplain)
+	case "incident":
+		return incidentCmd(args[1:], out)
 	case "recorder":
 		if len(args) < 2 {
 			return fmt.Errorf("recorder <vm> [--window 60s]")
@@ -450,7 +455,13 @@ func formatExplain(w io.Writer, m map[string]any) {
 	if win := str(m, "window"); win != "" {
 		fmt.Fprintf(w, "  (window: %s)", win)
 	}
+	if at := str(m, "at"); at != "" {
+		fmt.Fprintf(w, "  (at: %s)", at)
+	}
 	fmt.Fprintln(w)
+	if r := str(m, "resolution"); r != "" {
+		fmt.Fprintf(w, "  resolution: %s\n", r)
+	}
 	if fs := list(m, "findings"); len(fs) > 0 {
 		fmt.Fprintln(w, "findings (best supported first)")
 		for _, f := range fs {
@@ -655,4 +666,54 @@ func formatContention(w io.Writer, m map[string]any) {
 			fmt.Fprintf(w, "    vm=%s  took=%sns from %s VMs  its own on-cpu=%sns  exits=%s\n", str(c, "vm"), num(c, "tookNs"), num(c, "victims"), num(c, "onCpuNs"), num(c, "exits"))
 		}
 	}
+}
+
+// incidentCmd fetches the incident bundle for one VM. With --out it writes the JSON to a file (mode 0600, since
+// it names VMs, addresses and DNS names); without it prints a summary and says how to get the whole thing.
+func incidentCmd(args []string, out io.Writer) error {
+	if len(args) < 1 || strings.HasPrefix(args[0], "-") {
+		return fmt.Errorf("incident <vm> [--at TIME|-90m] [--window 15m] [--out FILE]")
+	}
+	q := url.Values{"vm": {args[0]}}
+	if v := flagValue(args[1:], "--at", ""); v != "" {
+		q.Set("at", v)
+	}
+	if v := flagValue(args[1:], "--window", ""); v != "" {
+		q.Set("window", v)
+	}
+	b, _, err := do("GET", "/api/v1/incident?"+q.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	if file := flagValue(args[1:], "--out", ""); file != "" {
+		if err := os.WriteFile(file, b, 0o600); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "wrote %s (%d bytes, mode 0600). It names VMs, addresses and DNS names: treat it like the event list.\n", file, len(b))
+		return nil
+	}
+	if has(args[1:], "--json") {
+		_, err := out.Write(b)
+		return err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return err
+	}
+	formatIncident(out, m)
+	return nil
+}
+
+func formatIncident(w io.Writer, m map[string]any) {
+	fmt.Fprintf(w, "INCIDENT  vm=%s  at=%s  window=%s\n", str(m, "vm"), str(m, "at"), str(m, "window"))
+	if ex, ok := m["explain"].(map[string]any); ok {
+		formatExplain(w, ex)
+	}
+	dets := list(m, "detections")
+	fmt.Fprintf(w, "detections (%d)\n", len(dets))
+	for _, d := range dets {
+		fmt.Fprintf(w, "  %s  %s  %s\n", str(d, "ts"), str(d, "severity"), str(d, "message"))
+	}
+	fmt.Fprintf(w, "recorder events: %d  isolate requests: %d\n", len(list(m, "events")), len(list(m, "isolations")))
+	fmt.Fprintln(w, "the whole bundle: shukractl incident <vm> --out FILE (or --json)")
 }

@@ -70,7 +70,19 @@ It is the only program that touches traffic, so it is the one to understand.
 - A snapshot of every VM's counters is taken at most every **10 seconds** and kept for **6 minutes**. Drop counts and handshake outcomes are snapshotted beside them.
 - **Explain, doctor, and the threshold rules read the difference between now and a snapshot one window ago.** The default window is 60 seconds and the longest is 5 minutes. With less than 20 seconds of history the answer falls back to the lifetime and says so. A counter that went backwards was reset, and reads as what happened since the reset, not as a huge number.
 - Whether a program is measuring at all is always a lifetime fact, so a quiet minute is never mistaken for a detached program.
-- Events (last 2048), detections (last 2048) and the flight recorder (4096 events per VM) are bounded rings.
+- Events, detections and the flight recorder (4096 events per VM) are bounded. Detections are the last 2048.
+- **Events are 2048 in all, but not one queue.** A busy host produces a few kinds by the hundreds a second (a k3s node's connects, slow-block samples), and a plain oldest-first queue lets them push out the rare ones an operator is looking for: a guest's DNS name, a connection made into a VM, a detection. Each kind belongs to a class with a share no other class can take:
+
+  | Class | Kinds | Share |
+  |---|---|---|
+  | guest | `guest_connect`, `guest_flow`, `guest_inbound`, `guest_dns` | 512 |
+  | host network | `tcp_connect`, `tcp_retransmit` | 512 |
+  | notable | `detection`, `vm_start`, `vm_stop` | 256 |
+  | process | `exec`, `exit` | 256 |
+  | latency | `block_slow`, `sched_delay` | 256 |
+  | other | any kind this build does not know | 256 |
+
+  The shares add up to 2048 and only matter once the list is full. A class may use every slot while nobody else wants them, so a host that produces one kind still keeps 2048 of it. When the list is full, the oldest event of the class **furthest over its share** is dropped, so a class under its share is never the one that loses. Events still come back in `Seq` order, and a poller resuming from the last `Seq` it saw never misses or repeats one that is still held. The tests pin all of this, including that the victim is chosen by share and not by size.
 
 ## Detection
 
@@ -88,6 +100,8 @@ A detection keeps the attribution of the event that caused it, so a rule that fi
 ## Persistence
 
 By default everything is in memory. With `-data-dir`, detections and isolation records are appended to JSONL logs (rolling at 16 MiB), and the recorder is saved every minute and on a clean shutdown. Counters and the event list are not saved: they are read back from the kernel or rebuilt.
+
+**History for past verdicts.** The in-memory history is six minutes, which is right for "why is it slow now". So every 5 minutes (`state.RollEvery`) the daemon also appends one snapshot to `snapshots.jsonl`: per VM the counters summed over its threads, its vCPU threads on their own (only the fields a scheduling verdict reads: on-CPU, wakeup delay and its histogram, preemption and who took the CPU), and per tap what the kernel dropped and what became of its TCP handshakes, each only while its program was measuring. `explain --at` and `incident` read the file on demand (they list the snapshots' times and load only the two they need), so none of it sits in memory. A verdict for a past time is the difference between the snapshot at or before that time and the one a window earlier, built with the same code as a live one, and it says the resolution. The file rolls at 16 MiB like the other logs, so retention is set by size: about a day at ten VMs, less for a bigger fleet. A snapshot is 0600 and, like the event list, names your VMs.
 
 ## Privilege and trust
 
@@ -121,7 +135,7 @@ A build without root, clang or BTF still serves discovered VMs and reports every
 | `internal/observe` | Reads the maps, decodes events, joins the loaders to the rest. Has a stub for builds without BPF |
 | `internal/identity` | Finds QEMU and FluxVM VMMs, their threads, and the host interface to trace |
 | `internal/aggregate` | Turns per-thread maps into per-VM rows, deltas and clones |
-| `internal/state` | The in-memory truth, history, Explain, [doctor](doctor.md) |
+| `internal/state` | The in-memory truth, history and the stored-snapshot rollup (`rollup.go`), Explain, incident bundles, [doctor](doctor.md) |
 | `internal/detect`, `internal/agent` | Rules, thresholds, suppression, and the loop that applies them |
 | `internal/api`, `internal/sink`, `internal/persist` | The HTTP API and metrics, alert sinks, on-disk logs |
 | `cmd/shukrad`, `cmd/shukractl` | The daemon and the CLI |

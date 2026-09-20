@@ -23,6 +23,7 @@ type Handle struct {
 	dir     string
 	det     *Log
 	iso     *Log
+	roll    *Rollup
 	failing atomic.Bool
 }
 
@@ -57,6 +58,12 @@ func Attach(st *state.State, dir string) (*Handle, error) {
 		h.det.Close()
 		return nil, err
 	}
+	if h.roll, err = OpenRollup(dir); err != nil {
+		h.det.Close()
+		h.iso.Close()
+		return nil, err
+	}
+	st.SetRollup(h.roll)
 	st.SetPersister(h)
 	return h, nil
 }
@@ -91,6 +98,9 @@ func (h *Handle) Close() error {
 		err = e
 	}
 	if e := h.iso.Close(); err == nil {
+		err = e
+	}
+	if e := h.roll.Close(); err == nil {
 		err = e
 	}
 	return err
