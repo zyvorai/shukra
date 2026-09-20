@@ -31,7 +31,7 @@ export const fixture = {
     { name: 'sched', status: 'attached', detail: '4 tracepoints: sched_wakeup, sched_switch, sched_process_exec, sched_process_exit' },
     { name: 'block', status: 'attached', detail: '2 tracepoints: block_rq_issue, block_rq_complete' },
     { name: 'net', status: 'attached', detail: 'tcp_v4_connect, tcp_v6_connect, sampled tcp_retransmit_skb. Host TCP only: the QEMU process, not the guest.' },
-    { name: 'vmm', status: 'attached', detail: '13 hooks: the files a VMM process opens and the calls it has no business making' },
+    { name: 'vmm', status: 'attached', detail: '15 hooks: the files a VMM process opens and the calls it has no business making' },
     { name: 'tap', status: 'attached', detail: 'TCX ingress and egress on 3 taps: tap1, tap2, tap7' },
     { name: 'drops', status: 'attached', detail: 'skb:kfree_skb, filtered to 3 VM taps' },
   ],

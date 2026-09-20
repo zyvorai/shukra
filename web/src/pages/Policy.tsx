@@ -122,12 +122,7 @@ export default function Policy() {
                     </td>
                     <td>
                       {r.mode}
-                      {r.revert && (
-                        <>
-                          <br />
-                          <span className="warning">unconfirmed: goes back to {r.revert.to} at {r.revert.until}</span>
-                        </>
-                      )}
+                      {r.revert && <div className="warning">unconfirmed: goes back to {r.revert.to} at {r.revert.until}</div>}
                     </td>
                     <td title={r.allow.join(', ')}>
                       {r.allow.length}: {networks(r.allow)}
