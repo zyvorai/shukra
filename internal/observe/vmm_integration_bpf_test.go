@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -265,17 +266,40 @@ func TestKernelIntegrationVMMTripwires(t *testing.T) {
 	})
 
 	t.Run("the process id of a call is the process, not the thread, and the VMM is the root", func(t *testing.T) {
-		var tid int
-		done := make(chan struct{})
-		p := unique("thread")
-		go func() {
-			tid = syscall.Gettid()
-			_, _ = os.Open(p)
-			close(done)
-		}()
-		<-done
-		if e, ok := found(openOf(p)); !ok || e.PID != me || e.TGID != me || uint32(tid) == me {
-			t.Fatalf("%+v %v (thread %d)", e, ok, tid)
+		// Several goroutines, each pinned to its own OS thread and held there until all are ready, so that at most one of
+		// them can be on the process's main thread (the one whose id is the process id) and the rest cannot be.
+		const n = 8
+		paths := make([]string, n)
+		tids := make([]int, n)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := range paths {
+			paths[i] = unique(fmt.Sprintf("thread%d", i))
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				runtime.LockOSThread()
+				defer runtime.UnlockOSThread()
+				tids[i] = syscall.Gettid()
+				<-start
+				_, _ = os.Open(paths[i])
+			}(i)
+		}
+		time.Sleep(100 * time.Millisecond)
+		close(start)
+		wg.Wait()
+		otherThreads := 0
+		for i, p := range paths {
+			e, ok := found(openOf(p))
+			if !ok || e.PID != me || e.TGID != me {
+				t.Fatalf("%+v %v (thread %d)", e, ok, tids[i])
+			}
+			if uint32(tids[i]) != me {
+				otherThreads++
+			}
+		}
+		if otherThreads == 0 {
+			t.Fatal("no call was made from a thread other than the main one, so this proves nothing")
 		}
 	})
 }
