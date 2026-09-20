@@ -385,6 +385,35 @@ check "the guest's vCPU preemption is measured: a row with a preemptor list (nev
 check "the VMM tripwire program is attached" "api $URL/api/v1/programs | J \"[p['status'] for p in d['programs'] if p['name']=='vmm'][0]\" | grep -q attached"
 check "the guest's QEMU process is on its watched list in the kernel (tgid $QPID)" "sudo bpftool -j map dump name vmm_watched 2>/dev/null | python3 -c \"import sys,json,struct; print(any(struct.unpack('<I', bytes(int(x,16) for x in e['key']))[0]==$QPID for e in json.load(sys.stdin)))\" | grep -q True"
 check "a real QEMU raised no tripwire detection while it booted, ran, and talked to its peer: no false alarm" "api $URL/api/v1/events | J \"[e.get('rule') for e in d['events'] if e['kind']=='detection' and str(e.get('rule','')).startswith('vmm-') and e['vm']['name'] in ('$VMNAME','$VMNAMEB')]\" | grep -q '^\\[\\]\$'"
+# The real thing: ask this guest's own QEMU, over its own QMP socket, to open /etc/shadow (a read-only file node,
+# removed again straight after). QEMU opens it as any VMM would that had been talked into it, so the tripwire must
+# say so, critically, and name the VM. Only this guest's socket is used; nothing is written to the file.
+QMPSOCK=$(sudo tr '\0' '\n' < /proc/$QPID/cmdline | sed -n 's/^unix:\(.*qmp[^,]*\),.*/\1/p' | head -1)
+if [ -n "$QMPSOCK" ] && sudo test -S "$QMPSOCK"; then
+  cat > "$D/qmp.py" <<'QMP'
+import json, socket, sys
+s = socket.socket(socket.AF_UNIX); s.settimeout(10); s.connect(sys.argv[1]); f = s.makefile("rw")
+json.loads(f.readline())
+def call(cmd, args=None):
+    f.write(json.dumps({"execute": cmd, **({"arguments": args} if args else {})}) + "\n"); f.flush()
+    while True:
+        r = json.loads(f.readline())
+        if "return" in r or "error" in r:
+            return r
+call("qmp_capabilities")
+r = call("blockdev-add", {"driver": "file", "node-name": "shukra-tripwire", "filename": "/etc/shadow", "read-only": True})
+print("blockdev-add", "error" if "error" in r else "ok")
+call("blockdev-del", {"node-name": "shukra-tripwire"})
+QMP
+  sudo python3 "$D/qmp.py" "$QMPSOCK" > "$D/qmp.out" 2>&1
+  check "QEMU answered the QMP request ($(tr '\n' ' ' < "$D/qmp.out"))" "grep -q '^blockdev-add' '$D/qmp.out'"
+  for _ in $(seq 1 20); do
+    api $URL/api/v1/events | J "any(e['kind']=='detection' and e.get('rule')=='vmm-sensitive-open' and e['vm']['name']=='$VMNAME' for e in d['events'])" 2>/dev/null | grep -q True && break; sleep 1
+  done
+  check "QEMU opening /etc/shadow raises a critical vmm-sensitive-open detection for this VM, on the VMM and not the guest" "api $URL/api/v1/events | J \"any(e['kind']=='detection' and e.get('rule')=='vmm-sensitive-open' and e['severity']=='critical' and e['vm']['name']=='$VMNAME' and not e.get('guest_attributed') and '/etc/shadow' in str(e) for e in d['events'])\" | grep -q True"
+else
+  echo "  SKIP  no QMP socket on this QEMU's command line: the real-QEMU tripwire check was not run"
+fi
 check "shukra still traces the KVM exits of this VM" "api $URL/api/v1/trace/kvm | J \"sum(r['exits'] for r in d['rows'])\" | awk '\$1>0{f=1} END{exit !f}'"
 
 echo "== 5a. learned baselines (only when the daemon has them on with a learning period of five minutes or less)"
