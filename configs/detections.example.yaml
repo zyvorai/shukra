@@ -43,6 +43,17 @@ destinations:
 #     contains: pastebin
 #     severity: medium
 
+# Learned baselines: what is new for a VM, with no rule to write. Each VM is only observed
+# for `learn` from the first time it is seen; after that the first sighting of a network it
+# talks to, a site it looks up, or a network that connects in is reported once, as a
+# detection (new-destination, new-dns-suffix, new-inbound-peer). Needs -data-dir, or
+# learning starts over with every restart. Off unless this section is present.
+# baselines:
+#   learn: 24h
+#   max_alerts_per_day: 20
+#   kinds: [destination, dns-suffix, inbound-peer]
+#   severity: {dns-suffix: low}
+
 # Process names that may start under a QEMU process without an alert, matched as
 # a lowercase prefix. QEMU's own threads are always allowed.
 # exec_allow:

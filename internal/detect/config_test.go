@@ -1,6 +1,7 @@
 package detect
 
 import (
+	"github.com/zyvorai/shukra/internal/baseline"
 	"os"
 	"regexp"
 	"strings"
@@ -142,7 +143,7 @@ func TestShippedExampleParses(t *testing.T) {
 	for _, line := range strings.Split(string(raw), "\n") {
 		body, isComment := strings.CutPrefix(line, "# ")
 		switch {
-		case isComment && regexp.MustCompile(`^(suppress|ports|dns|exec_allow|thresholds):`).MatchString(body):
+		case isComment && regexp.MustCompile(`^(suppress|ports|dns|baselines|exec_allow|thresholds):`).MatchString(body):
 			live = true
 			on = append(on, body)
 		case live && strings.HasPrefix(line, "#  "):
@@ -158,7 +159,7 @@ func TestShippedExampleParses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("with examples enabled: %v\n%s", err, strings.Join(on, "\n"))
 	}
-	if len(full.Ports) != 3 || full.Ports[1].Proto != "udp" || full.Ports[2].Dir != "in" || len(full.DNS) != 2 || len(full.Thresholds) != 1 || len(full.ExecAllow) != 1 || full.Suppress != DefaultSuppress {
+	if len(full.Ports) != 3 || full.Ports[1].Proto != "udp" || full.Ports[2].Dir != "in" || len(full.DNS) != 2 || full.Baselines == nil || full.Baselines.Learn != 24*time.Hour || len(full.Thresholds) != 1 || len(full.ExecAllow) != 1 || full.Suppress != DefaultSuppress {
 		t.Fatalf("%+v", full)
 	}
 }
@@ -273,5 +274,63 @@ dns:
 	}
 	if _, ok := (*Config)(nil).MatchDNS("nanopool.org"); ok {
 		t.Error("a nil config matched")
+	}
+}
+
+func TestBaselinesAreOffUnlessTheSectionIsThere(t *testing.T) {
+	c, err := Parse([]byte("suppress: 1m\n"))
+	if err != nil || c.Baselines != nil {
+		t.Fatalf("%v %+v", err, c.Baselines)
+	}
+	if (*BaselineConfig)(nil).Learns(baseline.Destination) {
+		t.Fatal("a nil config learns nothing")
+	}
+}
+
+func TestBaselinesGetTheirDefaultsAndTheKindsAndSeveritiesAreWhatWasAsked(t *testing.T) {
+	c, err := Parse([]byte("baselines:\n  learn: 24h\n"))
+	if err != nil || c.Baselines == nil {
+		t.Fatalf("%v %+v", err, c.Baselines)
+	}
+	b := c.Baselines
+	o := b.Options()
+	if o.Learn != 24*time.Hour || o.MaxAlertsPerDay != 20 || o.MaxItems != 2048 || o.MaxAge != 720*time.Hour {
+		t.Fatalf("%+v", o)
+	}
+	for _, k := range baseline.Kinds {
+		if !b.Learns(k) {
+			t.Errorf("%s is learned by default", k)
+		}
+	}
+	if b.SeverityOf(baseline.DNSSuffix) != "low" || b.SeverityOf(baseline.Destination) != "medium" || b.SeverityOf(baseline.InboundPeer) != "medium" {
+		t.Fatal("default severities")
+	}
+	c, err = Parse([]byte("baselines:\n  learn: 2h\n  kinds: [dns-suffix]\n  severity: {dns-suffix: high}\n  max_alerts_per_day: 5\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = c.Baselines
+	if b.Learns(baseline.Destination) || !b.Learns(baseline.DNSSuffix) || b.SeverityOf(baseline.DNSSuffix) != "high" || b.Options().MaxAlertsPerDay != 5 {
+		t.Fatalf("%+v", b)
+	}
+}
+
+func TestBaselinesRejectWhatWouldQuietlyDoNothingOrEverything(t *testing.T) {
+	for why, in := range map[string]string{
+		"learn too short":        "baselines:\n  learn: 10s\n",
+		"learn too long":         "baselines:\n  learn: 2400h\n",
+		"max age under learn":    "baselines:\n  learn: 48h\n  max_age: 24h\n",
+		"unknown kind":           "baselines:\n  kinds: [destinations]\n",
+		"repeated kind":          "baselines:\n  kinds: [destination, destination]\n",
+		"severity for a nonkind": "baselines:\n  severity: {exec: high}\n",
+		"bad severity":           "baselines:\n  severity: {destination: loud}\n",
+		"cap below one":          "baselines:\n  max_alerts_per_day: -1\n",
+		"cap too large":          "baselines:\n  max_alerts_per_day: 5000\n",
+		"items too small":        "baselines:\n  max_items: 3\n",
+		"unknown field":          "baselines:\n  lern: 24h\n",
+	} {
+		if _, err := Parse([]byte(in)); err == nil {
+			t.Errorf("accepted: %s\n%s", why, in)
+		}
 	}
 }

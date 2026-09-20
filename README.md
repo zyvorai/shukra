@@ -26,6 +26,7 @@ Observe. Protect. Explain.
 | Why *was* it slow at 03:12, hours ago? | `shukractl explain <vm> --at 2026-09-20T03:12:00Z`, and `shukractl incident <vm> --at -3h --out bundle.json`: a verdict and a bundle for a past time, from stored snapshots |
 | Is the host, the disk or a noisy neighbour to blame? | `trace kvm`, `trace sched`, `trace block`: exit handling time, run-queue delay per vCPU thread, block latency histograms |
 | Who took my vCPU's CPU? | `trace sched`, `explain` (`cpu_preempted`): how long the vCPUs were runnable but off a host CPU, and which VM or host process had it |
+| What is new for this VM? | `baselines:` in the rules file, then `shukractl baseline`: each VM's normal networks, sites and inbound peers are learned, and the first sighting of a new one is reported once. No rule to write; off unless you turn it on |
 | Which VM is the noisy neighbour? | `trace contention`, `explain` (`noisy_neighbour`): who took whose CPU across VMs, how much of a VM's preemption one other VM accounts for, and what that VM was doing meanwhile |
 | What is this VM connecting to, who connects to it, and what names does it look up? | `guest_connect`, `guest_flow`, `guest_inbound` and `guest_dns` events, seen on the VM's own tap |
 | Did the connection get an answer? | `trace tap`: every TCP handshake ends as accepted, refused, never answered or blocked, with the handshake time |
@@ -147,6 +148,8 @@ thresholds:                      # a per-VM metric over a window
   - {name: vm-traffic-dropped, metric: guest_drops_per_sec, value: 5, window: 30s}
   - {name: slow-disk, metric: block_write_p99_ms, value: 50}
 exec_allow: [node_exporter]
+baselines:                       # off unless present: what is new for each VM after it has been learned
+  learn: 24h
 suppress: 5m
 ```
 
@@ -180,6 +183,7 @@ By default everything is in memory. `shukrad -data-dir /var/lib/shukra` (the sys
 | `detections.jsonl` | on every detection | last 2048 |
 | `isolations.jsonl` | on every isolate request | last 2048 |
 | `recorder.json` | every minute and on clean shutdown | the per-VM flight recorder |
+| `baselines.json` | every minute, if it changed | what each VM has learned as normal (only when `baselines:` is on) |
 | `snapshots.jsonl` | every 5 minutes | read on demand by `explain --at` and `incident`; not loaded into memory |
 
 Counters and the event list are not saved: they are read from the kernel or rebuilt. After a crash the recorder can be up to a minute behind; detections and isolations are not. Each log rolls to `.1` at 16 MiB. The directory is `0700`, files `0600`, because they name your VMs and addresses.
@@ -224,6 +228,7 @@ Events that leave the daemon carry `product: "shukra"`. A joined host event has 
 | [Attribution](docs/attribution.md) | Host events versus guest events, and what is not measured |
 | [Guest traffic and isolation](docs/tap.md) | The tap program, handshakes, isolate, durability |
 | [Where packets die](docs/drops.md) | The drops program |
+| [Learned baselines](docs/baselines.md) | What is new for a VM, with no rule to write |
 | [Doctor](docs/doctor.md) | Every check, when it fires, and what to do |
 | [Architecture](docs/architecture.md) | How the pieces fit, privileges, kernel requirements |
 | [Testing](docs/testing.md) | Every test, where it can run, and what must never run on a live host |

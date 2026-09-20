@@ -109,6 +109,7 @@ type State struct {
 	linkExists    func(string) bool
 	history       []snapshot
 	rollup        RollupStore
+	baselines     BaselineView
 	lastRoll      time.Time
 	rollWarned    bool
 	clock         func() time.Time

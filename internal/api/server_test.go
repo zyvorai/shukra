@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zyvorai/shukra/internal/aggregate"
+	"github.com/zyvorai/shukra/internal/baseline"
 	"github.com/zyvorai/shukra/internal/event"
 	"github.com/zyvorai/shukra/internal/identity"
 	"github.com/zyvorai/shukra/internal/state"
@@ -813,5 +814,160 @@ func TestContentionEndpointServesPairsVictimsAndCulpritsAndNeverNull(t *testing.
 	}
 	if rec := get(h, "/api/v1/trace/contention", ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("%d", rec.Code)
+	}
+}
+
+// baseView is a state.BaselineView over a real store.
+type baseView struct {
+	s                  *baseline.Store
+	enabled, persisted bool
+}
+
+func (v baseView) Enabled() bool             { return v.enabled }
+func (v baseView) Persisted() bool           { return v.persisted }
+func (v baseView) Options() baseline.Options { return v.s.Options() }
+func (v baseView) Status(vm string, now time.Time) []baseline.VMStatus {
+	return v.s.Status(vm, now)
+}
+func (v baseView) Items(vm string, limit int) []baseline.Learned { return v.s.Items(vm, limit) }
+func (v baseView) Forget(vm string) bool                         { return v.s.Forget(vm) }
+
+func post(h http.Handler, path, key, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	req.Header.Set("X-Shukra-Actor", "tester")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestBaselineEndpointIsOffByDefaultAndListsWhatIsLearnedWhenOn(t *testing.T) {
+	st := state.New("node-07")
+	h := New(st, "k")
+	body := strings.Join(strings.Fields(get(h, "/api/v1/baseline", "k").Body.String()), "")
+	for _, want := range []string{`"enabled":false`, `"persisted":false`, `"rows":[]`, `"items":[]`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %s in %s", want, body)
+		}
+	}
+	store := baseline.NewStore(baseline.Options{Learn: time.Hour})
+	store.Observe("web", baseline.Destination, "203.0.113.0/24", time.Now().Add(-10*time.Minute))
+	store.Observe("db", baseline.DNSSuffix, "example.com", time.Now().Add(-10*time.Minute))
+	st.SetBaselines(baseView{s: store, enabled: true, persisted: true})
+	var got struct {
+		Enabled, Persisted bool
+		Learn              string
+		Rows               []struct {
+			VM       string
+			Learning bool
+		}
+		Items []struct{ Kind, Item string }
+	}
+	rec := get(h, "/api/v1/baseline", "k")
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || !got.Enabled || !got.Persisted || got.Learn != "1h0m0s" || len(got.Rows) != 2 || !got.Rows[0].Learning {
+		t.Fatalf("%v %s", err, rec.Body.String())
+	}
+	if len(got.Items) != 0 {
+		t.Fatalf("items are only listed for one VM that asks: %+v", got.Items)
+	}
+	rec = get(h, "/api/v1/baseline?vm=web&items=1", "k")
+	got.Items = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Rows) != 1 || len(got.Items) != 1 || got.Items[0].Item != "203.0.113.0/24" {
+		t.Fatalf("%v %s", err, rec.Body.String())
+	}
+	if strings.Contains(get(h, "/api/v1/baseline?vm=nobody&items=1", "k").Body.String(), "null") {
+		t.Fatal("an unknown VM is [] and never null")
+	}
+	if rec := get(h, "/api/v1/baseline", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("%d", rec.Code)
+	}
+}
+
+func TestForgettingABaselineNeedsTheAdminKeyAndIsRecordedAsADetection(t *testing.T) {
+	st := state.New("node-07")
+	store := baseline.NewStore(baseline.Options{Learn: time.Hour})
+	store.Observe("web", baseline.Destination, "x", time.Now())
+	h := NewWithKeys(st, Keys{Admin: "admin", ReadOnly: "ro"})
+	if rec := post(h, "/api/v1/baseline/forget", "admin", `{"vm":"web"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("with baselines off: %d", rec.Code)
+	}
+	st.SetBaselines(baseView{s: store, enabled: true, persisted: true})
+	if rec := post(h, "/api/v1/baseline/forget", "ro", `{"vm":"web"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("a read-only key must not reset what a VM has learned: %d", rec.Code)
+	}
+	if len(store.Items("web", 0)) != 1 {
+		t.Fatal("a refused request changed the baseline")
+	}
+	for _, bad := range []string{`{}`, `not json`, `{"vm":""}`} {
+		if rec := post(h, "/api/v1/baseline/forget", "admin", bad); rec.Code != http.StatusBadRequest {
+			t.Errorf("%q: %d", bad, rec.Code)
+		}
+	}
+	if rec := post(h, "/api/v1/baseline/forget", "admin", `{"vm":"nobody"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("%d", rec.Code)
+	}
+	if rec := post(h, "/api/v1/baseline/forget", "admin", `{"vm":"web"}`); rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if store.Items("web", 0) != nil {
+		t.Fatal("it was not forgotten")
+	}
+	var found bool
+	for _, d := range st.Detections("web") {
+		if d.Rule == "baseline-forgotten" && strings.Contains(d.Message, "tester") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("forgetting hides a change, so it must leave a record naming who: %+v", st.Detections("web"))
+	}
+}
+
+func TestMetricsShowBaselinesOnlyWhenTheyAreOn(t *testing.T) {
+	st := state.New("node-07")
+	h := New(st, "k")
+	if strings.Contains(get(h, "/metrics", "k").Body.String(), "shukra_baseline_") {
+		t.Fatal("series for something that is off")
+	}
+	store := baseline.NewStore(baseline.Options{Learn: time.Hour, MaxAlertsPerDay: 1})
+	store.Observe("web", baseline.Destination, "a", time.Now().Add(-3*time.Hour))
+	store.Observe("web", baseline.Destination, "b", time.Now())
+	store.Observe("web", baseline.Destination, "c", time.Now())
+	st.SetBaselines(baseView{s: store, enabled: true, persisted: true})
+	text := get(h, "/metrics", "k").Body.String()
+	for _, want := range []string{
+		`shukra_baseline_learning{vm="web"} 0`,
+		`shukra_baseline_items{vm="web",kind="destination"} 3`,
+		`shukra_baseline_items{vm="web",kind="dns-suffix"} 0`,
+		`shukra_baseline_new_total{vm="web"} 1`,
+		`shukra_baseline_suppressed_total{vm="web"} 1`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in\n%s", want, text)
+		}
+	}
+}
+
+// The agent always gives the state a view; whether the rules file has baselines on is the view's to say.
+func TestAViewWhoseRulesHaveBaselinesOffIsOffEverywhere(t *testing.T) {
+	st := state.New("node-07")
+	store := baseline.NewStore(baseline.Options{Learn: time.Hour})
+	store.Observe("web", baseline.Destination, "x", time.Now().Add(-3*time.Hour)) // learned while it was on
+	st.SetBaselines(baseView{s: store, enabled: false, persisted: true})
+	h := New(st, "k")
+	body := strings.Join(strings.Fields(get(h, "/api/v1/baseline?vm=web&items=1", "k").Body.String()), "")
+	if !strings.Contains(body, `"enabled":false`) || !strings.Contains(body, `"rows":[]`) || !strings.Contains(body, `"items":[]`) {
+		t.Fatalf("what was learned earlier is not shown while it is off: %s", body)
+	}
+	if strings.Contains(get(h, "/metrics", "k").Body.String(), "shukra_baseline_") {
+		t.Fatal("series for baselines that are off")
+	}
+	if rec := post(h, "/api/v1/baseline/forget", "k", `{"vm":"web"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("%d", rec.Code)
+	}
+	if len(store.Items("web", 0)) != 1 {
+		t.Fatal("a refused forget changed the baseline")
 	}
 }

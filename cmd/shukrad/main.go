@@ -19,6 +19,7 @@ import (
 
 	"github.com/zyvorai/shukra/internal/agent"
 	"github.com/zyvorai/shukra/internal/api"
+	"github.com/zyvorai/shukra/internal/baseline"
 	"github.com/zyvorai/shukra/internal/observe"
 	"github.com/zyvorai/shukra/internal/persist"
 	"github.com/zyvorai/shukra/internal/sink"
@@ -155,6 +156,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// Learned baselines live here and are used only if the rules file has a baselines section. With a data
+	// directory they survive a restart, which they must: learning starts over otherwise.
+	bases := baseline.NewStore(baseline.DefaultOptions())
+	if *dataDir != "" {
+		persist.LoadBaselines(*dataDir, bases)
+	}
+	ag.SetBaselines(bases, *dataDir != "")
 	var sinkNames []string
 	for _, k := range sinks {
 		sinkNames = append(sinkNames, k.Name())
@@ -221,6 +229,10 @@ func main() {
 					if err := store.Snapshot(); err != nil {
 						log.Printf("persist: recorder snapshot failed: %v", err)
 					}
+					bases.Prune(time.Now())
+					if err := persist.SaveBaselines(*dataDir, bases); err != nil {
+						log.Printf("persist: saving baselines failed: %v", err)
+					}
 				}
 			}
 		}()
@@ -265,6 +277,11 @@ func main() {
 	observe.ShutdownTaps()
 	if alerts != nil {
 		alerts.Close(5 * time.Second)
+	}
+	if *dataDir != "" {
+		if err := persist.SaveBaselines(*dataDir, bases); err != nil {
+			log.Printf("persist: saving baselines: %v", err)
+		}
 	}
 	if store != nil {
 		if err := store.Close(); err != nil {

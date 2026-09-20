@@ -59,6 +59,8 @@ func run(args []string, out io.Writer) error {
 		return getBoard(out, "/api/v1/explain?"+q.Encode(), has(args[2:], "--json"), formatExplain)
 	case "incident":
 		return incidentCmd(args[1:], out)
+	case "baseline":
+		return baselineCmd(args[1:], out)
 	case "recorder":
 		if len(args) < 2 {
 			return fmt.Errorf("recorder <vm> [--window 60s]")
@@ -716,4 +718,73 @@ func formatIncident(w io.Writer, m map[string]any) {
 	}
 	fmt.Fprintf(w, "recorder events: %d  isolate requests: %d\n", len(list(m, "events")), len(list(m, "isolations")))
 	fmt.Fprintln(w, "the whole bundle: shukractl incident <vm> --out FILE (or --json)")
+}
+
+// baselineCmd shows what each VM's learned baseline has learned and where its learning period stands, or, with
+// --forget, starts a VM's baseline over.
+func baselineCmd(args []string, out io.Writer) error {
+	vm := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		vm = args[0]
+	}
+	if has(args, "--forget") {
+		if vm == "" {
+			return fmt.Errorf("baseline <vm> --forget")
+		}
+		b, _, err := do("POST", "/api/v1/baseline/forget", []byte(fmt.Sprintf(`{"vm":%q}`, vm)))
+		if err != nil {
+			return err
+		}
+		if has(args, "--json") {
+			_, err := out.Write(b)
+			return err
+		}
+		fmt.Fprintf(out, "forgot the baseline of %s: it is learning again from now, and the forgetting is recorded as a detection\n", vm)
+		return nil
+	}
+	q := url.Values{}
+	if vm != "" {
+		q.Set("vm", vm)
+		if has(args, "--items") {
+			q.Set("items", "1")
+		}
+	}
+	path := "/api/v1/baseline"
+	if len(q) > 0 {
+		path += "?" + q.Encode()
+	}
+	return getBoard(out, path, has(args, "--json"), formatBaseline)
+}
+
+func formatBaseline(w io.Writer, m map[string]any) {
+	if enabled, _ := m["enabled"].(bool); !enabled {
+		fmt.Fprintln(w, "BASELINE  off: the rules file has no baselines section (see configs/detections.example.yaml)")
+		return
+	}
+	fmt.Fprintf(w, "BASELINE  learning period %s, at most %s new-item alerts per VM per day", str(m, "learn"), num(m, "maxAlertsPerDay"))
+	if p, _ := m["persisted"].(bool); !p {
+		fmt.Fprint(w, "  WARNING: not kept across a restart (no -data-dir)")
+	}
+	fmt.Fprintln(w)
+	rows := list(m, "rows")
+	if len(rows) == 0 {
+		fmt.Fprintln(w, "  no VM has been observed yet")
+	}
+	for _, r := range rows {
+		state := "reporting"
+		if l, _ := r["learning"].(bool); l {
+			state = "learning until " + str(r, "learnUntil")
+		}
+		var counts []string
+		for _, c := range list(r, "counts") {
+			counts = append(counts, fmt.Sprintf("%s %s", str(c, "kind"), num(c, "count")))
+		}
+		fmt.Fprintf(w, "  vm=%s  %s  (%s)  new alerts today %s, held back in all %s\n", str(r, "vm"), state, strings.Join(counts, ", "), num(r, "alertsToday"), num(r, "suppressed"))
+	}
+	if items := list(m, "items"); len(items) > 0 {
+		fmt.Fprintln(w, "  learned, most recently seen first")
+		for _, it := range items {
+			fmt.Fprintf(w, "    %-13s %-28s first %s  last %s\n", str(it, "kind"), str(it, "item"), str(it, "first"), str(it, "last"))
+		}
+	}
 }

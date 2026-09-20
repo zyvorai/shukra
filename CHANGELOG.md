@@ -4,6 +4,12 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### Learned baselines
+
+- A `baselines:` section in the rules file turns on learning what is normal for each VM: the networks it talks to (/24, /64), the sites it looks up (registrable names) and the networks that connect in. After a per-VM learning period (24h by default, from the first time the VM is seen) the first sighting of anything new is reported once as `new-destination`, `new-dns-suffix` or `new-inbound-peer`, guest-attributed. Off unless the section is present. See [learned baselines](docs/baselines.md).
+- Bounded against a guest: fixed-size sets, a daily cap on alerts per VM with a single `baseline-cap` detection, aging of unseen items.
+- `shukractl baseline [<vm>] [--items] [--forget]`, `GET /api/v1/baseline`, `POST /api/v1/baseline/forget` (admin only, recorded as a detection), `shukra_baseline_*` series, a `baselines` doctor check, and `baselines.json` under `-data-dir`.
+
 ### Noisy-neighbour map
 
 - `shukractl trace contention` and `GET /api/v1/trace/contention`: who took whose vCPU time across VMs, how much of each VM's preemption one other VM accounts for, the VM's own threads and host tasks, and what each culprit VM was doing over the same window. A **Contention** page in the console.

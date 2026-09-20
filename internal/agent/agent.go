@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/zyvorai/shukra/internal/aggregate"
+	"github.com/zyvorai/shukra/internal/baseline"
 	"github.com/zyvorai/shukra/internal/detect"
 	"github.com/zyvorai/shukra/internal/event"
 	"github.com/zyvorai/shukra/internal/identity"
@@ -35,6 +36,9 @@ type Agent struct {
 	// so it reads as a stop and a start. Touched only by Refresh.
 	vms       map[int]*trackedVM
 	firstScan bool
+	// base is where learned baselines live, or nil. It is used only while the rules file turns them on.
+	base          *baseline.Store
+	basePersisted bool
 	// eval is touched only by Refresh, which runs on one goroutine at a time.
 	eval detect.Evaluator
 }
@@ -70,6 +74,9 @@ func (a *Agent) reload() error {
 		return err
 	}
 	a.cfg.Store(c)
+	if a.base != nil && c.Baselines != nil {
+		a.base.SetOptions(c.Baselines.Options())
+	}
 	return nil
 }
 
@@ -311,6 +318,7 @@ func (a *Agent) ingestGuest(e event.Event, cfg *detect.Config) {
 		det.Rule, det.Severity, det.Message = rule, severity, msg
 		return det
 	})
+	a.observeBaseline(e, cfg)
 }
 
 func allowedExec(comm string) bool {

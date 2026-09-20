@@ -135,6 +135,16 @@ def dnsq(name, qtype, n):
 dnsq("live-probe.shukra-test.invalid", 1, 3)
 dnsq("Live-Probe.Shukra-Test.INVALID", 1, 2)
 dnsq("live-probe.shukra-test.invalid", 28, 1)
+# From the fourth cycle on, something this VM has never done: a network and a site it has not used. A daemon
+# running learned baselines with a short learning period reports both once; otherwise it is only more traffic.
+try:
+    cycle = int(open("/var/tmp/shukra-cycle").read())
+except Exception:
+    cycle = 0
+open("/var/tmp/shukra-cycle", "w").write(str(cycle + 1))
+if cycle >= 3:
+    tcp("198.51.100.7", 443)
+    dnsq("late-probe.other-test.invalid", 1, 1)
 # and talk to the peer guest, which may still be booting
 for i in range(20):
     try:
@@ -331,6 +341,22 @@ check "no event on an ordinary run is marked blocked (nothing is isolated)" "[ \
 check "host tcp_connect events are still not guest-attributed" "api $URL/api/v1/events | J \"any(e['guest_attributed'] for e in d['events'] if e['kind']=='tcp_connect')\" | grep -q False"
 check "the guest's vCPU preemption is measured: a row with a preemptor list (never null), and a time below the VM's lifetime" "api $URL/api/v1/trace/sched | J \"[(r['vcpuPreemptedNs'], isinstance(r['topPreemptors'], list)) for r in d['rows'] if r['vm']=='$VMNAME'][0]\" | awk -F'[(), ]+' '\$3==\"True\" && \$2<300000000000{f=1} END{exit !f}'"
 check "shukra still traces the KVM exits of this VM" "api $URL/api/v1/trace/kvm | J \"sum(r['exits'] for r in d['rows'])\" | awk '\$1>0{f=1} END{exit !f}'"
+
+echo "== 5a. learned baselines (only when the daemon has them on with a learning period of five minutes or less)"
+BASE_OK=$(api $URL/api/v1/baseline | J "int(bool(d['enabled'] and __import__('re').match(r'^[0-5]m0s\$', d['learn'])))" 2>/dev/null)
+if [ "$BASE_OK" = 1 ]; then
+  # The learning period ends a few minutes after the guest first talks; the fourth cycle then brings the new things.
+  for _ in $(seq 1 60); do
+    api $URL/api/v1/events | J "any(e.get('rule')=='new-destination' and '198.51.100.0/24' in e['message'] for e in d['events'] if e['kind']=='detection') and any(e.get('rule')=='new-dns-suffix' and 'other-test.invalid' in e['message'] for e in d['events'] if e['kind']=='detection')" 2>/dev/null | grep -q True && break
+    sleep 5
+  done
+  check "a network this guest never used, after its learning period, is one new-destination detection naming the network and the address, attributed to the guest's tap" "api $URL/api/v1/events | J \"len([e for e in d['events'] if e['kind']=='detection' and e.get('rule')=='new-destination' and '198.51.100.0/24' in e['message'] and '198.51.100.7:443' in e['message'] and e['guest_attributed'] and e['attribution']=='guest-tap'])\" | grep -q '^1\$'"
+  check "and a site it never looked up is one new-dns-suffix detection naming the suffix" "api $URL/api/v1/events | J \"len([e for e in d['events'] if e['kind']=='detection' and e.get('rule')=='new-dns-suffix' and 'other-test.invalid' in e['message'] and 'late-probe.other-test.invalid' in e['message']])\" | grep -q '^1\$'"
+  check "what it did before its learning period ended raised nothing: no new-destination for the networks the cycle used from the start" "api $URL/api/v1/events | J \"[e for e in d['events'] if e['kind']=='detection' and e.get('rule')=='new-destination' and ('203.0.113.0/24' in e['message'])]\" | grep -q '^\[\]\$'"
+  check "the baseline lists what was learned for the VM" "api '$URL/api/v1/baseline?vm=$VMNAME&items=1' | J \"len([i for i in d['items'] if i['kind']=='destination'])\" | awk '\$1>=2{f=1} END{exit !f}'"
+else
+  echo "  skipped: the daemon's rules file has no baselines section, or its learning period is longer than five minutes"
+fi
 
 echo "== 5b. the two guests reach each other, and shukra sees both ends"
 LOGA=/var/lib/fluxvm/instances/$ID/console.log; LOGB=/var/lib/fluxvm/instances/$IDB/console.log

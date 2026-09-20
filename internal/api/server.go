@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zyvorai/shukra/internal/baseline"
+	"github.com/zyvorai/shukra/internal/event"
 	"github.com/zyvorai/shukra/internal/state"
 )
 
@@ -190,6 +192,51 @@ func routes(st *state.State) *http.ServeMux {
 			return
 		}
 		writeJSON(w, http.StatusOK, st.Incident(q.Get("vm"), at, window))
+	})
+	mux.HandleFunc("GET /api/v1/baseline", func(w http.ResponseWriter, r *http.Request) {
+		v := st.Baselines()
+		out := map[string]any{"enabled": false, "persisted": false, "rows": []baseline.VMStatus{}, "items": []baseline.Learned{},
+			"note": "What each VM normally does: the networks it talks to, the sites it looks up and who connects in. A first sighting after the learning period is reported once. Off unless the rules file has a baselines section."}
+		if v != nil && v.Enabled() {
+			vm := r.URL.Query().Get("vm")
+			o := v.Options()
+			out["enabled"], out["persisted"] = true, v.Persisted()
+			out["learn"] = o.Learn.String()
+			out["maxAlertsPerDay"] = o.MaxAlertsPerDay
+			out["rows"] = v.Status(vm, time.Now().UTC())
+			if vm != "" && r.URL.Query().Get("items") == "1" {
+				if items := v.Items(vm, 500); items != nil {
+					out["items"] = items
+				}
+			}
+		}
+		writeJSON(w, http.StatusOK, out)
+	})
+	mux.HandleFunc("POST /api/v1/baseline/forget", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			VM string `json:"vm"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil || body.VM == "" {
+			http.Error(w, "vm is required", http.StatusBadRequest)
+			return
+		}
+		v := st.Baselines()
+		if v == nil || !v.Enabled() {
+			http.Error(w, "baselines are not on: the rules file has no baselines section", http.StatusConflict)
+			return
+		}
+		if !v.Forget(body.VM) {
+			http.Error(w, "no baseline is kept for that VM", http.StatusNotFound)
+			return
+		}
+		actor := r.Header.Get("X-Shukra-Actor")
+		if actor == "" {
+			actor = "api"
+		}
+		// Forgetting restarts a VM's learning period, which is a way to hide a change: so it is recorded.
+		st.AddEvent(event.Event{Kind: event.KindDetection, Rule: "baseline-forgotten", Severity: "low", VM: event.VM{Name: body.VM},
+			Message: body.VM + "'s learned baseline was forgotten by " + actor + ": it is learning again from now"})
+		writeJSON(w, http.StatusOK, map[string]any{"vm": body.VM, "forgotten": true})
 	})
 	mux.HandleFunc("GET /api/v1/export", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, st.Export())

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/zyvorai/shukra/internal/aggregate"
 	"github.com/zyvorai/shukra/internal/state"
@@ -43,6 +44,31 @@ func writeMetrics(w io.Writer, st *state.State) {
 	gauge("shukra_detections", "Detections currently held in memory.")
 	fmt.Fprintf(w, "shukra_detections %d\n", s.Detections)
 
+	if bv := st.Baselines(); bv != nil && bv.Enabled() {
+		rows := bv.Status("", time.Now().UTC())
+		gauge("shukra_baseline_learning", "1 while a VM's baseline is still in its learning period, when nothing is reported.")
+		for _, r := range rows {
+			l := 0
+			if r.Learning {
+				l = 1
+			}
+			fmt.Fprintf(w, "shukra_baseline_learning{%s} %d\n", lbl(r.VM), l)
+		}
+		gauge("shukra_baseline_items", "What a VM's baseline has learned, by kind.")
+		for _, r := range rows {
+			for _, c := range r.Counts {
+				fmt.Fprintf(w, "shukra_baseline_items{%s,kind=\"%s\"} %d\n", lbl(r.VM), c.Kind, c.Count)
+			}
+		}
+		counter("shukra_baseline_new_total", "First sightings reported after a VM's learning period.")
+		for _, r := range rows {
+			fmt.Fprintf(w, "shukra_baseline_new_total{%s} %d\n", lbl(r.VM), r.Alerts)
+		}
+		counter("shukra_baseline_suppressed_total", "First sightings held back because the VM had used its alerts for the day.")
+		for _, r := range rows {
+			fmt.Fprintf(w, "shukra_baseline_suppressed_total{%s} %d\n", lbl(r.VM), r.Suppressed)
+		}
+	}
 	counter("shukra_detections_suppressed_total", "Detections held back as repeats of one already raised.")
 	fmt.Fprintf(w, "shukra_detections_suppressed_total %d\n", st.Suppressed())
 	if sinks := st.SinkStats(); len(sinks) > 0 {

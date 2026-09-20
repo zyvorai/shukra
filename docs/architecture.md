@@ -91,6 +91,7 @@ Rules live in one YAML file (`-watchlist`), re-read on `SIGHUP`:
 - **destinations**: a CIDR watchlist, matched on the address a connect went to, or the peer that connected in.
 - **ports**: a port, with `proto` (`tcp`, `udp`, `any`) and `dir` (`out`, `in`, `any`).
 - **dns**: a name a guest looked up, by `suffix`, `exact` or `contains`.
+- **baselines**: what is learned as normal for each VM (`internal/baseline`) and reported once when new; off unless the section is present. See [baselines](baselines.md).
 - **exec_allow**: names that may start under QEMU without an alert.
 - **thresholds**: a per-VM metric over a window (block p99, run-queue delay, vCPU preemption, retransmits, KVM exit rate and latency, guest drops, connection failures, inbound connections).
 - **suppress**: a repeat of the same detection inside a window is held back and counted.
