@@ -4,6 +4,11 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### Right-sizing advisor
+
+- `shukractl advise` and `GET /api/v1/advice`: per VM the share of the window its vCPUs were halted, busy and preempted, and advice with evidence and confidence: `overprovisioned` (with a size that leaves twice the headroom it used), `starved` (reduce what it competes with before adding vCPUs), `nearly_idle`, `no_change`, `not_enough_data` and `idle_unavailable`. Idleness is halt time (a lower bound) and only named on Intel hosts; elsewhere nothing about over-provisioning is claimed.
+- A **Right-size** page in the console.
+
 ### Product brochure, and a social image that can be regenerated
 
 - **A 14-page product brochure** (`docs/sales/brochure/`, PDF and source): what Shukra is and where its programs attach, a slow VM followed from the first symptom (Explain, who took the CPU, a past time, lost traffic and isolation), what it reads and never does, the console, rules and state, deploy and testing, and a buying checklist. Built by `build.py` (standard library plus headless Chrome) with a claims-to-source table, so a number that is not in a source file does not ship.

@@ -117,6 +117,17 @@ sum by (vm, reason) (rate(shukra_tap_kernel_drops_total[5m]))
 - **Across VMs.** When a preemptor is another VM (`vm:<name>`), `shukractl trace contention` joins it to that VM's own activity over the same window (its on-CPU time and KVM exits): a culprit that is busy is doing it to itself, and one that is nearly idle is being scheduled badly. Explain adds `noisy_neighbour` when one other VM accounts for at least half of a VM's preempted time (and the preemption is already a `cpu_preempted` finding). The pairs are also on `/metrics`: `shukra_sched_vcpu_preempted_by_seconds_total{vm="db",by="vm:web"}` is the time web took from db, so a dashboard needs no new series.
 - **Where it is seen.** `shukractl trace sched`, `GET /api/v1/trace/sched` (`vcpuPreemptedNs`, `vcpuPreemptions`, `topPreemptors`), the Scheduler page, `shukra_sched_vcpu_preempted_*`, the threshold metric `vcpu_preempted_ms_per_sec`, and Explain.
 
+## Right-sizing
+
+`shukractl advise` and `GET /api/v1/advice` turn the counters into advice about a VM's size, over the last one to five minutes (five by default).
+
+- **Halted** is the HLT exit time over what the vCPUs could have run for (the window times the number of vCPU threads). HLT exit handling lasts as long as the guest was idle, which is why halts are left out of the exit-latency histogram. It is a **lower bound** on idleness: a guest that idles by polling (`idle=poll`) never halts and reads as busy, and time the host spends halt-polling counts as CPU time.
+- **A gap is shown, not hidden.** On the live hypervisor the three-vCPU VMs read exactly one third or two thirds halted, because their other vCPUs never execute HLT (offline in the guest, or idling with MWAIT or a polling loop). So `unaccountedFraction`, the share of capacity that is neither halted nor on a CPU, is reported, and `no_change` says when it is large (30% or more) that this is not proof the VM is right-sized. A halt is also counted when it ends, so a vCPU asleep in one very long halt looks less idle until it wakes.
+- **Only where the CPU names the exit.** Exit reasons are named only on Intel hosts (AMD reuses small numbers for other things, arm64 reports an exception class). Elsewhere `idleAvailable` is `false`, the advisor says so (`idle_unavailable`) and claims nothing about over-provisioning. Starvation needs no halt time and is still reported.
+- **Busy** is the vCPU threads' on-CPU time over the same capacity. The QEMU main thread, iothreads and vhost threads are not counted: they are not the guest's CPUs.
+- **Thresholds** (constants in `internal/state/advice.go`): over-provisioned at 80% halted and 20% busy with two or more vCPUs, suggesting twice the headroom it used; starved at 50% busy and either 10% preempted or a 2 ms run-queue wait; nearly idle at 95% halted with one vCPU. A window under three minutes lowers the confidence.
+- **Not an action.** Nothing here resizes a VM; a person decides.
+
 ## Known limits
 
 - **Handshake outcomes.** A SYN is judged never answered after 3 seconds, counted when the counters are read (BPF has no timers), so a server that answers later is counted as never answered, not accepted. The table of pending SYNs has a fixed size: under a SYN flood the oldest are forgotten uncounted, though `attempts` still counts every SYN. A daemon restart forgets handshakes that were in flight. A repeat of the same SYN on a connection that has not been answered is a retransmit, and a SYN that reuses a four-tuple after the old one was forgotten is a new attempt.

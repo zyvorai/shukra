@@ -52,6 +52,7 @@ Observe. Protect. Explain.
 | Why *was* it slow at 03:12, hours ago? | `shukractl explain <vm> --at 2026-09-20T03:12:00Z`, and `shukractl incident <vm> --at -3h --out bundle.json`: a verdict and a bundle for a past time, from stored snapshots |
 | Is the host, the disk or a noisy neighbour to blame? | `trace kvm`, `trace sched`, `trace block`: exit handling time, run-queue delay per vCPU thread, block latency histograms |
 | Who took my vCPU's CPU? | `trace sched`, `explain` (`cpu_preempted`): how long the vCPUs were runnable but off a host CPU, and which VM or host process had it |
+| Is each VM the right size? | `shukractl advise`: VMs with more vCPUs than they use (halt time, a lower bound) and VMs that want CPU and are not getting it, with the numbers and how sure it is. Advice for a person, never an action |
 | Which VM is the noisy neighbour? | `trace contention`, `explain` (`noisy_neighbour`): who took whose CPU across VMs, how much of a VM's preemption one other VM accounts for, and what that VM was doing meanwhile |
 | What is this VM connecting to, who connects to it, and what names does it look up? | `guest_connect`, `guest_flow`, `guest_inbound` and `guest_dns` events, seen on the VM's own tap |
 | Did the connection get an answer? | `trace tap`: every TCP handshake ends as accepted, refused, never answered or blocked, with the handshake time |
@@ -138,6 +139,7 @@ shukractl trace kvm --vm osboxes-debian     # also sched, block, net, tap, drops
 shukractl trace tap --vm osboxes-debian     # the guest's traffic and what became of its connections
 shukractl trace drops --vm osboxes-debian   # what the kernel dropped on its tap, and whether it was Shukra
 shukractl recorder osboxes-debian --window 60s
+shukractl advise                            # over-provisioned or starved VMs, with the numbers
 shukractl explain osboxes-debian --at -3h   # a past time, from stored 5-minute snapshots
 shukractl incident osboxes-debian --at -3h --out bundle.json   # verdict, detections, events, isolations
 shukractl watch --json                      # stream events, resuming from the last one seen
@@ -189,6 +191,7 @@ A detection keeps the attribution of the event that caused it, so a rule that fi
 | `GET /api/v1/doctor` | bearer, read-only key is enough | The same audit as `shukractl doctor`. It never contains a key |
 | `GET /api/v1/trace/{kvm,sched,block,net,tap,drops,contention}` | bearer | Per-VM counters. `contention` is who took whose CPU across VMs. An empty list is `[]`, never `null` |
 | `GET /api/v1/explain?vm=<name>&window=<dur>&at=<time>` | bearer | Ranked findings for one VM. `window` is 10s to 5m, or `0`; the default is the last minute. With `at` it is a past time, from stored snapshots (`window` is then 5m to 6h) |
+| `GET /api/v1/advice?vm=<name>&window=<dur>` | bearer | Is each VM the right size: idle and busy shares, preemption, run-queue wait, and the advice with evidence. `window` is 1m to 5m (default 5m) |
 | `GET /api/v1/incident?vm=<name>&at=<time>&window=<dur>` | bearer | One bundle about a VM around a moment: verdict, detections, recorder events, isolate requests, allow list |
 | `GET /api/v1/recorder?vm=<name>&window=<dur>` | bearer | The bounded per-VM flight recorder: default 60 s, at most 4096 events |
 | `GET /api/v1/detections?vm=<name>` | bearer | Rule hits, capped like events |
