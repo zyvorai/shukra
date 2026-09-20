@@ -59,6 +59,15 @@ export function fixtureResponse(path: string, init?: RequestInit): unknown {
   }
   if (url.pathname === '/api/v1/trace/block') return { rows: filter(fixture.block, vm) };
   if (url.pathname === '/api/v1/trace/drops') return { measured: false, rows: [], taps: [] };
+  if (url.pathname === '/api/v1/trace/contention') {
+    return {
+      note: 'Sample rows.',
+      window: '1m0s',
+      pairs: [{ victim: 'payment-prod-03', culprit: 'batch-etl-01', preemptedNs: 190000000, share: 0.79 }],
+      victims: [{ vm: 'payment-prod-03', preemptedNs: 240000000, preemptions: 31, byOtherVmsNs: 190000000, bySelfNs: 0, byHostNs: 50000000, topHostTasks: [{ who: 'kworker', ns: 50000000 }] }],
+      culprits: [{ vm: 'batch-etl-01', tookNs: 190000000, victims: 1, onCpuNs: 41000000000, exits: 220000 }],
+    };
+  }
   if (url.pathname === '/api/v1/trace/tap') return { rows: [] };
   if (url.pathname === '/api/v1/security') {
     return { vm: vm || '', detections: fixture.events.filter((e) => e.kind === 'detection'), enforcement: 'not_attached', allowList: [], durable: false, reason: 'Fixture. No management allow list is configured, so isolate would be refused.' };

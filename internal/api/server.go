@@ -125,6 +125,21 @@ func routes(st *state.State) *http.ServeMux {
 		}
 		writeJSON(w, http.StatusOK, out)
 	})
+	mux.HandleFunc("GET /api/v1/trace/contention", func(w http.ResponseWriter, r *http.Request) {
+		window, err := parseExplainWindow(r.URL.Query().Get("window"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		c := st.Contention(r.URL.Query().Get("vm"), time.Now().UTC(), window)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"note":     "Who took each VM's vCPU time: other VMs (pairs), the VM's own other threads, and host tasks. A culprit's own activity over the same window is beside it. This is the host's view of preemption, not the guest's steal counter.",
+			"window":   c.Window,
+			"pairs":    c.Pairs,
+			"victims":  c.Victims,
+			"culprits": c.Culprits,
+		})
+	})
 	mux.HandleFunc("GET /api/v1/trace/block", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"rows": orEmpty(st.Block(r.URL.Query().Get("vm")))})
 	})

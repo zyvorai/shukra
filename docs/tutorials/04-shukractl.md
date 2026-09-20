@@ -54,6 +54,8 @@ shukractl trace drops --vm osboxes-debian    # what the kernel dropped on its ta
 
 `trace sched` is on-CPU time and run-queue delay, and under each VM a `vCPU preempted:` line: how long the vCPUs were runnable but off a host CPU, over how many preemptions, and who had the CPU (`vm:<name>` for another VM's thread, otherwise a host command name such as `cilium-agent`). It is the host's view of losing the CPU, not the guest's steal counter: see [vCPU preemption](../signals.md#vcpu-preemption).
 
+`trace contention` is `trace sched` joined across VMs: for each VM, how much of its preempted time other VMs took (and which), how much its own threads took, and which host tasks took the rest; then, for each VM that took CPU from others, what it was doing meanwhile (on-CPU time and KVM exits over the same window). `--window 5m` widens it. `explain` names a `noisy_neighbour` when one other VM accounts for at least half of a VM's preempted time. It is the host's view, and a yield counts as preemption (see [vCPU preemption](../signals.md#vcpu-preemption)).
+
 `trace net` is `tcp_v4_connect` and `tcp_v6_connect` counted exactly, and a 1-in-64 sample of retransmits. The socket owner is QEMU. Do not brief it as guest egress. The JSON says `guest_attributed: false` and `attribution: "qemu-process"` when the PID joined a VM. The guest's own traffic is `trace tap`, seen on the VM's tap.
 
 `trace tap` is the guest's traffic from its own tap: packets and bytes each way, what isolation dropped, and what became of every TCP connection, both ways (accepted, refused, never answered, blocked, retransmits, and the handshake time). `trace drops` is what the kernel dropped on the tap by its own reason, with Shukra's isolation subtracted. Both are `guest_attributed: true`. See [guest traffic and isolation](../tap.md) and [where packets die](../drops.md), and the [walkthrough](08-lost-traffic.md).
@@ -80,7 +82,7 @@ shukractl explain osboxes-debian
 shukractl recorder osboxes-debian --window 60s
 ```
 
-`explain` answers from evidence on hand. The causes it can give are `host_cpu_contention`, `cpu_preempted` (the vCPUs were taken off a host CPU, and it says by whom), `storage_latency`, `kvm_exit_handling`, `tcp_retransmits`, and, from the guest's tap, `guest_traffic_dropped` (something other than Shukra is dropping its packets), `guest_not_reading_nic` and `guest_connects_failing`; otherwise `no_host_cause`, which says the cause may be inside the guest. The missing list is part of the answer: the guest's own CPU steal counter, in-guest process, and guest tap attribution when the tap program is off. If those lines are present, Shukra is telling you it cannot see them.
+`explain` answers from evidence on hand. The causes it can give are `host_cpu_contention`, `cpu_preempted` (the vCPUs were taken off a host CPU, and it says by whom), `noisy_neighbour` (most of that went to one other VM), `storage_latency`, `kvm_exit_handling`, `tcp_retransmits`, and, from the guest's tap, `guest_traffic_dropped` (something other than Shukra is dropping its packets), `guest_not_reading_nic` and `guest_connects_failing`; otherwise `no_host_cause`, which says the cause may be inside the guest. The missing list is part of the answer: the guest's own CPU steal counter, in-guest process, and guest tap attribution when the tap program is off. If those lines are present, Shukra is telling you it cannot see them.
 
 ### A verdict for a past time
 

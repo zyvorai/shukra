@@ -780,3 +780,38 @@ func TestIncidentNeedsAVMAndReturnsTheWholeBundle(t *testing.T) {
 		t.Fatalf("an incident bundle needs the key: %d", rec.Code)
 	}
 }
+
+func TestContentionEndpointServesPairsVictimsAndCulpritsAndNeverNull(t *testing.T) {
+	st := state.New("node-07")
+	h := New(st, "k")
+	body := strings.Join(strings.Fields(get(h, "/api/v1/trace/contention", "k").Body.String()), "")
+	for _, want := range []string{`"pairs":[]`, `"victims":[]`, `"culprits":[]`, `"window":"lifetime"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %s: %s", want, body)
+		}
+	}
+	st.SetVMs([]identity.VM{
+		{Name: "a", PID: 100, Threads: []int{100, 101}}, {Name: "b", PID: 200, Threads: []int{200, 201}},
+	})
+	st.SetCounters(map[uint32]aggregate.Counters{
+		101: {OnCPUNs: 1, WakeupCount: 1, PreemptNs: 800_000_000, PreemptCount: 4, Preemptors: map[string]uint64{"vm:b": 800_000_000}},
+		201: {OnCPUNs: 5, WakeupCount: 1},
+	})
+	var got struct {
+		Pairs []struct {
+			Victim, Culprit string
+			PreemptedNs     uint64
+			Share           float64
+		} `json:"pairs"`
+	}
+	rec := get(h, "/api/v1/trace/contention?vm=a", "k")
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Pairs) != 1 || got.Pairs[0].Culprit != "b" || got.Pairs[0].Share != 1 {
+		t.Fatalf("%v %s", err, rec.Body.String())
+	}
+	if rec := get(h, "/api/v1/trace/contention?window=1h", "k"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("a window over five minutes is refused: %d", rec.Code)
+	}
+	if rec := get(h, "/api/v1/trace/contention", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("%d", rec.Code)
+	}
+}

@@ -4,6 +4,12 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### Noisy-neighbour map
+
+- `shukractl trace contention` and `GET /api/v1/trace/contention`: who took whose vCPU time across VMs, how much of each VM's preemption one other VM accounts for, the VM's own threads and host tasks, and what each culprit VM was doing over the same window. A **Contention** page in the console.
+- New Explain cause `noisy_neighbour` when one other VM accounts for at least half of a VM's preempted time. `cpu_preempted` stays beside it.
+- No new Prometheus series: `shukra_sched_vcpu_preempted_by_seconds_total{by="vm:<name>"}` already carries the pairs.
+
 ### Explain a past time, and incident bundles
 
 - With `-data-dir` the daemon stores a coarse snapshot every 5 minutes (`snapshots.jsonl`, read on demand, bounded by size). `shukractl explain <vm> --at TIME|-3h [--window 15m]` answers "why *was* it slow then" from the two snapshots around that time, says how coarse that is, and says why when nothing is stored (`no_history`) instead of guessing.

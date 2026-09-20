@@ -21,7 +21,7 @@ shukractl isolate payment-prod-03
 | `status [--json] [--wait]` | Daemon board: mode, programs, VMs, detections. `--wait` retries for up to two minutes while the daemon starts, which is what the deploy script uses |
 | `doctor [--json] [--strict]` | Audit the daemon: exposure, what is attached, what it cannot see. Only findings that need attention are printed, worst first, each with a fix. Every check is listed in [doctor](doctor.md). `--strict` exits non-zero on a warning too |
 | `programs` | Which observation programs are attached (`kvm`, `sched`, `block`, `net`, `drops`, `tap`), how many hooks, and why one is not |
-| `trace list`, `trace kvm\|sched\|block\|net\|tap\|drops [--vm NAME]` | Per-VM counters from the daemon. `tap` adds the guest's connections and their outcomes; `drops` says what the kernel dropped on each tap and whether it was Shukra |
+| `trace list`, `trace kvm\|sched\|block\|net\|tap\|drops\|contention [--vm NAME]` | Per-VM counters from the daemon. `tap` adds the guest's connections and their outcomes; `drops` says what the kernel dropped on each tap and whether it was Shukra |
 | `vms [--json]` | QEMU and FluxVM virtual machines found on the host |
 | `explain <vm> [--window 5m\|lifetime] [--at TIME\|-90m]` | Why a VM looks slow, from the last minute by default: ranked host-side causes with evidence, and what Shukra cannot see |
 | `incident <vm> [--at TIME\|-90m] [--window 15m] [--out FILE]` | Everything known about a VM around a moment, in one bundle for a ticket. Prints a summary; `--out FILE` writes the whole JSON to a private file (mode 0600) and `--json` prints it. See [past verdicts](#past-verdicts-and-incident-bundles) |
