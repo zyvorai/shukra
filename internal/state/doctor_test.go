@@ -352,3 +352,32 @@ func TestManyVMsInAnotherNamespaceAreListedBriefly(t *testing.T) {
 		t.Fatalf("%+v", c)
 	}
 }
+
+// A program the operator turned off with a flag is not broken, and rebuilding would not bring it back: the fix
+// says so. One that failed to attach still gets the rebuild advice.
+func TestAProgramSwitchedOffOnPurposeIsNotToldToRebuild(t *testing.T) {
+	st := healthy(t)
+	st.SetPrograms([]Program{
+		{Name: "vmm", Status: "detached", Detail: "turned off with -vmm-tripwires=false"},
+		{Name: "net", Status: "detached", Detail: "operation not permitted"},
+	})
+	checks := st.Doctor()
+	off := byID(checks, "program-vmm")
+	if off == nil || off.Status != "warn" || strings.Contains(off.Fix, "rebuild") || !strings.Contains(off.Fix, "on purpose") {
+		t.Fatalf("a deliberate switch-off must not be told to rebuild: %+v", off)
+	}
+	if broken := byID(checks, "program-net"); broken == nil || !strings.Contains(broken.Fix, "rebuild") {
+		t.Fatalf("a program that failed to attach still gets the rebuild advice: %+v", broken)
+	}
+}
+
+// Two programs off for the same reason are one finding, and it carries the same advice as one alone would.
+func TestSeveralProgramsSwitchedOffAreOneFindingWithTheSameAdvice(t *testing.T) {
+	st := healthy(t)
+	why := "turned off with -example=false"
+	st.SetPrograms([]Program{{Name: "vmm", Status: "detached", Detail: why}, {Name: "drops", Status: "detached", Detail: why}})
+	g := byID(st.Doctor(), "programs-detached")
+	if g == nil || strings.Contains(g.Fix, "rebuild") || !strings.Contains(g.Fix, "on purpose") {
+		t.Fatalf("%+v", g)
+	}
+}
