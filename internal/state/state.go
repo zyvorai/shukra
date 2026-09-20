@@ -67,6 +67,10 @@ type Explain struct {
 	Evidence []string      `json:"evidence"`
 	Missing  []string      `json:"missing"`
 	Events   []event.Event `json:"events"`
+	// At and Resolution are set when the verdict is for a past time: the moment asked about, and how coarse
+	// the stored history it stood on is.
+	At         string `json:"at,omitempty"`
+	Resolution string `json:"resolution,omitempty"`
 }
 
 // Status is the board shukractl status prints.
@@ -104,6 +108,9 @@ type State struct {
 	kernelRelease func() string
 	linkExists    func(string) bool
 	history       []snapshot
+	rollup        RollupStore
+	lastRoll      time.Time
+	rollWarned    bool
 	clock         func() time.Time
 	enforcer      Enforcer
 	tapSource     func() []TapStat
@@ -190,9 +197,14 @@ func (s *State) Programs() []Program {
 
 func (s *State) SetCounters(by map[uint32]aggregate.Counters) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.byPID = by
-	s.recordLocked(s.now())
+	now := s.now()
+	s.recordLocked(now)
+	roll, store := s.dueRollLocked(now)
+	s.mu.Unlock()
+	if roll != nil {
+		s.appendRoll(store, *roll) // I/O, so not under the lock
+	}
 }
 
 func (s *State) AddEvent(e event.Event) {
@@ -342,8 +354,13 @@ func (s *State) RecorderSnapshot() []event.Event {
 	return s.rec.Snapshot()
 }
 
+// Recorder is what the flight recorder saw of vm in the window ending at now. It is [] and never nil, so a
+// document that embeds it says "none" in JSON and not null.
 func (s *State) Recorder(vm string, window time.Duration, now time.Time) []event.Event {
-	return s.rec.Window(vm, window, now)
+	if out := s.rec.Window(vm, window, now); out != nil {
+		return out
+	}
+	return []event.Event{}
 }
 
 // Isolations is the audit trail of isolate requests, oldest first.
@@ -492,42 +509,14 @@ func (s *State) ExplainOver(name string, now time.Time, window time.Duration) Ex
 		basis = "Over the last " + over + ". Latencies come from log2 buckets, so each can read up to 2x high. They are the QEMU process's, not the guest's."
 	}
 
-	var evidence []string
-	if vm.Name != "" {
-		evidence = append(evidence, "Identity comes from the QEMU command line, not from inside the guest.")
-	} else {
-		evidence = append(evidence, "No QEMU process with that name is in the current /proc scan.")
-	}
-	if len(kvm) > 0 && kvm[0].Measured {
-		evidence = append(evidence, "KVM exit counters are present for this thread group.")
-	} else {
-		evidence = append(evidence, "KVM exit counters are not populated. The kvm program may be detached.")
-	}
-	if len(sched) > 0 && sched[0].Measured {
-		evidence = append(evidence, "Scheduler on-CPU and wakeup-delay counters are present.")
-	}
-	if len(block) > 0 && block[0].Measured {
-		evidence = append(evidence, "Block latency histogram is present for the QEMU iothread, not the guest filesystem.")
-		if len(dblock) > 0 && (dblock[0].ReadP99Ns >= aggregate.SlowBlockNS || dblock[0].WriteP99Ns >= aggregate.SlowBlockNS) {
-			evidence = append(evidence, "Block p99 is at least 10ms on the QEMU iothread.")
-		}
-	}
-	if len(dsched) > 0 && dsched[0].Measured && dsched[0].WakeupCount > 0 && dsched[0].WakeupDelayNs/dsched[0].WakeupCount >= aggregate.SlowWakeupNS {
-		evidence = append(evidence, "Mean wakeup delay is at least 20ms.")
-	}
-	if len(net) > 0 && (net[0].Connects > 0 || net[0].Retransmits > 0) {
-		evidence = append(evidence, "TCP connects are from the QEMU process. They are not guest flows.")
-	}
-	missing := []string{"CPU steal as the guest counts it (Shukra measures the host's view: how long the vCPUs were preempted)", "in-guest process identity"}
+	evidence := evidenceFor(vm.Name != "", kvm, sched, block, net, dsched, dblock)
 	tapAttached := false
 	for _, p := range s.Programs() {
 		if p.Name == "tap" && p.Status == "attached" {
 			tapAttached = true
 		}
 	}
-	if !tapAttached {
-		missing = append([]string{"guest tap attribution (TCX on the VM tap is not attached)"}, missing...)
-	}
+	missing := missingFor(tapAttached)
 	dropTaps, _ := s.DropTapsOver(name, now, window)
 	var conns *Outcomes
 	if oc, _ := s.OutcomesOver(name, now, window); oc != nil {

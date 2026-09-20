@@ -4,6 +4,13 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### Explain a past time, and incident bundles
+
+- With `-data-dir` the daemon stores a coarse snapshot every 5 minutes (`snapshots.jsonl`, read on demand, bounded by size). `shukractl explain <vm> --at TIME|-3h [--window 15m]` answers "why *was* it slow then" from the two snapshots around that time, says how coarse that is, and says why when nothing is stored (`no_history`) instead of guessing.
+- `shukractl incident <vm> [--at ...] [--out FILE]` and `GET /api/v1/incident`: one bundle for a ticket (verdict, the window's detections, recorder events, isolate requests, allow list, programs). It holds nothing from the daemon's configuration except the allow list, and `--out` writes it with mode 0600.
+- The Explain page has an **At** field and a **Download incident bundle** button.
+- Fixed: a live Explain with no recorder events returned `"events": null` instead of `[]`.
+
 ### Console text and defaults
 
 - The VM field on Explain, Flight recorder and Isolate opens on the first VM the daemon actually knows and suggests the others, instead of a fixture name (`payment-prod-03`) that does not exist on the host.

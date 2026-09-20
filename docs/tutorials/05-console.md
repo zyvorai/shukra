@@ -33,6 +33,10 @@ Hash routes keep you on one origin. The mega-nav is the same set of pages.
 
 That page keeps a banner: the host connections are QEMU-process connections, not the guest, and `guest_attributed` is false. It is not a warning you dismiss. When the tap program is attached, more tables follow: the guest's own connects, connections made to the guest and UDP flows seen on its tap (each row's `kind` says which, and inbound rows show the peer as the source), the names the guest looked up (one row per name and type, once a minute), and a per-tap table of what became of every connection: attempts, accepted, refused, never answered, blocked, and the handshake time.
 
+## Explain at a past time
+
+The Explain page has an **At** field. Left blank it is the live verdict, refreshed every few seconds. Set to a date and time (your browser's zone) it asks the daemon for the verdict at that time from the stored snapshots, with a look-back of 15 minutes, an hour or 6 hours; it says what it stood on and how coarse that is, or that nothing is stored. **Back to now** clears it. **Download incident bundle** saves the verdict, the window's detections, the recorder's events and the VM's isolate requests as one JSON file; it names VMs, addresses and DNS names, so treat it like the event list.
+
 ## VM fields
 
 Explain, Flight recorder and Isolate each have a VM field. It opens on the first VM the daemon knows and suggests the others as you type. If the daemon knows no VM the field is empty; it never opens on a made-up name.

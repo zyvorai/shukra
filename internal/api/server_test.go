@@ -685,3 +685,98 @@ func TestTheSchedRowAlwaysHasAPreemptorListNotNull(t *testing.T) {
 		t.Fatalf("an empty list must be [] and not null: %s", body)
 	}
 }
+
+func TestParseAtReadsATimeOrAnAgeAndRefusesTheFutureAndGarbage(t *testing.T) {
+	now := time.Date(2026, 9, 20, 4, 0, 0, 0, time.UTC)
+	ok := map[string]time.Time{
+		"2026-09-20T03:12:00Z":      time.Date(2026, 9, 20, 3, 12, 0, 0, time.UTC),
+		"2026-09-20T09:12:00+05:30": time.Date(2026, 9, 20, 3, 42, 0, 0, time.UTC),
+		"-90m":                      now.Add(-90 * time.Minute),
+		"-36h":                      now.Add(-36 * time.Hour),
+	}
+	for raw, want := range ok {
+		got, err := parseAt(raw, now)
+		if err != nil || !got.Equal(want) {
+			t.Errorf("%q: %v %v, want %v", raw, got, err, want)
+		}
+	}
+	for _, raw := range []string{"yesterday", "90m", "-0s", "+5m", "2026-09-20", "2026-09-21T04:00:00Z", "-abc"} {
+		if _, err := parseAt(raw, now); err == nil {
+			t.Errorf("%q was accepted", raw)
+		}
+	}
+}
+
+func TestParseAtWindowIsFiveMinutesToSixHours(t *testing.T) {
+	if d, err := parseAtWindow(""); err != nil || d != state.DefaultAtWindow {
+		t.Fatalf("%v %v", d, err)
+	}
+	for _, raw := range []string{"5m", "90m", "6h"} {
+		if _, err := parseAtWindow(raw); err != nil {
+			t.Errorf("%q refused: %v", raw, err)
+		}
+	}
+	for _, raw := range []string{"4m59s", "6h1s", "0", "lifetime", "x"} {
+		if _, err := parseAtWindow(raw); err == nil {
+			t.Errorf("%q accepted", raw)
+		}
+	}
+}
+
+func TestExplainAtAnswersFromHistoryOrSaysThereIsNone(t *testing.T) {
+	h := New(state.New("node-07"), "k")
+	rec := get(h, "/api/v1/explain?vm=db&at=-1h", "k")
+	if rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	var ex struct {
+		At       string `json:"at"`
+		Window   string `json:"window"`
+		Findings []struct {
+			Cause string `json:"cause"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &ex); err != nil {
+		t.Fatal(err)
+	}
+	if len(ex.Findings) != 1 || ex.Findings[0].Cause != "no_history" || ex.At == "" || ex.Window != "none" {
+		t.Fatalf("%s", rec.Body.String())
+	}
+	for _, bad := range []string{"at=tomorrow", "at=-1h&window=1m", "at=-1h&window=lifetime"} {
+		if rec := get(h, "/api/v1/explain?vm=db&"+bad, "k"); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d", bad, rec.Code)
+		}
+	}
+	// Without at it is still the live verdict, with the old window rules.
+	if rec := get(h, "/api/v1/explain?vm=db&window=lifetime", "k"); rec.Code != 200 {
+		t.Fatalf("%d", rec.Code)
+	}
+	if rec := get(h, "/api/v1/explain?vm=db&window=1h", "k"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("a live window is still at most five minutes: %d", rec.Code)
+	}
+}
+
+func TestIncidentNeedsAVMAndReturnsTheWholeBundle(t *testing.T) {
+	st := state.New("node-07")
+	st.SetVMs([]identity.VM{{Name: "db", PID: 100, Threads: []int{100}}})
+	h := New(st, "k")
+	if rec := get(h, "/api/v1/incident", "k"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("%d", rec.Code)
+	}
+	if rec := get(h, "/api/v1/incident?vm=db&at=soon", "k"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("%d", rec.Code)
+	}
+	rec := get(h, "/api/v1/incident?vm=db", "k")
+	if rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	body := strings.Join(strings.Fields(rec.Body.String()), "")
+	for _, want := range []string{`"product":"shukra"`, `"vm":"db"`, `"at":"now"`, `"detections":[]`, `"events":[]`, `"isolations":[]`, `"allowList":[]`, `"explain":{`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %s in %s", want, body)
+		}
+	}
+	if rec := get(New(st, "k"), "/api/v1/incident?vm=db", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("an incident bundle needs the key: %d", rec.Code)
+	}
+}
