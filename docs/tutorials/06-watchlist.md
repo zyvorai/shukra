@@ -60,6 +60,11 @@ dns:                   # names the guest looked up over DNS (UDP port 53), one o
 baselines:             # optional: learn what is normal for each VM, and report what is new (see docs/baselines.md)
   learn: 24h
 
+responses:             # optional: what to do when a detection fires (see docs/responses.md)
+  - name: contain-miners
+    rules: [crypto-pool]
+    action: isolate      # the only action. mode: propose (default) waits for a person to approve
+
 exec_allow:            # may start under a VMM without an alert; lowercase prefix
   - node_exporter
 
@@ -74,6 +79,8 @@ thresholds:            # per VM, over a window
 **`dns`** rules match the name the guest asked for, in lower case (the rule is lower-cased too). `suffix: example.com` matches `example.com` and `a.b.example.com`, not `badexample.com`; `exact` is the whole name; `contains` is a substring. A rule takes exactly one of the three. The detection says the guest asked, is `guest_attributed`, and is held back for the suppression time per rule, VM and name. Names are only recorded while `shukrad` runs without `-dns-events=false`, so a `dns` rule says nothing on a daemon that has names off. See [DNS names](../tap.md#dns-names).
 
 **`baselines`** is the other way round from every rule above: no one names what is bad, the daemon learns what each VM normally does for `learn` (24 hours by default) and then reports the first sighting of a network, a site or an inbound peer it has not seen. It is off unless the section is present, and it needs `-data-dir`. See [learned baselines](../baselines.md).
+
+**`responses`** say what to do when a detection fires, and the only thing they can do is isolate the VM. By default a response **proposes** and a person approves; `mode: enforce` acts on its own but must name the rules it answers, and `guardrails` protect VMs and cap how much can happen. See [responses](../responses.md).
 
 **`exec_allow`** adds to the names that are always fine: `qemu-system*`, QEMU's own `cpu`, `io` and `vhost` threads, and the FluxVM VMMs `cloud-hypervisor`, `firecracker`, `fluxvm-hypervisor` and `jailer` (the kernel comm is 15 characters, so the first two long names match on `cloud-hypervis` and `fluxvm-hypervis`). It does not replace them. A boot of those binaries is not an unexpected-exec detection.
 

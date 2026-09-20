@@ -74,6 +74,10 @@ func run(args []string, out io.Writer) error {
 		return getBoard(out, path, has(args[1:], "--json"), formatAdvice)
 	case "baseline":
 		return baselineCmd(args[1:], out)
+	case "actions":
+		return actionsCmd(args[1:], out)
+	case "approve", "reject":
+		return decideCmd(args[0], args[1:], out)
 	case "recorder":
 		if len(args) < 2 {
 			return fmt.Errorf("recorder <vm> [--window 60s]")
@@ -836,6 +840,88 @@ func formatBaseline(w io.Writer, m map[string]any) {
 		fmt.Fprintln(w, "  learned, most recently seen first")
 		for _, it := range items {
 			fmt.Fprintf(w, "    %-13s %-28s first %s  last %s\n", str(it, "kind"), str(it, "item"), str(it, "first"), str(it, "last"))
+		}
+	}
+}
+
+// actionsCmd lists what responses decided: by default only the proposals waiting for a person.
+func actionsCmd(args []string, out io.Writer) error {
+	if id := flagValue(args, "--bundle", ""); id != "" {
+		b, _, err := do("GET", "/api/v1/actions/"+url.PathEscape(id)+"/incident", nil)
+		if err != nil {
+			return err
+		}
+		if file := flagValue(args, "--out", ""); file != "" {
+			if err := os.WriteFile(file, b, 0o600); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "wrote %s (%d bytes, mode 0600). It names VMs, addresses and DNS names: treat it like the event list.\n", file, len(b))
+			return nil
+		}
+		_, err = out.Write(b)
+		return err
+	}
+	path := "/api/v1/actions"
+	if has(args, "--all") {
+		path += "?all=1"
+	}
+	return getBoard(out, path, has(args, "--json"), formatActions)
+}
+
+// decideCmd approves or rejects a proposal. Approving isolates the VM.
+func decideCmd(verb string, args []string, out io.Writer) error {
+	if len(args) < 1 || strings.HasPrefix(args[0], "-") {
+		return fmt.Errorf("%s <action id>  (shukractl actions lists them)", verb)
+	}
+	b, _, err := do("POST", "/api/v1/actions/"+url.PathEscape(args[0])+"/"+verb, nil)
+	if err != nil {
+		return err
+	}
+	if has(args[1:], "--json") {
+		_, err := out.Write(b)
+		return err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return err
+	}
+	a, _ := m["action"].(map[string]any)
+	if verb == "approve" {
+		fmt.Fprintf(out, "approved %s: %s (%s)\n", str(a, "id"), str(a, "result"), str(a, "status"))
+	} else {
+		fmt.Fprintf(out, "rejected %s: nothing was done to %s\n", str(a, "id"), str(a, "vm"))
+	}
+	return nil
+}
+
+func formatActions(w io.Writer, m map[string]any) {
+	if enabled, _ := m["enabled"].(bool); !enabled {
+		fmt.Fprintln(w, "ACTIONS  off: the rules file has no responses section (see configs/detections.example.yaml)")
+		return
+	}
+	acts := list(m, "actions")
+	fmt.Fprintf(w, "ACTIONS  %s waiting for a decision\n", num(m, "pending"))
+	if len(acts) == 0 {
+		fmt.Fprintln(w, "  none. shukractl actions --all shows what was decided")
+		return
+	}
+	for _, a := range acts {
+		fmt.Fprintf(w, "  %s  %s  vm=%s  response=%s (%s)  for %s [%s]\n", str(a, "id"), str(a, "status"), str(a, "vm"), str(a, "response"), str(a, "mode"), str(a, "rule"), str(a, "severity"))
+		fmt.Fprintf(w, "      %s\n", str(a, "message"))
+		switch str(a, "status") {
+		case "pending":
+			fmt.Fprintf(w, "      lapses %s: shukractl approve %s  or  shukractl reject %s  (evidence: shukractl actions --bundle %s)\n", str(a, "expires"), str(a, "id"), str(a, "id"), str(a, "id"))
+		default:
+			if r := str(a, "result"); r != "" {
+				fmt.Fprintf(w, "      %s", r)
+				if by := str(a, "decidedBy"); by != "" {
+					fmt.Fprintf(w, "  (%s)", by)
+				}
+				fmt.Fprintln(w)
+			}
+			if t := str(a, "releaseAt"); t != "" && str(a, "status") == "executed" {
+				fmt.Fprintf(w, "      releases itself at %s\n", t)
+			}
 		}
 	}
 }

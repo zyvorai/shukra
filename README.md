@@ -52,6 +52,7 @@ Observe. Protect. Explain.
 | Why *was* it slow at 03:12, hours ago? | `shukractl explain <vm> --at 2026-09-20T03:12:00Z`, and `shukractl incident <vm> --at -3h --out bundle.json`: a verdict and a bundle for a past time, from stored snapshots |
 | Is the host, the disk or a noisy neighbour to blame? | `trace kvm`, `trace sched`, `trace block`: exit handling time, run-queue delay per vCPU thread, block latency histograms |
 | Who took my vCPU's CPU? | `trace sched`, `explain` (`cpu_preempted`): how long the vCPUs were runnable but off a host CPU, and which VM or host process had it |
+| Can it act on a detection, safely? | `responses:` in the rules file: a detection can propose isolating the VM, which a person approves (`shukractl approve`), or, only where you name the rules, do it on its own, with a protected list, a cooldown, an hourly cap and a timed release. Off unless configured |
 | What is new for this VM? | `baselines:` in the rules file, then `shukractl baseline`: each VM's normal networks, sites and inbound peers are learned, and the first sighting of a new one is reported once. No rule to write; off unless you turn it on |
 | Is each VM the right size? | `shukractl advise`: VMs with more vCPUs than they use (halt time, a lower bound) and VMs that want CPU and are not getting it, with the numbers and how sure it is. Advice for a person, never an action |
 | Which VM is the noisy neighbour? | `trace contention`, `explain` (`noisy_neighbour`): who took whose CPU across VMs, how much of a VM's preemption one other VM accounts for, and what that VM was doing meanwhile |
@@ -216,6 +217,7 @@ By default everything is in memory. `shukrad -data-dir /var/lib/shukra` (the sys
 | `detections.jsonl` | on every detection | last 2048 |
 | `isolations.jsonl` | on every isolate request | last 2048 |
 | `recorder.json` | every minute and on clean shutdown | the per-VM flight recorder |
+| `actions.jsonl`, `incidents/` | on every decision | what responses decided, and the incident bundle each was made on (empty until a response acts; the private directory is created either way) |
 | `baselines.json` | every minute, if it changed | what each VM has learned as normal (only when `baselines:` is on) |
 | `snapshots.jsonl` | every 5 minutes | read on demand by `explain --at` and `incident`; not loaded into memory |
 
@@ -261,6 +263,7 @@ Events that leave the daemon carry `product: "shukra"`. A joined host event has 
 | [Attribution](docs/attribution.md) | Host events versus guest events, and what is not measured |
 | [Guest traffic and isolation](docs/tap.md) | The tap program, handshakes, isolate, durability |
 | [Where packets die](docs/drops.md) | The drops program |
+| [Responses](docs/responses.md) | Acting on a detection: proposals, approval, and the guardrails |
 | [Learned baselines](docs/baselines.md) | What is new for a VM, with no rule to write |
 | [Doctor](docs/doctor.md) | Every check, when it fires, and what to do |
 | [Architecture](docs/architecture.md) | How the pieces fit, privileges, kernel requirements |

@@ -323,6 +323,24 @@ func (s *State) Doctor() []Check {
 		}
 	}
 
+	// Responses, only when the rules file has them.
+	if av := s.Actions(); av != nil && av.Enabled() {
+		propose, enforce, dry := av.Modes()
+		desc := strconv.Itoa(propose) + " propose, " + strconv.Itoa(enforce) + " enforce, " + strconv.Itoa(dry) + " dry run"
+		pending := av.Counts()["pending"]
+		mode, _, why := s.Enforcement()
+		switch {
+		case mode != "tcx" && propose+enforce > 0:
+			add("responses", "warn", "Responses are configured but isolate is not enabled, so every action will be refused",
+				desc+". "+why, "Start the daemon with -isolate-allow <management CIDRs>, or make the responses dry runs.")
+		case pending > 0:
+			add("responses", "warn", strconv.Itoa(pending)+" proposed isolations are waiting for a decision",
+				desc+". A proposal lapses if nobody decides.", "shukractl actions, then shukractl approve <id> or reject <id>.")
+		default:
+			add("responses", "ok", "Responses are configured ("+desc+")", "", "")
+		}
+	}
+
 	// Worst first, and stable within a status.
 	for i := 1; i < len(out); i++ {
 		for j := i; j > 0 && statusRank[out[j].Status] > statusRank[out[j-1].Status]; j-- {

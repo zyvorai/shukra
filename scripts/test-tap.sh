@@ -50,7 +50,7 @@ sleep 1
 printf '#!/bin/bash\nwhile true; do /bin/true; sleep 0.2; done\n' > "$D/loop.sh"; chmod +x "$D/loop.sh"
 bash -c "exec -a /usr/bin/qemu-system-x86_64 bash $D/loop.sh -name taptest -uuid 9999 -netdev tap,id=n0,ifname=vethh,script=no" >/dev/null 2>&1 &
 
-printf 'destinations:\n  - cidr: 10.99.0.3/32\n    name: watched-host\n    severity: high\nports:\n  - port: 5300\n    name: udp-watch\n    proto: udp\n  - port: 8090\n    name: guest-inbound-watch\n    dir: in\ndns:\n  - name: dns-watch\n    suffix: watched.test\n    severity: high\n' > $D/rules.yaml
+printf 'destinations:\n  - cidr: 10.99.0.3/32\n    name: watched-host\n    severity: high\nports:\n  - port: 5300\n    name: udp-watch\n    proto: udp\n  - port: 8090\n    name: guest-inbound-watch\n    dir: in\n  - port: 5311\n    name: response-enforce\n    proto: udp\n  - port: 5312\n    name: response-ask\n    proto: udp\ndns:\n  - name: dns-watch\n    suffix: watched.test\n    severity: high\nresponses:\n  - {name: rig-ask, action: isolate, rules: [response-ask]}\n  - {name: rig-auto, action: isolate, mode: enforce, rules: [response-enforce], release_after: 1m}\n' > $D/rules.yaml
 A="Authorization: Bearer k"; U=127.0.0.1:30990
 guest() { sudo ip netns exec g1 "$@"; }
 code4() { guest curl -s -o /dev/null -m 2 -w %{http_code} "http://$1:8080/"; }
@@ -371,6 +371,31 @@ check "but the flow to port 53 still is (the program is running, it just does no
 stopd; start -isolate-allow 10.99.0.1/32,fd99::1/128
 dq 10.99.0.1 public.example.com 1 1
 check "and starting again without the flag turns names back on, whatever the last run left in the map" "[ \"\$(dnsn public.example.com A)\" = 1 ]"
+
+echo "== 13. responses: a proposal changes nothing until a person approves it, and an enforced one acts and releases itself"
+# Two trigger ports used only here (5312 is answered by a response that proposes, 5311 by one that enforces), so no
+# earlier section can set them off. The non-allowed address 10.99.0.3 is reachable until the VM is isolated.
+check "before anything, the guest can reach the address isolation would cut off" "[ \"\$(code4 10.99.0.3)\" = 200 ]"
+usend 10.99.0.1 5312 1 43000; sleep 3
+check "a detection that a proposing response answers is a pending proposal" "api $U/api/v1/actions | J \"[(a['status'], a['vm'], a['mode']) for a in d['actions']]\" | grep -q \"('pending', 'taptest', 'propose')\""
+check "and a proposal changes nothing: the VM is still reachable" "[ \"\$(code4 10.99.0.3)\" = 200 ]"
+check "it was announced as a detection a person can see, naming the command that approves it" "api $U/api/v1/events | J \"any(e.get('rule')=='action-proposed' and 'shukractl approve' in e['message'] for e in d['events'] if e['kind']=='detection')\" | grep -q True"
+AID=$(api $U/api/v1/actions | J "d['actions'][0]['id']")
+check "it holds the incident bundle it was made on" "api $U/api/v1/actions/$AID/incident | J \"d['vm']\" | grep -q taptest"
+check "a read-only-style request without the key is refused, and nothing was decided" "[ \"\$(curl -s -o /dev/null -w %{http_code} -X POST $U/api/v1/actions/$AID/approve)\" = 401 ] && [ \"\$(code4 10.99.0.3)\" = 200 ]"
+api -X POST -H "X-Shukra-Actor: rig" $U/api/v1/actions/$AID/approve >/dev/null; sleep 2
+check "approved: the VM is cut off" "[ \"\$(code4 10.99.0.3)\" = 000 ]"
+check "the isolate record says who approved which action" "api $U/api/v1/isolations | J \"any('approved by rig' in i['audit']['actor'] and '$AID' in i['audit']['actor'] for i in d['isolations'])\" | grep -q True"
+check "a decided proposal cannot be decided again" "[ \"\$(curl -s -o /dev/null -w %{http_code} -X POST -H \"$A\" $U/api/v1/actions/$AID/approve)\" = 409 ]"
+api -X POST -d '{"vm":"taptest"}' $U/api/v1/release >/dev/null; sleep 2
+check "released by a person: reachable again" "[ \"\$(code4 10.99.0.3)\" = 200 ]"
+usend 10.99.0.1 5311 1 43100; sleep 3
+check "an enforcing response cuts the VM off at once, with nobody deciding" "[ \"\$(code4 10.99.0.3)\" = 000 ]"
+check "and says so: an executed action with a release time, decided by the response itself" "api $U/api/v1/actions?all=1 | J \"[(a['status'], a['decidedBy'].startswith('auto:rig-auto:'), bool(a.get('releaseAt'))) for a in d['actions'] if a['mode']=='enforce'][0]\" | grep -q \"('executed', True, True)\""
+echo "  waiting for the release timer (one minute, checked every five seconds)"
+for _ in $(seq 1 20); do [ "$(code4 10.99.0.3)" = 200 ] && break; sleep 5; done
+check "the response released the VM again by itself when its time came" "[ \"\$(code4 10.99.0.3)\" = 200 ]"
+check "and the action says so" "api $U/api/v1/actions?all=1 | J \"[a['status'] for a in d['actions'] if a['mode']=='enforce'][0]\" | grep -q released"
 
 echo "== 8. enforcement outlives the daemon"
 ALLOW="-isolate-allow 10.99.0.1/32,fd99::1/128"

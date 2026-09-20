@@ -54,6 +54,25 @@ destinations:
 #   kinds: [destination, dns-suffix, inbound-peer]
 #   severity: {dns-suffix: low}
 
+# Responses: what to do when a detection fires. The only action is isolate, and by default a
+# response only PROPOSES: a person approves it (shukractl actions, approve, reject), and
+# nothing is done to the VM until they do. A response acts on its own only with mode: enforce,
+# and then it must name the detection rules it answers. Needs -isolate-allow: without a
+# management allow list every action is refused, as isolate itself is. Try one out first with
+# dry_run: true, which records what would have been done and changes nothing.
+# responses:
+#   - name: contain-miners
+#     rules: [crypto-pool]        # detection rule names (yours, or new-destination and so on)
+#     action: isolate
+#     mode: propose               # propose (default) or enforce
+#     min_severity: high          # optional floor
+#     release_after: 15m          # optional: release the VM again by itself
+#     cooldown: 1h                # leave a VM alone this long after acting on it (default 1h)
+#     expire: 30m                 # a proposal lapses if nobody decides (default 30m)
+# guardrails:
+#   never_isolate: [db-primary]   # no response may isolate these, approved or not
+#   max_per_hour: 3               # automatic isolations per hour, in all
+
 # Process names that may start under a QEMU process without an alert, matched as
 # a lowercase prefix. QEMU's own threads are always allowed.
 # exec_allow:

@@ -42,6 +42,7 @@ func rulesCmd(args []string, out io.Writer) error {
 		"execAllow":  c.ExecAllow,
 		"thresholds": names(len(c.Thresholds), func(i int) string { return c.Thresholds[i].Name }),
 		"maxWindow":  c.MaxWindow().String(),
+		"responses":  responseSummary(c),
 	}
 	if has(args[2:], "--json") {
 		return json.NewEncoder(out).Encode(sum)
@@ -51,10 +52,29 @@ func rulesCmd(args []string, out io.Writer) error {
 	fmt.Fprintf(out, "  ports      %s\n", listOrNone(sum["ports"].([]string)))
 	fmt.Fprintf(out, "  exec_allow %s\n", listOrNone(c.ExecAllow))
 	fmt.Fprintf(out, "  thresholds %s\n", listOrNone(sum["thresholds"].([]string)))
+	fmt.Fprintf(out, "  responses  %s\n", listOrNone(responseSummary(c)))
+	for _, r := range c.Responses {
+		if r.Mode == "enforce" && !r.DryRun {
+			fmt.Fprintf(out, "  %s isolates a VM on its own, with no one to approve it: it answers %s\n", r.Name, strings.Join(r.Rules, ", "))
+		}
+	}
 	if len(c.Thresholds) > 0 {
 		fmt.Fprintln(out, "  thresholds need the kernel programs attached, and stay quiet until a full window of history exists")
 	}
 	return nil
+}
+
+// responseSummary names each response with what it will do: "contain (propose)", "auto (enforce)", "try (dry run)".
+func responseSummary(c *detect.Config) []string {
+	out := []string{}
+	for _, r := range c.Responses {
+		how := r.Mode
+		if r.DryRun {
+			how = "dry run"
+		}
+		out = append(out, r.Name+" ("+how+")")
+	}
+	return out
 }
 
 func listOrNone(s []string) string {

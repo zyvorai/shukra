@@ -15,6 +15,7 @@ export type Page =
   | 'connections'
   | 'drops'
   | 'detections'
+  | 'actions'
   | 'isolate';
 
 type NavLink = { page: Page; label: string; blurb: string };
@@ -52,6 +53,7 @@ const groups: NavGroup[] = [
     label: 'Security',
     children: [
       { page: 'detections', label: 'Detections', blurb: 'Rule hits: destinations, ports, DNS names, exec and thresholds.' },
+      { page: 'actions', label: 'Actions', blurb: 'Proposed isolations waiting for a decision, and what responses did.' },
       { page: 'isolate', label: 'Isolate', blurb: 'Cut a VM off except the management network. Needs the tap program and an allow list.' },
     ],
   },

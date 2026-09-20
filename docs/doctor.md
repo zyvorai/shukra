@@ -73,6 +73,8 @@ These read the **last minute** of history, not the life of the daemon, and say w
 | `persistence` | `warn` | No `-data-dir`: detections, isolation records and the flight recorder are lost on restart, and recorded isolations cannot be re-applied | `-data-dir /var/lib/shukra` (the shipped unit does) |
 | `baselines` | `warn` | Learned baselines are on but there is no `-data-dir`, so learning starts over with every restart | `-data-dir /var/lib/shukra` |
 | `baselines` | `info` / `ok` | Baselines are on: how many VMs are still learning (and when the last learning period ends), or that they are all reporting. Only present while the rules file has a `baselines:` section | Nothing |
+| `responses` | `warn` | Responses are configured (propose or enforce) but isolate is not enabled, so every action will be refused | `-isolate-allow`, or make them dry runs |
+| `responses` | `warn` / `ok` | Proposals are waiting for a decision (with the count), or all is well. Only present while the rules file has a `responses:` section | `shukractl actions`, then approve or reject |
 | `alerts` | `info` | No sink is configured, so detections are only visible in the console, the CLI and `/metrics` | `-webhook-url`, `-syslog` or `-alert-file` |
 | `rules` | `fail` | The detection file did not reload; the previous rules are still in force | `shukractl rules check <file>`, then `systemctl reload shukra` |
 | `rules` | `info` | No `-watchlist`: only the built-in unexpected-exec check runs | `-watchlist /etc/shukra/detections.yaml` |

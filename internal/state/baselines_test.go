@@ -66,3 +66,75 @@ func TestDoctorSaysHowManyVMsAreStillLearningAndWhenTheLastEnds(t *testing.T) {
 		t.Fatalf("%+v", c)
 	}
 }
+
+// actionsOf is an ActionsView with fixed answers.
+type actionsOf struct {
+	enabled               bool
+	counts                map[string]int
+	propose, enforce, dry int
+}
+
+func (a actionsOf) Enabled() bool                          { return a.enabled }
+func (a actionsOf) List(bool) []Action                     { return nil }
+func (a actionsOf) Approve(string, string) (Action, error) { return Action{}, nil }
+func (a actionsOf) Reject(string, string) (Action, error)  { return Action{}, nil }
+func (a actionsOf) Bundle(string) ([]byte, bool)           { return nil, false }
+func (a actionsOf) Counts() map[string]int                 { return a.counts }
+func (a actionsOf) Modes() (propose, enforce, dryRun int)  { return a.propose, a.enforce, a.dry }
+
+type enforcerStub struct{ ok bool }
+
+func (e enforcerStub) Available() (bool, string) {
+	if e.ok {
+		return true, ""
+	}
+	return false, "no management allow list is configured (-isolate-allow)"
+}
+func (enforcerStub) AllowList() []string                  { return []string{"10.0.0.0/24"} }
+func (enforcerStub) Isolated(string) bool                 { return false }
+func (enforcerStub) Durable() bool                        { return true }
+func (enforcerStub) Isolate(t []string) ([]string, error) { return t, nil }
+func (enforcerStub) Release(t []string) ([]string, error) { return t, nil }
+
+func TestDoctorSaysNothingAboutResponsesUnlessTheyAreConfigured(t *testing.T) {
+	st := healthy(t)
+	if byID(st.Doctor(), "responses") != nil {
+		t.Fatal("noise")
+	}
+	st.SetActions(actionsOf{enabled: false})
+	if byID(st.Doctor(), "responses") != nil {
+		t.Fatal("a view with no responses is off")
+	}
+}
+
+func TestDoctorWarnsThatResponsesCannotActWithoutIsolateAndOfferedDryRunsAreFine(t *testing.T) {
+	st := healthy(t)
+	st.SetEnforcer(enforcerStub{ok: false})
+	st.SetActions(actionsOf{enabled: true, propose: 1, counts: map[string]int{}})
+	c := byID(st.Doctor(), "responses")
+	if c == nil || c.Status != "warn" || !strings.Contains(c.Title, "isolate is not enabled") || !strings.Contains(c.Fix, "-isolate-allow") || !strings.Contains(c.Detail, "1 propose, 0 enforce, 0 dry run") {
+		t.Fatalf("%+v", c)
+	}
+	st.SetActions(actionsOf{enabled: true, dry: 2, counts: map[string]int{}})
+	if c := byID(st.Doctor(), "responses"); c == nil || c.Status != "ok" {
+		t.Fatalf("a dry run needs no isolate: %+v", c)
+	}
+}
+
+func TestDoctorSaysHowManyProposalsAreWaitingAndOtherwiseThatAllIsWell(t *testing.T) {
+	st := healthy(t)
+	st.SetEnforcer(enforcerStub{ok: true})
+	st.SetActions(actionsOf{enabled: true, propose: 2, enforce: 1, counts: map[string]int{"pending": 3}})
+	c := byID(st.Doctor(), "responses")
+	if c == nil || c.Status != "warn" || !strings.HasPrefix(c.Title, "3 proposed isolations are waiting") || !strings.Contains(c.Fix, "shukractl actions") {
+		t.Fatalf("%+v", c)
+	}
+	st.SetActions(actionsOf{enabled: true, propose: 2, enforce: 1, counts: map[string]int{"pending": 1}})
+	if c := byID(st.Doctor(), "responses"); c == nil || c.Status != "warn" || !strings.HasPrefix(c.Title, "1 proposed isolations are waiting") {
+		t.Fatalf("one waiting proposal is one too many to ignore: %+v", c)
+	}
+	st.SetActions(actionsOf{enabled: true, propose: 2, enforce: 1, counts: map[string]int{"executed": 4}})
+	if c := byID(st.Doctor(), "responses"); c == nil || c.Status != "ok" || !strings.Contains(c.Title, "2 propose, 1 enforce, 0 dry run") {
+		t.Fatalf("%+v", c)
+	}
+}

@@ -865,3 +865,138 @@ func TestBaselineForgetPostsTheVMAndNeedsOne(t *testing.T) {
 		t.Fatalf("%s %s %s %q", method, path, body, buf.String())
 	}
 }
+
+func actionsServer(t *testing.T, body string) (*string, *string, *string) {
+	t.Helper()
+	var method, path, query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path, query = r.Method, r.URL.EscapedPath(), r.URL.RawQuery // the path as it went on the wire
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("SHUKRA_URL", srv.URL)
+	return &method, &path, &query
+}
+
+func TestActionsOffSaysHowToTurnItOn(t *testing.T) {
+	actionsServer(t, `{"enabled":false,"pending":0,"actions":[]}`)
+	var buf bytes.Buffer
+	if err := run([]string{"actions"}, &buf); err != nil || !strings.Contains(buf.String(), "off: the rules file has no responses section") {
+		t.Fatalf("%v %q", err, buf.String())
+	}
+}
+
+func TestActionsShowsWhatWaitsForAPersonAndHowToDecideIt(t *testing.T) {
+	_, path, query := actionsServer(t, `{"enabled":true,"pending":1,"actions":[
+		{"id":"a-2","status":"pending","vm":"web","response":"contain","mode":"propose","rule":"crypto-pool","severity":"high","message":"web looked up nanopool.org","expires":"2026-09-20T03:30:00Z"},
+		{"id":"a-1","status":"executed","vm":"db","response":"auto","mode":"enforce","rule":"c2","severity":"high","message":"m","result":"isolated: 1 tap","decidedBy":"auto:auto:a-1","releaseAt":"2026-09-20T03:10:00Z"}]}`)
+	var buf bytes.Buffer
+	if err := run([]string{"actions", "--all"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if *path != "/api/v1/actions" || *query != "all=1" {
+		t.Fatalf("%s?%s", *path, *query)
+	}
+	for _, want := range []string{
+		"ACTIONS  1 waiting for a decision",
+		"a-2  pending  vm=web  response=contain (propose)  for crypto-pool [high]", "web looked up nanopool.org",
+		"lapses 2026-09-20T03:30:00Z: shukractl approve a-2  or  shukractl reject a-2  (evidence: shukractl actions --bundle a-2)",
+		"a-1  executed  vm=db", "isolated: 1 tap  (auto:auto:a-1)", "releases itself at 2026-09-20T03:10:00Z",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("missing %q:\n%s", want, buf.String())
+		}
+	}
+	if err := run([]string{"actions"}, &bytes.Buffer{}); err != nil || *query != "" {
+		t.Fatalf("by default only what waits: %q %v", *query, err)
+	}
+}
+
+func TestApproveAndRejectPostTheIdAndSayWhatHappened(t *testing.T) {
+	method, path, _ := actionsServer(t, `{"action":{"id":"a-2","status":"executed","vm":"web","result":"isolated: 1 tap"}}`)
+	var buf bytes.Buffer
+	if err := run([]string{"approve", "a-2"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if *method != "POST" || *path != "/api/v1/actions/a-2/approve" || !strings.Contains(buf.String(), "approved a-2: isolated: 1 tap (executed)") {
+		t.Fatalf("%s %s %q", *method, *path, buf.String())
+	}
+	buf.Reset()
+	if err := run([]string{"reject", "a-2"}, &buf); err != nil || *path != "/api/v1/actions/a-2/reject" || !strings.Contains(buf.String(), "rejected a-2: nothing was done to web") {
+		t.Fatalf("%v %s %q", err, *path, buf.String())
+	}
+	for _, verb := range []string{"approve", "reject"} {
+		if err := run([]string{verb}, &bytes.Buffer{}); err == nil {
+			t.Fatalf("%s needs an id", verb)
+		}
+		if err := run([]string{verb, "--json"}, &bytes.Buffer{}); err == nil {
+			t.Fatalf("%s needs an id before the flags", verb)
+		}
+	}
+}
+
+func TestAnIdIsEscapedIntoThePathAndTheBundleCanGoToAPrivateFile(t *testing.T) {
+	_, path, _ := actionsServer(t, `{"vm":"web"}`)
+	if err := run([]string{"approve", "../isolate"}, &bytes.Buffer{}); err != nil {
+		t.Log(err)
+	}
+	if *path != "/api/v1/actions/..%2Fisolate/approve" {
+		t.Fatalf("an id must be escaped into one path segment and not walk out of it: %q", *path)
+	}
+	file := filepath.Join(t.TempDir(), "b.json")
+	var buf bytes.Buffer
+	if err := run([]string{"actions", "--bundle", "a-1", "--out", file}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(file)
+	if err != nil || fi.Mode().Perm() != 0o600 || *path != "/api/v1/actions/a-1/incident" {
+		t.Fatalf("%v %v %s", fi, err, *path)
+	}
+}
+
+func TestAReleasedActionDoesNotPromiseAReleaseItAlreadyHad(t *testing.T) {
+	actionsServer(t, `{"enabled":true,"pending":0,"actions":[
+		{"id":"a-1","status":"released","vm":"db","response":"auto","mode":"enforce","rule":"c2","severity":"high","message":"m","result":"released","releaseAt":"2026-09-20T03:10:00Z"}]}`)
+	var buf bytes.Buffer
+	if err := run([]string{"actions", "--all"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "releases itself") {
+		t.Fatalf("it was released already:\n%s", buf.String())
+	}
+}
+
+func TestRulesCheckSaysWhatEachResponseWillDoAndWarnsAboutOneThatActsAlone(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "r.yaml")
+	body := "responses:\n" +
+		"  - {name: ask, rules: [crypto-pool], action: isolate}\n" +
+		"  - {name: auto, rules: [c2], action: isolate, mode: enforce}\n" +
+		"  - {name: try, action: isolate, mode: enforce, dry_run: true}\n"
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := run([]string{"rules", "check", p}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"responses  ask (propose), auto (enforce), try (dry run)", "auto isolates a VM on its own, with no one to approve it: it answers c2"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("missing %q:\n%s", want, buf.String())
+		}
+	}
+	if strings.Contains(buf.String(), "ask isolates") || strings.Contains(buf.String(), "try isolates") {
+		t.Fatalf("only a response that acts alone is a warning:\n%s", buf.String())
+	}
+	buf.Reset()
+	if err := run([]string{"rules", "check", p, "--json"}, &buf); err != nil || !strings.Contains(buf.String(), `"responses":["ask (propose)","auto (enforce)","try (dry run)"]`) {
+		t.Fatalf("%v %s", err, buf.String())
+	}
+	if err := os.WriteFile(p, []byte("suppress: 1m\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	buf.Reset()
+	if err := run([]string{"rules", "check", p, "--json"}, &buf); err != nil || !strings.Contains(buf.String(), `"responses":[]`) {
+		t.Fatalf("none is [] and never null: %v %s", err, buf.String())
+	}
+}

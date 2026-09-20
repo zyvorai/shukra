@@ -22,6 +22,7 @@ import (
 	"github.com/zyvorai/shukra/internal/baseline"
 	"github.com/zyvorai/shukra/internal/observe"
 	"github.com/zyvorai/shukra/internal/persist"
+	"github.com/zyvorai/shukra/internal/response"
 	"github.com/zyvorai/shukra/internal/sink"
 	"github.com/zyvorai/shukra/internal/state"
 	"github.com/zyvorai/shukra/internal/version"
@@ -163,6 +164,24 @@ func main() {
 		persist.LoadBaselines(*dataDir, bases)
 	}
 	ag.SetBaselines(bases, *dataDir != "")
+	// Responses: what to do when a detection fires. They propose by default, and only act on an isolate the daemon
+	// can really carry out.
+	var actionStore response.Store
+	var actionLog *persist.Actions
+	var pastActions []state.Action
+	if *dataDir != "" {
+		var err error
+		if actionLog, pastActions, err = persist.OpenActions(*dataDir); err != nil {
+			log.Fatalf("data-dir %s: %v", *dataDir, err)
+		}
+		actionStore = actionLog
+	}
+	engine := response.New(st, actionStore)
+	engine.Restore(pastActions)
+	ag.SetResponses(engine)
+	st.OnDetection(engine.OnDetection)
+	stopEngine := make(chan struct{})
+	go engine.Run(stopEngine)
 	var sinkNames []string
 	for _, k := range sinks {
 		sinkNames = append(sinkNames, k.Name())
@@ -277,6 +296,10 @@ func main() {
 	observe.ShutdownTaps()
 	if alerts != nil {
 		alerts.Close(5 * time.Second)
+	}
+	close(stopEngine)
+	if actionLog != nil {
+		_ = actionLog.Close()
 	}
 	if *dataDir != "" {
 		if err := persist.SaveBaselines(*dataDir, bases); err != nil {

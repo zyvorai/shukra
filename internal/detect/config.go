@@ -199,6 +199,112 @@ func (b *BaselineConfig) validate() error {
 	return nil
 }
 
+// Response says what to do when a detection fires: isolate the VM, or propose to. The only action is isolate.
+// A response never acts on its own unless it says mode: enforce and names the detection rules it answers.
+type Response struct {
+	Name string `yaml:"name"`
+	// Rules are the detection rules this answers, by name. Empty means any detection at or above MinSeverity.
+	Rules []string `yaml:"rules"`
+	// MinSeverity is the least severity that triggers it: low, medium, high or critical. When Rules is empty it
+	// defaults to high; when Rules names some it defaults to no minimum.
+	MinSeverity string `yaml:"min_severity"`
+	// Action is what to do. Only "isolate" exists.
+	Action string `yaml:"action"`
+	// Mode is "propose" (the default: a person approves each action) or "enforce".
+	Mode string `yaml:"mode"`
+	// DryRun records what would have been done and changes nothing, whatever Mode says.
+	DryRun bool `yaml:"dry_run"`
+	// ReleaseAfter releases the VM again after this long. Zero leaves it isolated until a person releases it.
+	ReleaseAfter time.Duration `yaml:"release_after"`
+	// Cooldown is how long after acting on a VM this response leaves it alone (default 1h).
+	Cooldown time.Duration `yaml:"cooldown"`
+	// Expire is how long a proposal waits for a decision before it lapses (default 30m).
+	Expire time.Duration `yaml:"expire"`
+}
+
+// Guardrails limit every response, whatever it says.
+type Guardrails struct {
+	// NeverIsolate names VMs that no response may isolate.
+	NeverIsolate []string `yaml:"never_isolate"`
+	// MaxPerHour bounds how many isolations responses may carry out in an hour, in all (default 3).
+	MaxPerHour int `yaml:"max_per_hour"`
+}
+
+const (
+	DefaultResponseCooldown  = time.Hour
+	DefaultResponseExpire    = 30 * time.Minute
+	DefaultMaxActionsPerHour = 3
+)
+
+var severityRank = map[string]int{"low": 1, "medium": 2, "high": 3, "critical": 4}
+
+// SeverityAtLeast says whether severity sev is at or above min.
+func SeverityAtLeast(sev, min string) bool { return severityRank[sev] >= severityRank[min] }
+
+// Answers says whether a detection with this rule name and severity is one the response answers.
+func (r Response) Answers(rule, severity string) bool {
+	if len(r.Rules) > 0 {
+		found := false
+		for _, x := range r.Rules {
+			if x == rule {
+				found = true
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return r.MinSeverity == "" || SeverityAtLeast(severity, r.MinSeverity)
+}
+
+func (r *Response) validate() error {
+	if r.Name == "" {
+		return errors.New("responses: every response needs a name")
+	}
+	if r.Action != "isolate" {
+		return fmt.Errorf("responses: %q: action %q is not isolate (the only action)", r.Name, r.Action)
+	}
+	switch r.Mode {
+	case "":
+		r.Mode = "propose"
+	case "propose", "enforce":
+	default:
+		return fmt.Errorf("responses: %q: mode %q is not propose or enforce", r.Name, r.Mode)
+	}
+	for _, x := range r.Rules {
+		if strings.TrimSpace(x) == "" {
+			return fmt.Errorf("responses: %q: an empty rule name would answer nothing", r.Name)
+		}
+	}
+	if r.MinSeverity != "" && !severities[r.MinSeverity] {
+		return fmt.Errorf("responses: %q: min_severity %q is not low, medium, high or critical", r.Name, r.MinSeverity)
+	}
+	if len(r.Rules) == 0 {
+		if r.Mode == "enforce" && !r.DryRun {
+			return fmt.Errorf("responses: %q: mode enforce must name the detection rules it answers (rules: [...]): isolating on any high detection is a decision for a person", r.Name)
+		}
+		if r.MinSeverity == "" {
+			r.MinSeverity = "high"
+		}
+	}
+	if r.ReleaseAfter != 0 && (r.ReleaseAfter < time.Minute || r.ReleaseAfter > 24*time.Hour) {
+		return fmt.Errorf("responses: %q: release_after %s is outside 1m to 24h", r.Name, r.ReleaseAfter)
+	}
+	if r.Cooldown == 0 {
+		r.Cooldown = DefaultResponseCooldown
+	}
+	if r.Cooldown < time.Minute || r.Cooldown > 7*24*time.Hour {
+		return fmt.Errorf("responses: %q: cooldown %s is outside 1m to 168h", r.Name, r.Cooldown)
+	}
+	if r.Expire == 0 {
+		r.Expire = DefaultResponseExpire
+	}
+	if r.Expire < time.Minute || r.Expire > 24*time.Hour {
+		return fmt.Errorf("responses: %q: expire %s is outside 1m to 24h", r.Name, r.Expire)
+	}
+	return nil
+}
+
 // Threshold notices a per-VM metric over a window. Op is ">" or ">=".
 type Threshold struct {
 	Name     string        `yaml:"name"`
@@ -216,7 +322,10 @@ type Config struct {
 	Ports []PortRule
 	DNS   []DNSRule
 	// Baselines is nil unless the rules file turns learned baselines on.
-	Baselines  *BaselineConfig
+	Baselines *BaselineConfig
+	// Responses and Guard are what to do when a detection fires. There are none unless the file has them.
+	Responses  []Response
+	Guard      Guardrails
 	ExecAllow  []string
 	Thresholds []Threshold
 	// Suppress is how long a repeat of the same detection is held back.
@@ -236,6 +345,8 @@ type doc struct {
 	Ports        []PortRule      `yaml:"ports"`
 	DNS          []DNSRule       `yaml:"dns"`
 	Baselines    *BaselineConfig `yaml:"baselines"`
+	Responses    []Response      `yaml:"responses"`
+	Guardrails   *Guardrails     `yaml:"guardrails"`
 	ExecAllow    []string        `yaml:"exec_allow"`
 	Thresholds   []Threshold     `yaml:"thresholds"`
 }
@@ -340,6 +451,32 @@ func Parse(b []byte) (*Config, error) {
 			return nil, err
 		}
 		c.Baselines = d.Baselines
+	}
+	c.Guard = Guardrails{MaxPerHour: DefaultMaxActionsPerHour}
+	if g := d.Guardrails; g != nil {
+		if g.MaxPerHour < 0 || g.MaxPerHour > 100 {
+			return nil, fmt.Errorf("guardrails: max_per_hour %d is outside 1 to 100", g.MaxPerHour)
+		}
+		if g.MaxPerHour > 0 {
+			c.Guard.MaxPerHour = g.MaxPerHour
+		}
+		for _, v := range g.NeverIsolate {
+			if strings.TrimSpace(v) == "" {
+				return nil, errors.New("guardrails: an empty never_isolate name protects nothing")
+			}
+			c.Guard.NeverIsolate = append(c.Guard.NeverIsolate, v)
+		}
+	}
+	respSeen := map[string]bool{} // its own namespace: a response may share a name with the rule it answers
+	for _, r := range d.Responses {
+		if err := r.validate(); err != nil {
+			return nil, err
+		}
+		if respSeen[r.Name] {
+			return nil, fmt.Errorf("responses: name %q is used twice", r.Name)
+		}
+		respSeen[r.Name] = true
+		c.Responses = append(c.Responses, r)
 	}
 	for _, x := range d.ExecAllow {
 		x = strings.ToLower(strings.TrimSpace(x))

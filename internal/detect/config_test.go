@@ -143,7 +143,7 @@ func TestShippedExampleParses(t *testing.T) {
 	for _, line := range strings.Split(string(raw), "\n") {
 		body, isComment := strings.CutPrefix(line, "# ")
 		switch {
-		case isComment && regexp.MustCompile(`^(suppress|ports|dns|baselines|exec_allow|thresholds):`).MatchString(body):
+		case isComment && regexp.MustCompile(`^(suppress|ports|dns|baselines|responses|guardrails|exec_allow|thresholds):`).MatchString(body):
 			live = true
 			on = append(on, body)
 		case live && strings.HasPrefix(line, "#  "):
@@ -159,7 +159,7 @@ func TestShippedExampleParses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("with examples enabled: %v\n%s", err, strings.Join(on, "\n"))
 	}
-	if len(full.Ports) != 3 || full.Ports[1].Proto != "udp" || full.Ports[2].Dir != "in" || len(full.DNS) != 2 || full.Baselines == nil || full.Baselines.Learn != 24*time.Hour || len(full.Thresholds) != 1 || len(full.ExecAllow) != 1 || full.Suppress != DefaultSuppress {
+	if len(full.Ports) != 3 || full.Ports[1].Proto != "udp" || full.Ports[2].Dir != "in" || len(full.DNS) != 2 || full.Baselines == nil || len(full.Responses) != 1 || full.Guard.MaxPerHour != 3 || len(full.Guard.NeverIsolate) != 1 || full.Baselines.Learn != 24*time.Hour || len(full.Thresholds) != 1 || len(full.ExecAllow) != 1 || full.Suppress != DefaultSuppress {
 		t.Fatalf("%+v", full)
 	}
 }
@@ -332,5 +332,102 @@ func TestBaselinesRejectWhatWouldQuietlyDoNothingOrEverything(t *testing.T) {
 		if _, err := Parse([]byte(in)); err == nil {
 			t.Errorf("accepted: %s\n%s", why, in)
 		}
+	}
+}
+
+func TestNoResponsesUnlessTheFileHasThemAndGuardrailsHaveDefaults(t *testing.T) {
+	c, err := Parse([]byte("suppress: 1m\n"))
+	if err != nil || len(c.Responses) != 0 || c.Guard.MaxPerHour != 3 || len(c.Guard.NeverIsolate) != 0 {
+		t.Fatalf("%v %+v %+v", err, c.Responses, c.Guard)
+	}
+}
+
+func TestAResponseGetsSafeDefaultsProposesByDefaultAndKeepsWhatWasAsked(t *testing.T) {
+	c, err := Parse([]byte(`
+responses:
+  - name: ask
+    action: isolate
+    rules: [crypto-pool]
+  - name: auto
+    action: isolate
+    mode: enforce
+    rules: [new-destination, crypto-pool]
+    min_severity: medium
+    release_after: 15m
+    cooldown: 2h
+    expire: 10m
+  - name: broad
+    action: isolate
+guardrails:
+  never_isolate: [db-primary]
+  max_per_hour: 5
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ask, auto, broad := c.Responses[0], c.Responses[1], c.Responses[2]
+	if ask.Mode != "propose" || ask.Cooldown != time.Hour || ask.Expire != 30*time.Minute || ask.ReleaseAfter != 0 || ask.MinSeverity != "" {
+		t.Fatalf("a response proposes by default, with a cooldown and an expiry: %+v", ask)
+	}
+	if auto.Mode != "enforce" || auto.ReleaseAfter != 15*time.Minute || auto.Cooldown != 2*time.Hour || auto.Expire != 10*time.Minute || auto.MinSeverity != "medium" {
+		t.Fatalf("%+v", auto)
+	}
+	if broad.MinSeverity != "high" || broad.Mode != "propose" {
+		t.Fatalf("with no rules named, only high detections and only a proposal: %+v", broad)
+	}
+	if c.Guard.MaxPerHour != 5 || len(c.Guard.NeverIsolate) != 1 || c.Guard.NeverIsolate[0] != "db-primary" {
+		t.Fatalf("%+v", c.Guard)
+	}
+}
+
+func TestAResponseAnswersARuleAtOrAboveItsSeverityAndNothingElse(t *testing.T) {
+	named := Response{Rules: []string{"a", "b"}}
+	if !named.Answers("a", "low") || !named.Answers("b", "critical") || named.Answers("c", "critical") {
+		t.Fatal("a response with rules answers those rules at any severity")
+	}
+	named.MinSeverity = "high"
+	if named.Answers("a", "medium") || !named.Answers("a", "high") || !named.Answers("a", "critical") {
+		t.Fatal("severity is a floor")
+	}
+	any := Response{MinSeverity: "high"}
+	if any.Answers("x", "medium") || !any.Answers("x", "high") {
+		t.Fatal("no rules means any rule, at the floor")
+	}
+	if !SeverityAtLeast("critical", "high") || SeverityAtLeast("low", "medium") || SeverityAtLeast("bogus", "low") {
+		t.Fatal("severity order")
+	}
+}
+
+func TestResponsesRejectWhatWouldActTooWidelyOrNotAtAll(t *testing.T) {
+	for why, in := range map[string]string{
+		"no name":                  "responses:\n  - action: isolate\n",
+		"no action":                "responses:\n  - name: x\n",
+		"another action":           "responses:\n  - {name: x, action: kill}\n",
+		"bad mode":                 "responses:\n  - {name: x, action: isolate, mode: auto}\n",
+		"enforce on any detection": "responses:\n  - {name: x, action: isolate, mode: enforce}\n",
+		"empty rule name":          "responses:\n  - {name: x, action: isolate, rules: ['']}\n",
+		"bad severity":             "responses:\n  - {name: x, action: isolate, min_severity: urgent}\n",
+		"release after too short":  "responses:\n  - {name: x, action: isolate, release_after: 10s}\n",
+		"release after too long":   "responses:\n  - {name: x, action: isolate, release_after: 48h}\n",
+		"cooldown too short":       "responses:\n  - {name: x, action: isolate, cooldown: 10s}\n",
+		"expire too long":          "responses:\n  - {name: x, action: isolate, expire: 72h}\n",
+		"duplicate name":           "responses:\n  - {name: x, action: isolate}\n  - {name: x, action: isolate}\n",
+		"unknown field":            "responses:\n  - {name: x, action: isolate, rule: [a]}\n",
+		"empty protected name":     "guardrails:\n  never_isolate: ['']\n",
+		"max per hour negative":    "guardrails:\n  max_per_hour: -1\n",
+		"max per hour too large":   "guardrails:\n  max_per_hour: 500\n",
+		"unknown guardrail":        "guardrails:\n  max_a_day: 1\n",
+	} {
+		if _, err := Parse([]byte(in)); err == nil {
+			t.Errorf("accepted: %s\n%s", why, in)
+		}
+	}
+	// A dry run on any detection is harmless, and is allowed to try a wide rule out before it is narrowed.
+	if _, err := Parse([]byte("responses:\n  - {name: x, action: isolate, mode: enforce, dry_run: true}\n")); err != nil {
+		t.Fatalf("a wide dry run is how a response is tried out: %v", err)
+	}
+	// A response may share a name with the rule it answers.
+	if _, err := Parse([]byte("ports:\n  - {port: 25, name: smtp}\nresponses:\n  - {name: smtp, action: isolate, rules: [smtp]}\n")); err != nil {
+		t.Fatal(err)
 	}
 }

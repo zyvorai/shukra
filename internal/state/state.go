@@ -110,6 +110,7 @@ type State struct {
 	history       []snapshot
 	rollup        RollupStore
 	baselines     BaselineView
+	actions       ActionsView
 	lastRoll      time.Time
 	rollWarned    bool
 	clock         func() time.Time

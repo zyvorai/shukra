@@ -27,12 +27,14 @@ shukractl isolate payment-prod-03
 | `incident <vm> [--at TIME\|-90m] [--window 15m] [--out FILE]` | Everything known about a VM around a moment, in one bundle for a ticket. Prints a summary; `--out FILE` writes the whole JSON to a private file (mode 0600) and `--json` prints it. See [past verdicts](#past-verdicts-and-incident-bundles) |
 | `baseline [<vm>] [--items] [--forget]` | What each VM has learned as normal (networks, sites, inbound peers) and where its learning period stands; `--items` lists what one VM learned; `--forget` (admin key) starts one VM's learning over and is recorded as a detection. See [baselines](baselines.md) |
 | `advise [--vm NAME] [--window 5m]` | Is each VM the right size? Over-provisioned (more vCPUs than it uses), starved (wants CPU and is preempted or made to wait), nearly idle, or fine, each with the numbers, how sure it is and its caveat. Advice for a person, never an action |
+| `actions [--all] [--bundle <id> [--out FILE]]` | What responses decided: the proposals waiting for a person, and with `--all` everything held. `--bundle` prints the incident bundle an action was made on (`--out` writes it 0600). See [responses](responses.md) |
+| `approve <id>`, `reject <id>` | Decide a proposal. `approve` isolates the VM (admin key); `reject` does nothing to it |
 | `recorder <vm> [--window 60s]` | Replay the flight recorder |
 | `watch [--json] [--once]` | Stream discrete events, resuming from the last one seen. A `guest_dns` line ends with `name=` and `qtype=` |
 | `export` | One JSON document: status, VMs, traces, events |
 | `security <vm>` | Watchlist detections for one VM |
 | `isolate <vm>`, `release <vm>` | Drop or restore the VM's tap traffic. Refused without a management allow list; says if it was not enforced |
-| `rules check <file> [--json]` | Validate a detection file offline, before reloading |
+| `rules check <file> [--json]` | Validate a detection file offline, before reloading. It lists each response with what it will do (propose, enforce, dry run) and warns about one that isolates on its own |
 | `install-cli [--prefix DIR]` | Copy this binary onto PATH |
 
 Every command that prints a board also takes `--json`.

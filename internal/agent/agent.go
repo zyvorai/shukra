@@ -17,6 +17,7 @@ import (
 	"github.com/zyvorai/shukra/internal/event"
 	"github.com/zyvorai/shukra/internal/identity"
 	"github.com/zyvorai/shukra/internal/observe"
+	"github.com/zyvorai/shukra/internal/response"
 	"github.com/zyvorai/shukra/internal/state"
 	"path/filepath"
 	"strconv"
@@ -37,6 +38,7 @@ type Agent struct {
 	vms       map[int]*trackedVM
 	firstScan bool
 	// base is where learned baselines live, or nil. It is used only while the rules file turns them on.
+	responses     *response.Engine
 	base          *baseline.Store
 	basePersisted bool
 	// eval is touched only by Refresh, which runs on one goroutine at a time.
@@ -74,6 +76,9 @@ func (a *Agent) reload() error {
 		return err
 	}
 	a.cfg.Store(c)
+	if a.responses != nil {
+		a.responses.SetConfig(c)
+	}
 	if a.base != nil && c.Baselines != nil {
 		a.base.SetOptions(c.Baselines.Options())
 	}

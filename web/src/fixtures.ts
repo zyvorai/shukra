@@ -97,6 +97,18 @@ export function fixtureResponse(path: string, init?: RequestInit): unknown {
       ],
     };
   }
+  if (url.pathname === '/api/v1/actions') {
+    return {
+      enabled: true,
+      pending: 1,
+      note: 'Sample rows.',
+      actions: [
+        { id: 'a-3', vm: 'payment-prod-03', response: 'contain-miners', mode: 'propose', rule: 'crypto-pool', severity: 'high', message: 'payment-prod-03 looked up eth.nanopool.org (A)', status: 'pending', created: '2026-09-20T03:00:00Z', expires: '2026-09-20T03:30:00Z' },
+        { id: 'a-2', vm: 'batch-etl-01', response: 'contain-miners', mode: 'propose', rule: 'crypto-pool', severity: 'high', message: 'batch-etl-01 looked up nanopool.org (A)', status: 'executed', created: '2026-09-19T21:00:00Z', decidedBy: 'approved by alice (contain-miners, a-2)', result: 'isolated: 1 tap', releaseAt: '2026-09-19T21:15:00Z' },
+        { id: 'a-1', vm: 'redis-01', response: 'contain-miners', mode: 'propose', rule: 'crypto-pool', severity: 'high', message: 'redis-01 looked up nanopool.org (A)', status: 'refused', created: '2026-09-19T20:00:00Z', guardrail: 'never_isolate', result: 'redis-01 is protected: no response may isolate it' },
+      ],
+    };
+  }
   if (url.pathname === '/api/v1/advice') {
     return {
       note: 'Sample rows.',

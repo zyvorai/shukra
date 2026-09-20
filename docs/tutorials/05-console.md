@@ -25,6 +25,7 @@ A wrong token does not open a fixture. Fixture data exists only when you start V
 | Host connections | The QEMU process's TCP connects and sampled retransmits, and, when the tap program is attached, the guest's own connections, connections made to it, UDP flows, the names it looked up, and a per-tap table of what became of every connection |
 | Drops | What the kernel dropped on each VM tap, by reason, and how much of it was Shukra. Says "not measuring" where the drops program is off, and not a zero |
 | Detections | Rule hits: watchlist, port, exec and threshold detections |
+| Actions | Proposed isolations waiting for a decision, with Approve and Reject (a confirmation names the VM and the consequence), and what responses did: executed, refused by a guardrail, lapsed, released |
 | Isolate | The recorded decision |
 
 KVM, Scheduler and Block draw the latency distribution under the table. Hover or focus a bar for its count and share; "Show as table" lists the same numbers. The buckets are powers of two, so a bar's edge can read up to 2x high, and the chart says so. Thread and reason names come from the daemon: exit reasons are named only on Intel hosts.

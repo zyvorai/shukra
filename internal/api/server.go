@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -250,6 +251,63 @@ func routes(st *state.State) *http.ServeMux {
 		st.AddEvent(event.Event{Kind: event.KindDetection, Rule: "baseline-forgotten", Severity: "low", VM: event.VM{Name: body.VM},
 			Message: body.VM + "'s learned baseline was forgotten by " + actor + ": it is learning again from now"})
 		writeJSON(w, http.StatusOK, map[string]any{"vm": body.VM, "forgotten": true})
+	})
+	mux.HandleFunc("GET /api/v1/actions", func(w http.ResponseWriter, r *http.Request) {
+		out := map[string]any{"enabled": false, "pending": 0, "actions": []state.Action{},
+			"note": "What responses decided to do when a detection fired. A proposal waits for a person: POST /api/v1/actions/<id>/approve or /reject. Nothing is done to a VM by a proposal."}
+		if v := st.Actions(); v != nil && v.Enabled() {
+			out["enabled"] = true
+			out["pending"] = v.Counts()["pending"]
+			out["actions"] = v.List(r.URL.Query().Get("all") == "1")
+		}
+		writeJSON(w, http.StatusOK, out)
+	})
+	decide := func(approve bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			v := st.Actions()
+			if v == nil || !v.Enabled() {
+				http.Error(w, "no responses are configured: the rules file has no responses section", http.StatusConflict)
+				return
+			}
+			actor := r.Header.Get("X-Shukra-Actor")
+			if actor == "" {
+				actor = "api"
+			}
+			var a state.Action
+			var err error
+			if approve {
+				a, err = v.Approve(r.PathValue("id"), actor)
+			} else {
+				a, err = v.Reject(r.PathValue("id"), actor)
+			}
+			switch {
+			case errors.Is(err, state.ErrActionNotFound):
+				http.Error(w, err.Error(), http.StatusNotFound)
+			case errors.Is(err, state.ErrActionNotPending):
+				writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "action": a})
+			case err != nil:
+				// The guardrails were checked again and said no, or the isolate itself was refused.
+				writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "action": a})
+			default:
+				writeJSON(w, http.StatusOK, map[string]any{"action": a})
+			}
+		}
+	}
+	mux.HandleFunc("POST /api/v1/actions/{id}/approve", decide(true))
+	mux.HandleFunc("POST /api/v1/actions/{id}/reject", decide(false))
+	mux.HandleFunc("GET /api/v1/actions/{id}/incident", func(w http.ResponseWriter, r *http.Request) {
+		v := st.Actions()
+		if v == nil {
+			http.Error(w, "no responses are configured", http.StatusNotFound)
+			return
+		}
+		b, ok := v.Bundle(r.PathValue("id"))
+		if !ok {
+			http.Error(w, "no incident bundle for that action", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(b)
 	})
 	mux.HandleFunc("GET /api/v1/export", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, st.Export())

@@ -69,6 +69,15 @@ func writeMetrics(w io.Writer, st *state.State) {
 			fmt.Fprintf(w, "shukra_baseline_suppressed_total{%s} %d\n", lbl(r.VM), r.Suppressed)
 		}
 	}
+	if av := st.Actions(); av != nil && av.Enabled() {
+		counts := av.Counts()
+		gauge("shukra_actions_pending", "Proposed isolations waiting for a person to approve or reject them.")
+		fmt.Fprintf(w, "shukra_actions_pending %d\n", counts["pending"])
+		gauge("shukra_actions", "What responses decided, held in memory, by status.")
+		for _, s := range []string{"pending", "executed", "released", "refused", "rejected", "expired", "dry_run"} {
+			fmt.Fprintf(w, "shukra_actions{status=%q} %d\n", s, counts[s])
+		}
+	}
 	counter("shukra_detections_suppressed_total", "Detections held back as repeats of one already raised.")
 	fmt.Fprintf(w, "shukra_detections_suppressed_total %d\n", st.Suppressed())
 	if sinks := st.SinkStats(); len(sinks) > 0 {

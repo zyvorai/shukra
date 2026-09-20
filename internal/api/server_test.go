@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -1009,5 +1010,207 @@ func TestAViewWhoseRulesHaveBaselinesOffIsOffEverywhere(t *testing.T) {
 	}
 	if len(store.Items("web", 0)) != 1 {
 		t.Fatal("a refused forget changed the baseline")
+	}
+}
+
+// actionsView is a state.ActionsView with a list and recorded decisions.
+type actionsView struct {
+	enabled bool
+	list    []state.Action
+	actor   string
+	verb    string
+	err     error
+	bundle  []byte
+}
+
+func (v *actionsView) Enabled() bool { return v.enabled }
+func (v *actionsView) List(all bool) []state.Action {
+	if all {
+		return v.list
+	}
+	var out []state.Action
+	for _, a := range v.list {
+		if a.Status == "pending" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+func (v *actionsView) decide(verb, id, actor string) (state.Action, error) {
+	v.verb, v.actor = verb, actor
+	for _, a := range v.list {
+		if a.ID == id {
+			if v.err != nil {
+				return a, v.err
+			}
+			a.Status = map[string]string{"approve": "executed", "reject": "rejected"}[verb]
+			return a, nil
+		}
+	}
+	return state.Action{}, state.ErrActionNotFound
+}
+func (v *actionsView) Approve(id, actor string) (state.Action, error) {
+	return v.decide("approve", id, actor)
+}
+func (v *actionsView) Reject(id, actor string) (state.Action, error) {
+	return v.decide("reject", id, actor)
+}
+func (v *actionsView) Bundle(id string) ([]byte, bool) {
+	if id == "a-1" {
+		return v.bundle, true
+	}
+	return nil, false
+}
+func (v *actionsView) Counts() map[string]int {
+	c := map[string]int{}
+	for _, a := range v.list {
+		c[a.Status]++
+	}
+	return c
+}
+func (v *actionsView) Modes() (int, int, int) { return 1, 0, 0 }
+
+func TestActionsEndpointIsEmptyWhenThereAreNoResponsesAndListsWhatWasDecided(t *testing.T) {
+	st := state.New("node-07")
+	h := New(st, "k")
+	body := strings.Join(strings.Fields(get(h, "/api/v1/actions", "k").Body.String()), "")
+	for _, want := range []string{`"enabled":false`, `"pending":0`, `"actions":[]`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %s in %s", want, body)
+		}
+	}
+	v := &actionsView{enabled: true, list: []state.Action{{ID: "a-3", VM: "web", Status: "executed"}, {ID: "a-2", VM: "web", Status: "executed"}, {ID: "a-1", VM: "db", Status: "pending"}}}
+	st.SetActions(v)
+	var got struct {
+		Enabled bool
+		Pending int
+		Actions []struct{ ID, Status string }
+	}
+	rec := get(h, "/api/v1/actions", "k")
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || !got.Enabled || got.Pending != 1 || len(got.Actions) != 1 || got.Actions[0].ID != "a-1" {
+		t.Fatalf("by default only what waits for a person: %v %s", err, rec.Body.String())
+	}
+	rec = get(h, "/api/v1/actions?all=1", "k")
+	got.Actions = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Actions) != 3 {
+		t.Fatalf("%v %s", err, rec.Body.String())
+	}
+	if rec := get(h, "/api/v1/actions", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("%d", rec.Code)
+	}
+}
+
+func TestOnlyTheAdminKeyDecidesAndTheActorIsPassedOn(t *testing.T) {
+	st := state.New("node-07")
+	v := &actionsView{enabled: true, list: []state.Action{{ID: "a-1", VM: "web", Status: "pending"}}}
+	st.SetActions(v)
+	h := NewWithKeys(st, Keys{Admin: "admin", ReadOnly: "ro"})
+	for _, path := range []string{"/api/v1/actions/a-1/approve", "/api/v1/actions/a-1/reject"} {
+		if rec := post(h, path, "ro", ""); rec.Code != http.StatusForbidden {
+			t.Fatalf("a read-only key must not isolate a VM: %s %d", path, rec.Code)
+		}
+	}
+	if v.verb != "" {
+		t.Fatal("a refused request reached the engine")
+	}
+	rec := post(h, "/api/v1/actions/a-1/approve", "admin", "")
+	if rec.Code != 200 || v.verb != "approve" || v.actor != "tester" || !strings.Contains(rec.Body.String(), `"executed"`) {
+		t.Fatalf("%d %s %+v", rec.Code, rec.Body.String(), v)
+	}
+	rec = post(h, "/api/v1/actions/a-1/reject", "admin", "")
+	if rec.Code != 200 || v.verb != "reject" || !strings.Contains(rec.Body.String(), `"rejected"`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if rec := post(h, "/api/v1/actions/a-9/approve", "admin", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("%d", rec.Code)
+	}
+}
+
+func TestADecisionTheGuardrailsRefuseIsAConflictThatCarriesTheActionAndTheReason(t *testing.T) {
+	st := state.New("node-07")
+	v := &actionsView{enabled: true, list: []state.Action{{ID: "a-1", VM: "web", Status: "refused", Result: "web is protected"}}, err: state.ErrActionNotPending}
+	st.SetActions(v)
+	h := New(st, "k")
+	rec := post(h, "/api/v1/actions/a-1/approve", "k", "")
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "not waiting for a decision") || !strings.Contains(rec.Body.String(), "web is protected") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	v.err = errors.New("web is protected: no response may isolate it")
+	rec = post(h, "/api/v1/actions/a-1/approve", "k", "")
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "no response may isolate it") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	st2 := state.New("node-07")
+	if rec := post(New(st2, "k"), "/api/v1/actions/a-1/approve", "k", ""); rec.Code != http.StatusConflict {
+		t.Fatalf("with no responses configured there is nothing to decide: %d", rec.Code)
+	}
+}
+
+func TestTheIncidentBundleOfAnActionIsServedAsIsAndUnknownIdsAreNotFound(t *testing.T) {
+	st := state.New("node-07")
+	st.SetActions(&actionsView{enabled: true, bundle: []byte(`{"vm":"web","note":"n"}`)})
+	h := New(st, "k")
+	rec := get(h, "/api/v1/actions/a-1/incident", "k")
+	if rec.Code != 200 || rec.Body.String() != `{"vm":"web","note":"n"}` || rec.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("%d %q %q", rec.Code, rec.Body.String(), rec.Header().Get("Content-Type"))
+	}
+	if rec := get(h, "/api/v1/actions/a-2/incident", "k"); rec.Code != http.StatusNotFound {
+		t.Fatalf("%d", rec.Code)
+	}
+	if rec := get(h, "/api/v1/actions/a-1/incident", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("%d", rec.Code)
+	}
+}
+
+func TestMetricsShowActionsOnlyWhenResponsesAreConfigured(t *testing.T) {
+	st := state.New("node-07")
+	h := New(st, "k")
+	if strings.Contains(get(h, "/metrics", "k").Body.String(), "shukra_actions") {
+		t.Fatal("series for something that is off")
+	}
+	st.SetActions(&actionsView{enabled: true, list: []state.Action{{ID: "a-1", Status: "pending"}, {ID: "a-2", Status: "executed"}, {ID: "a-3", Status: "executed"}}})
+	text := get(h, "/metrics", "k").Body.String()
+	for _, want := range []string{"shukra_actions_pending 1", `shukra_actions{status="executed"} 2`, `shukra_actions{status="refused"} 0`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in\n%s", want, text)
+		}
+	}
+}
+
+func TestDecidingWhenNoResponsesAreConfiguredIsAConflictAndReachesNothing(t *testing.T) {
+	st := state.New("node-07")
+	h := New(st, "k")
+	if rec := post(h, "/api/v1/actions/a-1/approve", "k", ""); rec.Code != http.StatusConflict {
+		t.Fatalf("nothing configured: %d", rec.Code)
+	}
+	v := &actionsView{enabled: false, list: []state.Action{{ID: "a-1", Status: "pending"}}}
+	st.SetActions(v)
+	for _, verb := range []string{"approve", "reject"} {
+		if rec := post(h, "/api/v1/actions/a-1/"+verb, "k", ""); rec.Code != http.StatusConflict || v.verb != "" {
+			t.Fatalf("a view with no responses must not decide: %s %d %+v", verb, rec.Code, v)
+		}
+	}
+}
+
+func TestADecisionWithoutAnActorHeaderIsRecordedAsTheAPI(t *testing.T) {
+	st := state.New("node-07")
+	v := &actionsView{enabled: true, list: []state.Action{{ID: "a-1", VM: "web", Status: "pending"}}}
+	st.SetActions(v)
+	h := New(st, "k")
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/actions/a-1/approve", nil)
+	req.Header.Set("Authorization", "Bearer k")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 || v.actor != "api" {
+		t.Fatalf("who decided must never be empty: %d %q", rec.Code, v.actor)
+	}
+}
+
+func TestMetricsShowNothingForAViewWithNoResponses(t *testing.T) {
+	st := state.New("node-07")
+	h := New(st, "k")
+	st.SetActions(&actionsView{enabled: false, list: []state.Action{{ID: "a-1", Status: "pending"}}})
+	if strings.Contains(get(h, "/metrics", "k").Body.String(), "shukra_actions") {
+		t.Fatal("series for responses that are not configured")
 	}
 }

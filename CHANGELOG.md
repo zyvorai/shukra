@@ -4,6 +4,12 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### Responses: acting on a detection, safely
+
+- A `responses:` section in the rules file lets a detection propose isolating a VM, which a person approves (`shukractl approve`, the Actions page), or, with `mode: enforce` and named rules only, do it on its own. Guardrails apply to every response: `never_isolate`, isolate must be enabled, an hourly cap on automatic isolations, a per-VM cooldown, proposal expiry and a timed `release_after` that survives a restart. `dry_run` tries one out and changes nothing. Off unless configured. See [responses](docs/responses.md).
+- Every decision is an action with the incident bundle it was made on, recorded in `actions.jsonl` and announced as an `action-*` detection (so a webhook can page whoever must approve).
+- `shukractl actions`, `approve`, `reject`; `GET /api/v1/actions`, approve and reject (admin key only) and `.../incident`; `shukra_actions*` series; a `responses` doctor check; an Actions page.
+
 ### Learned baselines
 
 - A `baselines:` section in the rules file turns on learning what is normal for each VM: the networks it talks to (/24, /64), the sites it looks up (registrable names) and the networks that connect in. After a per-VM learning period (24h by default, from the first time the VM is seen) the first sighting of anything new is reported once as `new-destination`, `new-dns-suffix` or `new-inbound-peer`, guest-attributed. Off unless the section is present. See [learned baselines](docs/baselines.md).
