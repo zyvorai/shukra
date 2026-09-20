@@ -34,7 +34,7 @@ Flags:
 | `-proc` | `/proc` | Where QEMU is discovered |
 | `-watchlist` | empty | [Detection rules](06-watchlist.md) YAML. No file means only the built-in unexpected-exec check |
 | `-web` | `web/dist` | Console bundle. Missing directory means API only |
-| `-data-dir` | empty | Keep detections, isolations and the recorder across restarts |
+| `-data-dir` | empty | Keep detections, isolations and the recorder across restarts, and a coarse snapshot every 5 minutes that `explain --at` and `incident` read |
 | `-webhook-url`, `-syslog`, `-alert-file` | off | [Alert sinks](07-alert-sinks.md) |
 | `-no-auth` | off | Serve without a bearer key. Otherwise `SHUKRA_API_KEY`, or the dev token with a warning |
 | `-tls-cert`, `-tls-key` | off | Serve HTTPS. `SIGHUP` reloads the certificate |

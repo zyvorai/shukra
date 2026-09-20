@@ -20,7 +20,7 @@ What it does:
 4. Installs `/usr/local/bin/shukrad` and `/usr/local/bin/shukractl`.
 5. Installs `configs/detections.example.yaml` as `/etc/shukra/detections.yaml` only if there is none. Your edited rules are kept, and the current sample is always written beside them as `detections.example.yaml`.
 6. Writes the API key to `/etc/shukra/env` (root only, `0600`) for the service, and `~/.shukra/env` and `~/.shukra/api-key` for the SSH user. The key is not in the unit file, because `systemctl show` prints a unit's `Environment=` to every local user.
-7. Installs `shukra.service` from `deploy/shukra.service` (with `-data-dir /var/lib/shukra` and `ExecReload`), enables it, and restarts it. Detections, isolation requests and the flight recorder now survive that restart.
+7. Installs `shukra.service` from `deploy/shukra.service` (with `-data-dir /var/lib/shukra` and `ExecReload`), enables it, and restarts it. Detections, isolation requests and the flight recorder now survive that restart, and the daemon stores a coarse snapshot every 5 minutes so that a past time can be explained (`snapshots.jsonl`, about a day at ten VMs; see [after the fact](09-after-the-fact.md)).
 8. Waits for the daemon to answer (`shukractl status --wait`, since it takes a couple of seconds to load its programs), then runs `status`, `programs`, `vms`, `trace list`, `doctor` and `GET /api/v1/status`. `doctor` is informational here: a fresh deploy on a lab host will list the dev key and plain HTTP, and the script says so without failing.
 
 The unit listens on `0.0.0.0:30970`. The token defaults to `shukra` unless you export `SHUKRA_API_KEY` before deploying. Set a real token on any host that is not a lab:

@@ -7,7 +7,7 @@ Shukra's claims are about what a real kernel does, so most of its tests load rea
 | Layer | Command | Needs | What it proves |
 |---|---|---|---|
 | Go unit tests | `make test` (`go test ./...`) | Go 1.25 | Logic: joins, windows, resets, rules, findings, the API, the CLI. Runs on any OS with the stub build |
-| Console tests and build | `make web` | Node 22 | The console's units, type-check and production build |
+| Console tests and build | `make web` (`npm test`, `npm run build`) | Node 22 | The console's units, type-check and production build. See [the console tests](#the-console-tests) |
 | Loader build | `make test-bpf` | Linux, clang, BTF, `make generate` first | The `shukrabpf` build compiles and its tests pass |
 | Kernel integration | `make test-kernel` | Linux, root | Loads the sched, block and net programs into this kernel and checks counters against load the test generates itself: connect counts, block bytes, the exec filter, and vCPU preemption (two CPU-bound threads on one CPU, with a sleeping thread as a control) |
 | Tap rig | `make test-tap` (`scripts/test-tap.sh`) | Linux 6.6+, root, `ip`, `curl`, `python3`, `tc`, `iptables` | The tap program, isolation and drops on a real kernel with no KVM. See below |
@@ -20,6 +20,16 @@ Shukra's claims are about what a real kernel does, so most of its tests load rea
 - **Exact counts, not "greater than zero".** The rig and the live test assert numbers a kernel can be held to: N connections accepted, N refused, N never answered, and the identity that attempts equal the sum of outcomes.
 - **Never a vacuous check.** A check that passes on stale state (a total with no baseline, a multicast test with no route) is treated as a bug. Assertions compare a delta against a baseline taken just before the action.
 - **Timing is asserted, not slept past.** Where the kernel needs time (a SYN waits 3 seconds to be called unanswered), the test waits for the documented interval and then reads.
+
+## The console tests
+
+`vitest`, no browser. A component is rendered to a string (`renderToStaticMarkup`) and the string is checked, and everything that decides what a table shows is kept in plain functions so it can be tested without React: `src/eventView.ts` (filter, search, newest-first and paging of the connection tables), `src/explainQuery.ts` (the API paths and file name for a past verdict and an incident bundle), `hist.ts` (bucket edges and formatting). What the tests pin, because each was once wrong on a real host:
+
+- **Nothing the daemon does not know is shown as fact.** No page opens on a made-up VM name (`copy.test.tsx` fails if the fixture name comes back), the sign-in page names the address you connected to and not loopback, and the Overview does not say the tap is missing until it has asked the daemon.
+- **A long table never cuts silently.** It shows 50 rows, says how many there are, and offers more (`limited.test.tsx`); an empty result says whether it is the filter or nothing has happened.
+- **A time is sent as UTC** whatever zone the browser is in (checked by hand under `TZ=Asia/Kolkata` and `TZ=America/Los_Angeles`, not in CI).
+
+Each was checked by mutation: put the old behaviour back and a test fails. CI runs `npm ci`, the tests and the build.
 
 ## The tap rig
 

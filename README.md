@@ -108,7 +108,7 @@ shukractl doctor                            # what needs attention, worst first,
 shukractl programs                          # which programs are attached, and why one is not
 shukractl vms                               # QEMU VMs found on the host
 shukractl explain osboxes-debian            # the last minute; --window 5m or lifetime to change it
-shukractl trace kvm --vm osboxes-debian     # also sched, block, net, tap, drops
+shukractl trace kvm --vm osboxes-debian     # also sched, block, net, tap, drops, contention
 shukractl trace tap --vm osboxes-debian     # the guest's traffic and what became of its connections
 shukractl trace drops --vm osboxes-debian   # what the kernel dropped on its tap, and whether it was Shukra
 shukractl recorder osboxes-debian --window 60s
@@ -161,8 +161,9 @@ A detection keeps the attribution of the event that caused it, so a rule that fi
 | `GET /metrics` | bearer | Prometheus text. A VM with no measured counters has no series, not a zero |
 | `GET /api/v1/status`, `/vms`, `/programs` | bearer | The board, the VMs and their taps and threads, and the programs |
 | `GET /api/v1/doctor` | bearer, read-only key is enough | The same audit as `shukractl doctor`. It never contains a key |
-| `GET /api/v1/trace/{kvm,sched,block,net,tap,drops}` | bearer | Per-VM counters. An empty list is `[]`, never `null` |
-| `GET /api/v1/explain?vm=<name>&window=<dur>` | bearer | Ranked findings for one VM. `window` is 10s to 5m, or `0`; the default is the last minute |
+| `GET /api/v1/trace/{kvm,sched,block,net,tap,drops,contention}` | bearer | Per-VM counters. `contention` is who took whose CPU across VMs. An empty list is `[]`, never `null` |
+| `GET /api/v1/explain?vm=<name>&window=<dur>&at=<time>` | bearer | Ranked findings for one VM. `window` is 10s to 5m, or `0`; the default is the last minute. With `at` it is a past time, from stored snapshots (`window` is then 5m to 6h) |
+| `GET /api/v1/incident?vm=<name>&at=<time>&window=<dur>` | bearer | One bundle about a VM around a moment: verdict, detections, recorder events, isolate requests, allow list |
 | `GET /api/v1/events?since=<seq>` | bearer | Events newer than `seq`. Every event carries a `seq` that only grows |
 | `GET /api/v1/stream` | bearer | Server-sent events. Resume with `Last-Event-ID` or `?since=` |
 | `GET /api/v1/isolations` | bearer | Audit trail of isolate and release requests, and whether each took effect |
@@ -213,6 +214,7 @@ Events that leave the daemon carry `product: "shukra"`. A joined host event has 
 | [Detection rules](docs/tutorials/06-watchlist.md) | Destinations, ports, thresholds, suppression |
 | [Alert sinks](docs/tutorials/07-alert-sinks.md) | Signed webhook, syslog, JSONL file |
 | [Find out why traffic is lost](docs/tutorials/08-lost-traffic.md) | Connection outcomes, kernel drops and Explain together |
+| [Investigate after the fact](docs/tutorials/09-after-the-fact.md) | A verdict for a past time, who took the CPU, and an incident bundle for a ticket |
 
 | Reference | |
 |---|---|

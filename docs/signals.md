@@ -17,6 +17,8 @@ Five of the six programs see the **VMM process** from the host: QEMU, or a FluxV
 
 Without that filter, 300 runs of `/bin/true` produced 330 exec and 328 exit events on a test host. That would be enough to push connects and detections out of the 2048-event list within seconds on a busy hypervisor, which is why the filter exists, and why the list keeps a share for each kind of event so no one kind can take the rest.
 
+The daemon holds the newest 2048 events, but with a **guaranteed share for each kind** (guest events 512, host connects 512, and 256 each for detections and VM start and stop, process events, latency samples and anything unknown), so a flood of one kind cannot push out a rare one. The shares only matter once the list is full, and are in [architecture](architecture.md#state-windows-and-history).
+
 ## Guest traffic signals
 
 These come from the tap program and the drops program, and are the only ones that are `guest_attributed`. Details are in [guest traffic and isolation](tap.md) and [where packets die](drops.md); the meaning of each number, in one place:

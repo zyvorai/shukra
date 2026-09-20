@@ -137,6 +137,10 @@ sum by (vm, reason) (rate(shukra_tap_kernel_drops_total[5m]))
 histogram_quantile(0.99, sum by (le, vm) (rate(shukra_tap_handshake_seconds_bucket[5m])))
 ```
 
+## Afterwards
+
+If you are asked about it the next day, `shukractl explain <vm> --at ...` and `shukractl incident <vm> --at ... --out file` work from the daemon's stored snapshots: [investigate after the fact](09-after-the-fact.md).
+
 ## What this cannot tell you
 
 - It sees the **host kernel's** view of the tap. A drop inside the guest, or on the physical network past the host, is not visible, and neither is which **process** in the guest made a connection.
