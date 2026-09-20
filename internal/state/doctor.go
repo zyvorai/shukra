@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/zyvorai/shukra/internal/identity"
 )
@@ -294,6 +295,32 @@ func (s *State) Doctor() []Check {
 		add("rules", "info", "No detection file is configured", "Only the built-in unexpected-exec check runs.", "Start with -watchlist /etc/shukra/detections.yaml.")
 	default:
 		add("rules", "ok", "Detection rules loaded from "+c.RulesFile, "", "")
+	}
+
+	// Learned baselines, only when the rules file has turned them on.
+	if bv := s.Baselines(); bv != nil && bv.Enabled() {
+		rows := bv.Status("", s.now())
+		learning := 0
+		var until time.Time
+		for _, r := range rows {
+			if r.Learning {
+				learning++
+				if until.IsZero() || r.LearnUntil.After(until) {
+					until = r.LearnUntil
+				}
+			}
+		}
+		switch {
+		case !bv.Persisted():
+			add("baselines", "warn", "Learned baselines are on but nothing is kept across a restart",
+				"Learning starts over each time the daemon does, so a daemon that restarts more often than the learning period ("+bv.Options().Learn.String()+") never reports anything.",
+				"Start with -data-dir /var/lib/shukra (the shipped unit does).")
+		case learning > 0:
+			add("baselines", "info", strconv.Itoa(learning)+" of "+strconv.Itoa(len(rows))+" VMs are still learning their baseline",
+				"Nothing is reported for a VM until its learning period ends; the last ends "+until.UTC().Format(time.RFC3339)+".", "")
+		default:
+			add("baselines", "ok", "Learned baselines are reporting what is new for "+strconv.Itoa(len(rows))+" VMs", "", "")
+		}
 	}
 
 	// Worst first, and stable within a status.

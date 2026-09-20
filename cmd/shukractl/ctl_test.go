@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -792,5 +793,75 @@ func TestAdviseShowsTheNumbersAndEachPieceOfAdviceWithItsConfidence(t *testing.T
 	}
 	if strings.Contains(buf.String(), "vm=new  vcpus=1  halted=n/a  busy") {
 		t.Fatalf("a VM with no window has no busy figure to show:\n%s", buf.String())
+	}
+}
+
+func TestBaselineOffSaysHowToTurnItOn(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"enabled":false,"persisted":false,"rows":[],"items":[]}`))
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+	var buf bytes.Buffer
+	if err := run([]string{"baseline"}, &buf); err != nil || !strings.Contains(buf.String(), "off: the rules file has no baselines section") {
+		t.Fatalf("%v %q", err, buf.String())
+	}
+}
+
+func TestBaselineShowsWhereEachVMsLearningStandsAndWhatItLearned(t *testing.T) {
+	var query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"enabled":true,"persisted":false,"learn":"24h0m0s","maxAlertsPerDay":20,
+			"rows":[{"vm":"web","learning":true,"learnUntil":"2026-09-21T03:00:00Z","alertsToday":0,"suppressed":0,"counts":[{"kind":"destination","count":4},{"kind":"dns-suffix","count":2},{"kind":"inbound-peer","count":0}]},
+			        {"vm":"db","learning":false,"learnUntil":"2026-09-20T03:00:00Z","alertsToday":3,"suppressed":5,"counts":[{"kind":"destination","count":9},{"kind":"dns-suffix","count":1},{"kind":"inbound-peer","count":1}]}],
+			"items":[{"kind":"destination","item":"203.0.113.0/24","first":"2026-09-20T03:00:00Z","last":"2026-09-20T04:00:00Z"}]}`))
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+	var buf bytes.Buffer
+	if err := run([]string{"baseline", "web", "--items"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if query != "items=1&vm=web" {
+		t.Fatalf("%q", query)
+	}
+	for _, want := range []string{
+		"learning period 24h0m0s, at most 20 new-item alerts per VM per day", "WARNING: not kept across a restart",
+		"vm=web  learning until 2026-09-21T03:00:00Z  (destination 4, dns-suffix 2, inbound-peer 0)",
+		"vm=db  reporting  (destination 9, dns-suffix 1, inbound-peer 1)  new alerts today 3, held back in all 5",
+		"learned, most recently seen first", "203.0.113.0/24",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("missing %q:\n%s", want, buf.String())
+		}
+	}
+	if err := run([]string{"baseline"}, &buf); err != nil || query != "" {
+		t.Fatalf("no VM, no items request: %q %v", query, err)
+	}
+}
+
+func TestBaselineForgetPostsTheVMAndNeedsOne(t *testing.T) {
+	var method, path, body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"vm":"web","forgotten":true}`))
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+	if err := run([]string{"baseline", "--forget"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("forgetting needs a VM: it must not forget everything by default")
+	}
+	var buf bytes.Buffer
+	if err := run([]string{"baseline", "web", "--forget"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if method != "POST" || path != "/api/v1/baseline/forget" || body != `{"vm":"web"}` || !strings.Contains(buf.String(), "recorded as a detection") {
+		t.Fatalf("%s %s %s %q", method, path, body, buf.String())
 	}
 }

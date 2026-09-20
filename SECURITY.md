@@ -54,7 +54,7 @@ A guest controls the bytes it sends. Shukra is built so that cannot hurt it:
 
 ## Data that identifies people
 
-The scheduler program records the command name of a host task that took a vCPU's CPU, so `kubectl`, `cilium-agent` or the name of one of your own services can appear in the API and on `/metrics`. Events, detections and the flight recorder hold VM names, UUIDs, the addresses a guest talked to and, unless you turn it off, the DNS names it looked up. With `-data-dir` they are written to disk. Treat that directory as sensitive, and the alert sinks as a place that data leaves the host.
+`baselines.json` lists the networks and names each VM talks to (mode 0600), so it is as sensitive as the event list; forgetting a VM's baseline is recorded as a detection naming who did it, since it is a way to hide a change. The scheduler program records the command name of a host task that took a vCPU's CPU, so `kubectl`, `cilium-agent` or the name of one of your own services can appear in the API and on `/metrics`. Events, detections and the flight recorder hold VM names, UUIDs, the addresses a guest talked to and, unless you turn it off, the DNS names it looked up. With `-data-dir` they are written to disk. Treat that directory as sensitive, and the alert sinks as a place that data leaves the host.
 
 ## Reporting
 

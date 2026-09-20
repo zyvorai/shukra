@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zyvorai/shukra/internal/baseline"
 	"gopkg.in/yaml.v3"
 )
 
@@ -96,6 +97,108 @@ func (r DNSRule) matches(name string) bool {
 	return false
 }
 
+// BaselineConfig turns on learned baselines: what is new for a VM, without a rule for it. It is off unless the
+// rules file has a baselines section, because it raises detections of its own.
+type BaselineConfig struct {
+	// Learn is how long each VM is only observed, from the first time it is seen (default 24h).
+	Learn time.Duration `yaml:"learn"`
+	// MaxAlertsPerDay bounds the new-item alerts one VM raises in a day (default 20).
+	MaxAlertsPerDay int `yaml:"max_alerts_per_day"`
+	// MaxItems bounds each kind's set per VM (default 2048).
+	MaxItems int `yaml:"max_items"`
+	// MaxAge is how long an unseen item is remembered (default 720h).
+	MaxAge time.Duration `yaml:"max_age"`
+	// Kinds limits which of destination, dns-suffix and inbound-peer are learned (default all three).
+	Kinds []string `yaml:"kinds"`
+	// Severity sets a kind's severity (defaults: destination medium, dns-suffix low, inbound-peer medium).
+	Severity map[string]string `yaml:"severity"`
+}
+
+// Options is what the baseline store runs with.
+func (b *BaselineConfig) Options() baseline.Options {
+	return baseline.Options{Learn: b.Learn, MaxItems: b.MaxItems, MaxAge: b.MaxAge, MaxAlertsPerDay: b.MaxAlertsPerDay}
+}
+
+// Learns says whether a kind is learned.
+func (b *BaselineConfig) Learns(k baseline.Kind) bool {
+	if b == nil {
+		return false
+	}
+	for _, x := range b.Kinds {
+		if x == string(k) {
+			return true
+		}
+	}
+	return false
+}
+
+// SeverityOf is the severity a new item of a kind is reported with.
+func (b *BaselineConfig) SeverityOf(k baseline.Kind) string {
+	if s := b.Severity[string(k)]; s != "" {
+		return s
+	}
+	if k == baseline.DNSSuffix {
+		return "low"
+	}
+	return "medium"
+}
+
+func (b *BaselineConfig) validate() error {
+	d := baseline.DefaultOptions()
+	if b.Learn == 0 {
+		b.Learn = d.Learn
+	}
+	if b.Learn < time.Minute || b.Learn > 90*24*time.Hour {
+		return fmt.Errorf("baselines: learn %s is outside 1m to %s", b.Learn, 90*24*time.Hour)
+	}
+	if b.MaxAlertsPerDay == 0 {
+		b.MaxAlertsPerDay = d.MaxAlertsPerDay
+	}
+	if b.MaxAlertsPerDay < 1 || b.MaxAlertsPerDay > 1000 {
+		return fmt.Errorf("baselines: max_alerts_per_day %d is outside 1 to 1000", b.MaxAlertsPerDay)
+	}
+	if b.MaxItems == 0 {
+		b.MaxItems = d.MaxItems
+	}
+	if b.MaxItems < 16 || b.MaxItems > 100000 {
+		return fmt.Errorf("baselines: max_items %d is outside 16 to 100000", b.MaxItems)
+	}
+	if b.MaxAge == 0 {
+		b.MaxAge = d.MaxAge
+	}
+	if b.MaxAge < b.Learn {
+		return fmt.Errorf("baselines: max_age %s is shorter than learn %s, so everything would be forgotten before learning ends", b.MaxAge, b.Learn)
+	}
+	valid := map[string]bool{}
+	for _, k := range baseline.Kinds {
+		valid[string(k)] = true
+	}
+	if len(b.Kinds) == 0 {
+		for _, k := range baseline.Kinds {
+			b.Kinds = append(b.Kinds, string(k))
+		}
+	}
+	seen := map[string]bool{}
+	for _, k := range b.Kinds {
+		if !valid[k] {
+			return fmt.Errorf("baselines: kind %q is not destination, dns-suffix or inbound-peer", k)
+		}
+		if seen[k] {
+			return fmt.Errorf("baselines: kind %q is listed twice", k)
+		}
+		seen[k] = true
+	}
+	for k, sev := range b.Severity {
+		if !valid[k] {
+			return fmt.Errorf("baselines: severity for %q: not destination, dns-suffix or inbound-peer", k)
+		}
+		if !severities[sev] {
+			return fmt.Errorf("baselines: severity %q for %s is not low, medium, high or critical", sev, k)
+		}
+	}
+	return nil
+}
+
 // Threshold notices a per-VM metric over a window. Op is ">" or ">=".
 type Threshold struct {
 	Name     string        `yaml:"name"`
@@ -109,9 +212,11 @@ type Threshold struct {
 // Config is everything the detection file can say.
 type Config struct {
 	// Watch is the destination watchlist. It is never nil.
-	Watch      *Watchlist
-	Ports      []PortRule
-	DNS        []DNSRule
+	Watch *Watchlist
+	Ports []PortRule
+	DNS   []DNSRule
+	// Baselines is nil unless the rules file turns learned baselines on.
+	Baselines  *BaselineConfig
 	ExecAllow  []string
 	Thresholds []Threshold
 	// Suppress is how long a repeat of the same detection is held back.
@@ -126,12 +231,13 @@ func DefaultConfig() *Config {
 }
 
 type doc struct {
-	Suppress     *time.Duration `yaml:"suppress"`
-	Destinations []Rule         `yaml:"destinations"`
-	Ports        []PortRule     `yaml:"ports"`
-	DNS          []DNSRule      `yaml:"dns"`
-	ExecAllow    []string       `yaml:"exec_allow"`
-	Thresholds   []Threshold    `yaml:"thresholds"`
+	Suppress     *time.Duration  `yaml:"suppress"`
+	Destinations []Rule          `yaml:"destinations"`
+	Ports        []PortRule      `yaml:"ports"`
+	DNS          []DNSRule       `yaml:"dns"`
+	Baselines    *BaselineConfig `yaml:"baselines"`
+	ExecAllow    []string        `yaml:"exec_allow"`
+	Thresholds   []Threshold     `yaml:"thresholds"`
 }
 
 // Parse loads and validates a detection file. It is strict: an unknown key is an
@@ -228,6 +334,12 @@ func Parse(b []byte) (*Config, error) {
 			return nil, err
 		}
 		c.DNS = append(c.DNS, r)
+	}
+	if d.Baselines != nil {
+		if err := d.Baselines.validate(); err != nil {
+			return nil, err
+		}
+		c.Baselines = d.Baselines
 	}
 	for _, x := range d.ExecAllow {
 		x = strings.ToLower(strings.TrimSpace(x))

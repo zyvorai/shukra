@@ -4,6 +4,12 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### Learned baselines
+
+- A `baselines:` section in the rules file turns on learning what is normal for each VM: the networks it talks to (/24, /64), the sites it looks up (registrable names) and the networks that connect in. After a per-VM learning period (24h by default, from the first time the VM is seen) the first sighting of anything new is reported once as `new-destination`, `new-dns-suffix` or `new-inbound-peer`, guest-attributed. Off unless the section is present. See [learned baselines](docs/baselines.md).
+- Bounded against a guest: fixed-size sets, a daily cap on alerts per VM with a single `baseline-cap` detection, aging of unseen items.
+- `shukractl baseline [<vm>] [--items] [--forget]`, `GET /api/v1/baseline`, `POST /api/v1/baseline/forget` (admin only, recorded as a detection), `shukra_baseline_*` series, a `baselines` doctor check, and `baselines.json` under `-data-dir`.
+
 ### Right-sizing advisor
 
 - `shukractl advise` and `GET /api/v1/advice`: per VM the share of the window its vCPUs were halted, busy and preempted, and advice with evidence and confidence: `overprovisioned` (with a size that leaves twice the headroom it used), `starved` (reduce what it competes with before adding vCPUs), `nearly_idle`, `no_change`, `not_enough_data` and `idle_unavailable`. Idleness is halt time (a lower bound) and only named on Intel hosts; elsewhere nothing about over-provisioning is claimed.
