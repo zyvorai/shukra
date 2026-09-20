@@ -1,6 +1,6 @@
 # Find out why a VM's traffic is lost
 
-A VM "can't reach" something. Is the destination refusing it, is something on the host dropping it, is the guest not reading its NIC, or is it Shukra's own isolation? This walkthrough asks the host four questions in order, using the guest's own tap as the witness, and does not touch the guest.
+A VM "can't reach" something. Is the destination refusing it, is something on the host dropping it, is the guest not reading its NIC, or is it Shukra's own isolation or egress policy? This walkthrough asks the host four questions in order, using the guest's own tap as the witness, and does not touch the guest.
 
 It needs the `tap` program (Linux 6.6+) and, for the third step, the `drops` program (5.17+). `shukractl programs` says which are attached.
 
@@ -49,7 +49,7 @@ Every outbound attempt is exactly one of the four, so read it as a table of what
 | Mostly **accepted** | The network works. The problem is above TCP: the service, TLS, DNS | the application |
 | Mostly **refused** | The destination answered "nothing is listening" (an RST) | the destination's service and port. Many refusals to many ports looks like a scan |
 | Mostly **never answered** | The SYN went out and nothing came back: something dropped it | step 3 |
-| **blocked** | Shukra's isolation dropped it | `shukractl security <vm>`, `shukractl release <vm>` |
+| **blocked** | Shukra dropped it: the VM is isolated, or an enforcing [egress policy](10-egress-policy.md) does not list the destination | `shukractl policy <vm>` and `shukractl security <vm>` name which. Isolation: `shukractl release <vm>`. Policy: add the network, or `shukractl policy remove <vm>` |
 
 Connections made **to** the guest are the `in` line. `ignored` is a SYN the guest never answered: a firewall inside the guest, or a service that is not running. `guest_inbound` events name each peer, and a `ports` rule with `dir: in` can alert on them.
 
@@ -66,7 +66,7 @@ shukractl trace drops --vm web-01
       TC_INGRESS     110  freed in __netif_receive_skb_core
 ```
 
-`kernel` is every packet the kernel dropped on the tap. `shukra` is what the tap program dropped (isolation). `other` is the rest, so here **something other than Shukra dropped 110 packets**, and the reason says how:
+`kernel` is every packet the kernel dropped on the tap. `shukra` is what the tap program dropped (isolation, or an enforcing egress policy). `other` is the rest, so here **something other than Shukra dropped 110 packets**, and the reason says how:
 
 - `TC_INGRESS` or `TC_EGRESS` with `other` above zero: another program on the tap dropped it. Name it:
 
@@ -146,3 +146,13 @@ If you are asked about it the next day, `shukractl explain <vm> --at ...` and `s
 - It sees the **host kernel's** view of the tap. A drop inside the guest, or on the physical network past the host, is not visible, and neither is which **process** in the guest made a connection.
 - A server that answers after 3 seconds is counted as never answered, not accepted.
 - A VM with no host interface Shukra can attach to (user-mode networking, or a tap the scan could not map out of another namespace) has none of this. `shukractl doctor` names those VMs. FluxVM's default netns is attached on the host veth; see [FluxVM](../tap.md#fluxvm).
+
+> **If it does not work.**
+>
+> | You see | Do this |
+> |---|---|
+> | `trace tap` says `no rows`, or `doctor` lists the VM as having no tap | The VM has no interface Shukra can attach to (user-mode networking, or a tap it could not map). None of this walkthrough applies to it |
+> | `trace drops` says `the drops program is not measuring` | The `drops` program is `detached`: `shukractl programs` says why (it needs Linux 5.17+). Steps 1, 2 and 4 still work |
+> | `blocked` is not zero and you did not isolate the VM | An enforcing egress policy: `shukractl policy <vm>` |
+> | `bpftool net show dev <tap>` lists only `shukra_tap` programs | Nothing else is attached to the tap. Read the reason in `trace drops` instead |
+

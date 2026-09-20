@@ -16,7 +16,7 @@ What it does:
 
 1. Rsyncs the tree to `$HOME/.deployments/shukra` on the host (`SHUKRA_REMOTE_SUBDIR` overrides the directory name).
 2. Builds the console with `npm ci` if npm is present.
-3. Runs `make generate` when clang and `/sys/kernel/btf/vmlinux` exist, then `go build -tags shukrabpf`. If generate fails, it still builds a detached daemon and says so.
+3. Runs `make generate` when clang and `/sys/kernel/btf/vmlinux` exist, then `go build -tags shukrabpf`. If the host has both and the objects still do not build (a missing `llvm-strip` or `bpftool` counts), the script stops with `ERROR: clang and kernel BTF are present but the CO-RE objects did not build`, installs nothing and leaves the running service alone. `SHUKRA_ALLOW_DETACHED=1` installs a detached daemon anyway. On a host with no clang or no BTF it builds a detached daemon, and says `programs will report detached`.
 4. Installs `/usr/local/bin/shukrad` and `/usr/local/bin/shukractl`.
 5. Installs `configs/detections.example.yaml` as `/etc/shukra/detections.yaml` only if there is none. Your edited rules are kept, and the current sample is always written beside them as `detections.example.yaml`.
 6. Writes the API key to `/etc/shukra/env` (root only, `0600`) for the service, and `~/.shukra/env` and `~/.shukra/api-key` for the SSH user. The key is not in the unit file, because `systemctl show` prints a unit's `Environment=` to every local user.
@@ -30,6 +30,15 @@ SHUKRA_API_KEY="$(openssl rand -hex 16)" ./scripts/deploy-remote.sh 10.0.1.5 sus
 ```
 
 Passwordless `sudo` is required for install, the unit file, and `systemctl`.
+
+You should see the script's numbered progress, then the same board you get from the CLI, ending with:
+
+```text
+SHUKRA_URL=http://10.0.1.5:30970
+Shukra ready
+```
+
+The line before it is the JSON from `GET /api/v1/status`. If the script stops earlier, the last `[shukra-deploy]` line says where, and the box at the end of this page says what to do.
 
 ## What the service is allowed to do
 
@@ -52,17 +61,25 @@ echo 'SHUKRA_EXTRA_ARGS=-tls-cert /etc/shukra/tls.crt -tls-key /etc/shukra/tls.k
 sudo systemctl restart shukra
 ```
 
+There must be **one** `SHUKRA_EXTRA_ARGS=` line in that file. The service reads it as a list of assignments and the last one wins, so a second `tee -a` for another flag would silently drop the first. If the line is already there, edit it and put every flag on it (the next section has an example).
+
 `systemctl reload shukra` re-reads the certificate as well as the detection rules, so a renewed certificate needs no restart. A bad file on reload is logged and the working certificate stays in use. The floor is TLS 1.2. Point the CLI at a private CA with `SHUKRA_CA_FILE=/path/ca.pem` and `SHUKRA_URL=https://...`. The daemon warns at start when it serves plain HTTP on a non-loopback address.
 
 ## Other daemon options
 
-Anything `shukrad` takes can be added the same way, in `SHUKRA_EXTRA_ARGS` in `/etc/shukra/env`, then `sudo systemctl restart shukra`. A later flag wins over one in the unit. The ones a fresh deploy usually needs:
+Anything `shukrad` takes can be added the same way, in the one `SHUKRA_EXTRA_ARGS` line in `/etc/shukra/env`, then `sudo systemctl restart shukra`. A later flag wins over one in the unit. With several, the line looks like this:
+
+```text
+SHUKRA_EXTRA_ARGS=-tls-cert /etc/shukra/tls.crt -tls-key /etc/shukra/tls.key -isolate-allow 10.0.0.0/24 -dns-events=false
+```
+
+The ones a fresh deploy usually needs:
 
 | Flag | Why |
 |---|---|
-| `-isolate-allow 10.0.0.0/24` | Enables isolate. Without a management allow list it is refused |
+| `-isolate-allow 10.0.0.0/24` | Enables isolate, and [enforcing an egress policy](10-egress-policy.md), which are refused without a management allow list. It also means anyone who holds the admin key can cut a VM off, so first give the host a real key and TLS (or `-listen 127.0.0.1:30970`): `shukractl doctor` fails a host that still has the dev key `shukra` on a public address or plain HTTP, and this flag should not go on one |
 | `-dns-events=false` | Do not record the names guests look up. The tap program then does not read DNS at all |
-| `-vmm-tripwires=false` | Do not load the program that watches QEMU processes for the files they open and the calls they make. It runs on every open on the host, about 200 ns each, plus a hook on every process creation and exit |
+| `-vmm-tripwires=false` | Do not load the program that watches QEMU processes for the files they open and the calls they make ([tutorial 11](11-vmm-tripwires.md)). It runs on every open on the host, about 200 ns each, plus a hook on every process creation and exit |
 | `-tls-events=false` | Do not record the server names in guests' TLS hellos. The tap program then reads no TCP payload at all |
 | `-webhook-url`, `-syslog`, `-alert-file` | Where detections go. See [alert sinks](07-alert-sinks.md) |
 | `-listen 127.0.0.1:30970` | Bind only locally |
@@ -71,7 +88,7 @@ Anything `shukrad` takes can be added the same way, in `SHUKRA_EXTRA_ARGS` in `/
 
 ## A key that can only read
 
-Set `SHUKRA_READONLY_KEY` in `/etc/shukra/env` and give that key to a Prometheus scrape or a dashboard. It can call every `GET`, including `/metrics` and the event stream, and gets `403` on `POST /api/v1/isolate`. It must differ from `SHUKRA_API_KEY`, and the daemon refuses to start otherwise.
+Set `SHUKRA_READONLY_KEY` in `/etc/shukra/env` and give that key to a Prometheus scrape or a dashboard. It can call every `GET`, including `/metrics` and the event stream, and gets `403` (`this key is read-only`) on every `POST`: isolate, release, approve and reject, `policy apply`, confirm and remove, and `baseline --forget`. It must differ from `SHUKRA_API_KEY`, and the daemon refuses to start otherwise.
 
 ## Deploy without a compiler on the host
 
@@ -114,7 +131,7 @@ The first deploy with this script moves the API key out of the unit file into `/
 
 `systemctl is-active shukra` prints `active`.
 
-`shukractl programs` prints six lines: `kvm`, `sched`, `block`, `net` and `drops` `attached` with a hook count, and `tap` `attached` with how many VM taps it is on (or `detached: no VM tap interfaces to attach to yet` on a host with no VMs) when BTF and clang were available. If generate failed, they are `detached` and the deploy log said `make generate failed`. Detached is a successful install of the control plane.
+`shukractl programs` prints seven lines: `kvm`, `sched`, `block`, `net`, `vmm` and `drops` `attached` with a hook count, and `tap` `attached` with how many VM taps it is on (or `detached: no VM tap interfaces to attach to yet` on a host with no VMs) when BTF and clang were available, and `shukractl status` says `programs    7/7 attached`. On a host with no clang or BTF (or with `SHUKRA_ALLOW_DETACHED=1` after a failed build) they are `detached`, and the deploy log said `programs will report detached` or `CO-RE objects were not generated`. Detached is a successful install of the control plane.
 
 `shukractl vms` lists `qemu-system-*` processes and FluxVM VMMs (`cloud-hypervisor`, `firecracker`, `fluxvm-hypervisor`, and QEMU guests FluxVM launched). `runtime=libvirt` or `runtime=kubevirt` is a label from the QEMU command line, not a guest agent. `runtime=fluxvm` means the name, UUID and tap came from FluxVM's `vms.json`. `taps=` is the interface Shukra will attach to: `ifname=` or a libvirt tun fd for a plain QEMU guest, and for FluxVM the host veth `vh<8hex>` when the guest's tap is in a per-VM netns, or `tap_name` when it is already on the host. A VM with `taps=-` is on user-mode networking or its interface could not be mapped, and `shukractl doctor` says which, so its guest traffic is not seen and it cannot be isolated. The mapping is in [FluxVM](../tap.md#fluxvm).
 
@@ -129,8 +146,22 @@ curl -sf -H "Authorization: Bearer $SHUKRA_API_KEY" \
 
 ## After a reboot
 
-The unit is `WantedBy=multi-user.target` and `Restart=on-failure`. The kernel programs come back when `shukrad` starts. The tap program's links and maps are pinned under `/sys/fs/bpf/shukra/tap`, so an isolated VM stays isolated while the daemon is down and the restarted daemon adopts what is there: see [guest traffic and isolation](../tap.md). A graceful stop detaches every tap that is not isolated, so nothing of Shukra is left on an ordinary VM's interface.
+The unit is `WantedBy=multi-user.target` and `Restart=on-failure`. The kernel programs come back when `shukrad` starts. The tap program's links and maps are pinned under `/sys/fs/bpf/shukra/tap`, so an isolated VM (or one under an enforcing egress policy) stays that way while the daemon is down and the restarted daemon adopts what is there: see [guest traffic and isolation](../tap.md). A graceful stop detaches every tap that is not isolated and has no enforcing egress policy, so nothing of Shukra is left on an ordinary VM's interface.
 
 If you develop Shukra, this is also how a BPF change is verified: deploy to a real hypervisor and test there ([testing](../testing.md)).
+
+> **If it does not work.**
+>
+> | You see | Do this |
+> |---|---|
+> | `Permission denied (publickey)`, or the script hangs at the first step | The script needs SSH to `HOST` as `USER`, and passwordless `sudo` there. Try `ssh USER@HOST sudo -n true` |
+> | `ERROR: clang and kernel BTF are present but the CO-RE objects did not build` | Nothing was installed and the running service was not touched. Install the missing tool (`llvm-strip`, `bpftool`) or fix the build: [attach traces](02-attach-traces.md). To install a detached daemon anyway, `SHUKRA_ALLOW_DETACHED=1 ./scripts/deploy-remote.sh ...` |
+> | `programs will report detached` in the log | The host has no `clang` or no BTF. The control plane installed and every program is `detached` |
+> | `shukractl status --wait` times out | `sudo journalctl -u shukra -n 50`. A bad `SHUKRA_EXTRA_ARGS` flag or an unreadable certificate stops the daemon at start |
+> | `systemctl is-active shukra` prints `failed` | Same journal. A second `SHUKRA_EXTRA_ARGS=` line in `/etc/shukra/env` replaces the first: keep one |
+> | `curl` from your laptop cannot connect | The unit binds `0.0.0.0:30970`; a firewall or a `-listen 127.0.0.1:30970` in `SHUKRA_EXTRA_ARGS` is in the way |
+> | `401` from `curl` | The key is the one in `/etc/shukra/env`: `sudo grep SHUKRA_API_KEY /etc/shukra/env` |
+> | Every program is `detached` | Read the detail beside it. A missing BPF build says `CO-RE objects are not linked in this binary` |
+> | `doctor` lists the dev key and plain HTTP | Expected on a fresh lab deploy, and the script says so. Fix them before you turn on `-isolate-allow` |
 
 Next: [use the CLI](04-shukractl.md) against that URL.
