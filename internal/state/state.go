@@ -322,7 +322,8 @@ func (s *State) SetPersister(p Persister) {
 
 // Restore loads records saved by a previous run. It moves seq forward to the
 // highest restored value so new events never reuse a seq a client has seen.
-// Events are re-normalized, so a hand-edited file cannot claim guest attribution.
+// Events are re-normalized: one counts as guest-attributed only if it says it was seen on a tap and names a VM, and
+// anything else is the QEMU process or unattributed. (A hand-edited file is trusted as much as the disk it is on.)
 func (s *State) Restore(detections []event.Event, isolations []Isolation, recorded []event.Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

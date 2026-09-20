@@ -118,8 +118,8 @@ func normalise(o Options) Options {
 	return o
 }
 
-// SetOptions changes the limits. A VM already past its learning period stays past it; a longer Learn only
-// applies to VMs first seen after.
+// SetOptions changes the limits. Learning is judged against the limit in force, from the time each VM was
+// first seen: a longer Learn puts a VM that had finished back into learning, and a shorter one ends it sooner.
 func (s *Store) SetOptions(o Options) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
