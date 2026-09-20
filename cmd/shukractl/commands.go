@@ -59,6 +59,19 @@ func run(args []string, out io.Writer) error {
 		return getBoard(out, "/api/v1/explain?"+q.Encode(), has(args[2:], "--json"), formatExplain)
 	case "incident":
 		return incidentCmd(args[1:], out)
+	case "advise":
+		q := url.Values{}
+		if v := flagValue(args[1:], "--vm", ""); v != "" {
+			q.Set("vm", v)
+		}
+		if v := flagValue(args[1:], "--window", ""); v != "" {
+			q.Set("window", v)
+		}
+		path := "/api/v1/advice"
+		if len(q) > 0 {
+			path += "?" + q.Encode()
+		}
+		return getBoard(out, path, has(args[1:], "--json"), formatAdvice)
 	case "baseline":
 		return baselineCmd(args[1:], out)
 	case "recorder":
@@ -718,6 +731,44 @@ func formatIncident(w io.Writer, m map[string]any) {
 	}
 	fmt.Fprintf(w, "recorder events: %d  isolate requests: %d\n", len(list(m, "events")), len(list(m, "isolations")))
 	fmt.Fprintln(w, "the whole bundle: shukractl incident <vm> --out FILE (or --json)")
+}
+
+// formatAdvice shows, per VM, the numbers the advice stands on and then the advice, each with how sure it is.
+func formatAdvice(w io.Writer, m map[string]any) {
+	fmt.Fprintf(w, "ADVISE  window=%s\n", str(m, "window"))
+	rows := list(m, "rows")
+	if len(rows) == 0 {
+		fmt.Fprintln(w, "  no VM")
+		return
+	}
+	for _, r := range rows {
+		fmt.Fprintf(w, "  vm=%s  vcpus=%s", str(r, "vm"), num(r, "vcpus"))
+		if avail, _ := r["idleAvailable"].(bool); avail {
+			idle, _ := r["idleFraction"].(float64)
+			fmt.Fprintf(w, "  halted=%.0f%%", idle*100)
+		} else {
+			fmt.Fprint(w, "  halted=n/a")
+		}
+		if busy, ok := r["busyFraction"].(float64); ok && str(r, "window") != "none" {
+			used, _ := r["busyVcpus"].(float64)
+			share, _ := r["preemptShare"].(float64)
+			fmt.Fprintf(w, "  busy=%.0f%% (%.1f vCPUs)  preempted=%.0f%%", busy*100, used, share*100)
+			if avail, _ := r["idleAvailable"].(bool); avail {
+				gap, _ := r["unaccountedFraction"].(float64)
+				fmt.Fprintf(w, "  neither=%.0f%%", gap*100)
+			}
+		}
+		fmt.Fprintln(w)
+		for _, a := range list(r, "advice") {
+			fmt.Fprintf(w, "      [%s] %s: %s\n", str(a, "confidence"), str(a, "kind"), str(a, "summary"))
+			for _, e := range stringsOf(a["evidence"]) {
+				fmt.Fprintf(w, "          %s\n", e)
+			}
+		}
+	}
+	if note := str(m, "note"); note != "" {
+		fmt.Fprintf(w, "  note: %s\n", note)
+	}
 }
 
 // baselineCmd shows what each VM's learned baseline has learned and where its learning period stands, or, with

@@ -10,6 +10,18 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 - Bounded against a guest: fixed-size sets, a daily cap on alerts per VM with a single `baseline-cap` detection, aging of unseen items.
 - `shukractl baseline [<vm>] [--items] [--forget]`, `GET /api/v1/baseline`, `POST /api/v1/baseline/forget` (admin only, recorded as a detection), `shukra_baseline_*` series, a `baselines` doctor check, and `baselines.json` under `-data-dir`.
 
+### Right-sizing advisor
+
+- `shukractl advise` and `GET /api/v1/advice`: per VM the share of the window its vCPUs were halted, busy and preempted, and advice with evidence and confidence: `overprovisioned` (with a size that leaves twice the headroom it used), `starved` (reduce what it competes with before adding vCPUs), `nearly_idle`, `no_change`, `not_enough_data` and `idle_unavailable`. Idleness is halt time (a lower bound) and only named on Intel hosts; elsewhere nothing about over-provisioning is claimed.
+- A **Right-size** page in the console.
+
+### Product brochure, and a social image that can be regenerated
+
+- **A 14-page product brochure** (`docs/sales/brochure/`, PDF and source): what Shukra is and where its programs attach, a slow VM followed from the first symptom (Explain, who took the CPU, a past time, lost traffic and isolation), what it reads and never does, the console, rules and state, deploy and testing, and a buying checklist. Built by `build.py` (standard library plus headless Chrome) with a claims-to-source table, so a number that is not in a source file does not ship.
+- The console fixtures (`web/src/fixtures.ts`) now describe a host where all six programs are attached, with tap handshake outcomes, kernel drops, guest events, contention pairs, an isolation and four Explain findings, so the screenshots in the brochure and README show the product working. Fixture mode is still not live data, and every screenshot is captioned as such. `capture.sh` re-shoots the pages.
+- **The social image is generated.** `docs/social/build-social-card.sh` renders `shukra-social-card.html` to a real 1600x900 PNG and writes `docs/shukra-social.png` and `web/public/og.png`, which stay byte-identical. The old file was a JPEG with a `.png` name and no source.
+- README: badges, an at-a-glance line, a screenshot strip and a link to the brochure; the API table now lists `recorder`, `detections`, `security` and `export`.
+
 ### Noisy-neighbour map
 
 - `shukractl trace contention` and `GET /api/v1/trace/contention`: who took whose vCPU time across VMs, how much of each VM's preemption one other VM accounts for, the VM's own threads and host tasks, and what each culprit VM was doing over the same window. A **Contention** page in the console.

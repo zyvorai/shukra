@@ -1,0 +1,114 @@
+<section class="page" data-title="Rules, alerts, state, API"><div class="body">
+<h1>Rules, alerts, state and the API</h1>
+<p class="lede">Detection is one YAML file. Alerts leave through sinks you choose. State survives a restart when you give the daemon a directory. Everything an operator sees in the console is a plain API call.</p>
+<figure class="dia" style="width:90%;margin:6px auto 4px">{{dia:system}}</figure>
+<div class="row">
+<div class="col">
+<h2 style="margin-top:4px">Detection rules</h2>
+<p class="small">One file (<code>-watchlist</code>), re-read on <code>systemctl reload shukra</code> and checked offline with <code>shukractl rules check</code>. A bad file keeps the previous rules.</p>
+<pre class="term" style="font-size:6.8pt">destinations:  <span class="d"># out to, or in from</span>
+  - {cidr: 185.0.0.0/8, name: egress, severity: high}
+ports:
+  - {port: 22, name: ssh-in, dir: in}
+dns:           <span class="d"># a name the guest looked up</span>
+  - {name: pool, suffix: nanopool.org}
+thresholds:    <span class="d"># a per-VM metric over a window</span>
+  - {name: slow-disk, metric: block_write_p99_ms, value: 50}</pre>
+<p class="tiny">A detection keeps the attribution of the event that caused it. A rule says nothing until a full window of history exists.</p>
+</div>
+<div class="col">
+<h2 style="margin-top:4px">Alert sinks</h2>
+<ul class="small">
+<li><b>Signed webhook</b>: HMAC-signed when a secret is set.</li>
+<li><b>Syslog</b> and a <b>JSONL file</b>.</li>
+</ul>
+<h2>State that survives a restart</h2>
+<table>
+<tr><th>File</th><th>Written</th></tr>
+<tr><td><code>detections.jsonl</code></td><td>on every detection</td></tr>
+<tr><td><code>isolations.jsonl</code></td><td>on every isolate request</td></tr>
+<tr><td><code>recorder.json</code></td><td>every minute and at clean shutdown</td></tr>
+<tr><td><code>snapshots.jsonl</code></td><td>every 5 minutes; read on demand</td></tr>
+</table>
+<p class="tiny">Directory <code>0700</code>, files <code>0600</code>, each log rolls at 16 MiB.</p>
+</div>
+</div>
+<h2>Monitor the daemon</h2>
+<table>
+<tr><th>Endpoint</th><th>Auth</th><th>What</th></tr>
+<tr><td class="k"><code>/healthz</code>, <code>/readyz</code></td><td>none</td><td>process is up; <code>200</code> after the first scan, <code>503</code> before</td></tr>
+<tr><td class="k"><code>/metrics</code></td><td>bearer</td><td>Prometheus text. A VM with no measured counters has no series, not a zero</td></tr>
+<tr><td class="k"><code>/api/v1/stream</code></td><td>bearer</td><td>server-sent events; resume with <code>Last-Event-ID</code>. Every event carries a <code>seq</code> that only grows</td></tr>
+<tr><td class="k"><code>POST /api/v1/isolate</code>, <code>/release</code></td><td>admin key</td><td>the only two routes that change state</td></tr>
+</table>
+</div></section>
+
+<section class="page" data-title="Deploy and test"><div class="body">
+<h1>Deploy, requirements, and how it is tested</h1>
+<p class="lede">Shukra is a systemd unit on the hypervisor, not a Helm chart, because eBPF has to run where the VMs run. One script installs it; a tarball and a <code>.deb</code> cover hosts without a compiler.</p>
+<div class="row">
+<div class="col">
+<h2 style="margin-top:4px">Install</h2>
+<pre class="term" style="font-size:6.8pt"><span class="p">$</span> ./scripts/deploy-remote.sh 10.0.1.5 sus
+<span class="d"># build on the host, install, start</span>
+<span class="d"># shukra.service on :30970, run doctor</span>
+<span class="p">$</span> make dist
+<span class="d"># tarball and .deb (amd64, arm64)</span></pre>
+<p class="tiny">Set a real key on any host that is not a lab. Without <code>SHUKRA_API_KEY</code> the daemon uses a dev token and says so, and <code>doctor</code> reports it as a failure on a non-loopback address.</p>
+</div>
+<div class="col">
+<h2 style="margin-top:4px">Requirements</h2>
+<table>
+<tr><th>To get</th><th>You need</th></tr>
+<tr><td>daemon, CLI, API</td><td>Go 1.25+ to build, or a release package</td></tr>
+<tr><td>kvm, sched, block, net</td><td>kernel BTF and <code>CAP_BPF</code> (5.8+)</td></tr>
+<tr><td>drops</td><td>Linux 5.17+</td></tr>
+<tr><td>tap and isolation</td><td>Linux 6.6+, <code>CAP_NET_ADMIN</code></td></tr>
+<tr><td>console</td><td>Node 22 to build</td></tr>
+</table>
+</div>
+</div>
+<h2>Tested for real, not just unit-tested</h2>
+<div class="cards c3">
+<div class="card warm"><h3>EVERY PUSH AND PULL REQUEST</h3><p>Go tests (313 test functions), the console's 41 tests and its build, the programs loaded into the runner's kernel, the installer.</p></div>
+<div class="card on"><h3>REAL KERNEL, TAP RIG</h3><p>Guest traffic, isolation, drops and every handshake outcome, in a network namespace with a real veth, with exact counts.</p></div>
+<div class="card on"><h3>REAL KVM GUESTS</h3><p>Two guests booted by fluxvm on a runner with <code>/dev/kvm</code>: guest events are attributed, packet counts equal the kernel's, taps come off when the VMs go.</p></div>
+</div>
+<div class="callout"><b>Exact, not approximate.</b> On GitHub's kernel, 17 outbound attempts came out as 5 accepted, 6 refused, 4 never answered and 2 blocked, with 1 retransmit, and attempts = accepted + refused + never answered + blocked held. Isolation is shown to survive <code>kill -9</code>, a restart and a graceful stop, and to be lifted by <code>-detach-all</code>.</div>
+<div class="row">
+<div class="col">
+<h2 style="margin-top:6px">Release</h2>
+<p class="small">Pushing a <code>v*</code> tag builds the tarball and <code>.deb</code> for amd64 and arm64. Shukra has no tagged release yet: the changelog lists what has merged to <code>main</code>.</p>
+</div>
+<div class="col">
+<div class="callout red" style="margin-top:8px"><b>Honest limits.</b> The live-guest test fails, rather than skips, on a runner with no KVM. A SYN is judged "never answered" after 3 seconds, and under a SYN flood the oldest pending entries are forgotten uncounted (attempts still counts every one).</div>
+</div>
+</div>
+</div></section>
+
+<section class="page" data-title="Suite and checklist"><div class="body">
+<h1>Where Shukra fits, and a buying checklist</h1>
+<p class="lede">Shukra is one Zyvor product, open source, and it works alone. What it does not do is stated here so the choice is clear.</p>
+<div class="cards c2">
+<div class="card"><h3>What Shukra is</h3><p>Runtime intelligence and security for KVM from the hypervisor: what a host measures about its VMs, what became of a guest's connections, and a way to cut a VM off. Guests untouched.</p></div>
+<div class="card"><h3>What it is not</h3><p>Not an agent in the guest, so it cannot name a process inside one. Not a network firewall: isolation is one VM's tap, with an allow list. Not a CNI or a network policy engine: it sits on the hypervisor.</p></div>
+<div class="card"><h3>FluxVM</h3><p>Recognised: QEMU, Cloud Hypervisor, Firecracker and <code>fluxvm-hypervisor</code> guests are named from FluxVM's own record and traced on their host veth.</p></div>
+<div class="card"><h3>PacketWolf and Zeus OS</h3><p>The intended consumers of Shukra's JSON. They are not in this repository, and nothing here depends on them.</p></div>
+</div>
+<h2>Buying checklist</h2>
+<ol class="num">
+<li>Run <code>shukractl doctor</code> on a candidate hypervisor: exposure, what is attached, what it cannot see, each finding with a fix.</li>
+<li>Start observe-only. Read Overview, Programs and one real slow VM's Explain. Nothing is dropped.</li>
+<li>Check what the kernel supports: 5.17 for drops, 6.6 for the tap and isolation. Read what each host reports as detached, and why.</li>
+<li>Write a small rules file, check it offline with <code>shukractl rules check</code>, and wire one alert sink. Give Prometheus the read-only key.</li>
+<li>Set a real API key and TLS before any non-lab host is reachable.</li>
+<li>Rehearse isolate on a test VM with an allow list: confirm it is refused without one, survives a daemon restart, and releases.</li>
+<li>Run a day with a data directory, then ask <code>explain --at</code> and <code>incident</code> about a past time. Read the resolution line.</li>
+<li>Decide whether PacketWolf or Zeus OS will consume the JSON, and which key they get.</li>
+</ol>
+<div class="chips" style="margin-top:12px"><span class="chip">See</span><span class="chip">Explain</span><span class="chip">Attribute</span><span class="chip">Contain</span><span class="chip">Integrate</span><span class="chip">Trust</span></div>
+<p class="soft small">every VM from the host &middot; ranked causes with evidence &middot; who took the CPU &middot; a VM cut off without touching it &middot; Prometheus, webhook, syslog, JSONL &middot; tested on real kernels and real KVM guests</p>
+<div class="cta">See the VM. Explain the slowdown. <span class="accent">Touch nothing inside the guest.</span></div>
+<p class="big" style="margin-top:14px"><span style="color:var(--deep)">Talk to Zyvor &rarr; zyvor.dev</span> &nbsp;&middot;&nbsp; <span style="color:var(--soft);font-weight:400;font-size:11pt">source: github.com/zyvorai/shukra</span></p>
+<p class="tiny" style="margin-top:18px">&copy; 2026 Zyvor &middot; Apache License 2.0 &middot; eBPF runtime intelligence and security for KVM. Screenshots are rendered from the console's fixture data; diagrams are conceptual; measured figures are quoted from the project's own documentation and depend on your kernel, hardware and traffic.</p>
+</div></section>

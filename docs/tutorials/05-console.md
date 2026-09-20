@@ -19,6 +19,7 @@ A wrong token does not open a fixture. Fixture data exists only when you start V
 | KVM | Exit, entry, MMIO, PIO counters, exit handling time, and the reasons that cost the most host time |
 | Scheduler | On-CPU time, run-queue delay, **vCPU preemption** (how long the vCPUs were runnable but off a host CPU, and who had it), and a per-thread table to tell a slow vCPU from a slow iothread |
 | Contention | Which VM took whose CPU: pairs of victim and culprit, each VM's preemption split into other VMs, its own threads and host tasks, and what each culprit VM was doing meanwhile |
+| Right-size | Each VM's vCPUs, how much of the window they were halted and busy and preempted, and the advice (over-provisioned, starved, fine) with its evidence and how sure it is, most urgent first |
 | Block | Requests, bytes, worst case, p50 and p99, from a log2 histogram (percentiles are computed in userspace) |
 | Programs | Attached or detached, and the hook detail |
 | Host connections | The QEMU process's TCP connects and sampled retransmits, and, when the tap program is attached, the guest's own connections, connections made to it, UDP flows, the names it looked up, and a per-tap table of what became of every connection |

@@ -62,6 +62,24 @@ shukractl trace drops --vm osboxes-debian    # what the kernel dropped on its ta
 
 A VM name that does not match is an empty result, not a guessed one.
 
+## Advise: is each VM the right size?
+
+```bash
+shukractl advise
+shukractl advise --vm osboxes-mint --window 3m
+```
+
+For each VM it prints the numbers it stands on (the share of the window its vCPUs were **halted**, **busy** as a percent and as a count of vCPUs, and **preempted**) and then advice, each piece with how sure it is:
+
+- **`overprovisioned`**: two or more vCPUs, halted at least 80% of the time and busy at most 20%. It suggests a size that would leave twice the headroom it used, and notes that fewer vCPUs also means fewer threads competing for host CPUs.
+- **`starved`**: busy at least half the time and either preempted for at least 10% of the time it wanted to run or a vCPU waiting 2 ms or more for a CPU. It says to reduce what the VM competes with (pinning, moving a neighbour: see `trace contention`) before adding vCPUs, which would add threads that wait.
+- **`nearly_idle`**: one vCPU, halted at least 95%: a consolidation candidate.
+- **`no_change`**, with the numbers; **`not_enough_data`** (less than 20 seconds of history, no vCPU thread known, or the programs have not measured it); **`idle_unavailable`** (see below).
+
+The `neither` figure is the share of the vCPUs' capacity that was neither halted nor on a CPU. Where it is large, some vCPUs never execute HLT (offline in the guest, or idling with MWAIT or a polling loop), and `no_change` says that it is not proof the VM is right-sized: on the live hypervisor the three-vCPU VMs read exactly one third or two thirds halted for this reason.
+
+Read it with its caveats. Idleness is **halt time**, so it is a **lower bound**: a guest that idles by polling reads as busy, and halt polling counts as CPU time. Exit reasons are only named on **Intel** hosts, so on another CPU the halted column is `n/a` and nothing about over-provisioning is claimed (starvation does not need it and is still reported). A window under three minutes is a low-confidence sample. It changes nothing: it is advice for a person.
+
 ## Doctor
 
 ```bash

@@ -193,6 +193,19 @@ func routes(st *state.State) *http.ServeMux {
 		}
 		writeJSON(w, http.StatusOK, st.Incident(q.Get("vm"), at, window))
 	})
+	mux.HandleFunc("GET /api/v1/advice", func(w http.ResponseWriter, r *http.Request) {
+		window, err := parseAdviceWindow(r.URL.Query().Get("window"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		rep := st.Advise(r.URL.Query().Get("vm"), time.Now().UTC(), window)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"note":   "Advice for a person, never an action. Idleness is halt time, a lower bound (a guest that idles by polling reads as busy) and only named on Intel hosts. Starvation is the vCPUs' own on-CPU time, preemption and run-queue delay.",
+			"window": rep.Window,
+			"rows":   rep.Rows,
+		})
+	})
 	mux.HandleFunc("GET /api/v1/baseline", func(w http.ResponseWriter, r *http.Request) {
 		v := st.Baselines()
 		out := map[string]any{"enabled": false, "persisted": false, "rows": []baseline.VMStatus{}, "items": []baseline.Learned{},
@@ -303,6 +316,18 @@ func parseExplainWindow(raw string) (time.Duration, error) {
 	d, err := time.ParseDuration(raw)
 	if err != nil || d < 10*time.Second || d > state.MaxExplainWindow {
 		return 0, fmt.Errorf("window must be a duration from 10s to %s, or 0 for lifetime", state.MaxExplainWindow)
+	}
+	return d, nil
+}
+
+// parseAdviceWindow reads how far back the advisor looks: one to five minutes, five by default.
+func parseAdviceWindow(raw string) (time.Duration, error) {
+	if raw == "" {
+		return state.DefaultAdviceWindow, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < time.Minute || d > state.MaxExplainWindow {
+		return 0, fmt.Errorf("window must be a duration from 1m to %s", state.MaxExplainWindow)
 	}
 	return d, nil
 }
