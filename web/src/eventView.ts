@@ -25,7 +25,7 @@ export function inVM(e: Ev, vm: string): boolean {
 export function hasText(e: Ev, q: string): boolean {
   const needle = q.trim().toLowerCase();
   if (needle === '') return true;
-  return ['dst', 'src', 'dport', 'dns_name', 'kind', 'qtype', 'proto', 'attribution'].some((k) => {
+  return ['dst', 'src', 'dport', 'dns_name', 'sni', 'alpn', 'ja3', 'kind', 'qtype', 'proto', 'attribution'].some((k) => {
     const v = e[k];
     return v !== undefined && v !== null && String(v).toLowerCase().includes(needle);
   });

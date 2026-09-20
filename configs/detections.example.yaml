@@ -43,6 +43,18 @@ destinations:
 #     contains: pastebin
 #     severity: medium
 
+# The same for the server name (SNI) in the TLS ClientHello a guest sends, seen on its tap:
+# what a guest reaches even when it did not ask DNS, or asked over DNS-over-HTTPS. The three
+# matchers and the severity are as for dns. A dns rule does not judge a TLS name, so give both
+# if you want both. Run shukrad with -tls-events=false if you do not want these recorded.
+# tls:
+#   - name: doh-resolver
+#     suffix: dns.google
+#     severity: medium
+#   - name: doh-cloudflare
+#     suffix: cloudflare-dns.com
+#     severity: medium
+
 # Learned baselines: what is new for a VM, with no rule to write. Each VM is only observed
 # for `learn` from the first time it is seen; after that the first sighting of a network it
 # talks to, a site it looks up, or a network that connects in is reported once, as a

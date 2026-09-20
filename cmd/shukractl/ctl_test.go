@@ -1000,3 +1000,28 @@ func TestRulesCheckSaysWhatEachResponseWillDoAndWarnsAboutOneThatActsAlone(t *te
 		t.Fatalf("none is [] and never null: %v %s", err, buf.String())
 	}
 }
+
+func TestWatchLinesNameTheDNSNameAndTheTLSServerName(t *testing.T) {
+	var buf bytes.Buffer
+	for _, e := range []map[string]any{
+		{"ts": "T1", "kind": "guest_dns", "attribution": "guest-tap", "vm": map[string]any{"name": "web"}, "dst": "10.0.0.1", "dns_name": "pool.example.org", "qtype": "A"},
+		{"ts": "T2", "kind": "guest_tls", "attribution": "guest-tap", "vm": map[string]any{"name": "web"}, "dst": "203.0.113.9", "sni": "api.example.org", "tls_version": "1.3", "alpn": "h2"},
+		{"ts": "T3", "kind": "guest_tls", "attribution": "guest-tap", "vm": map[string]any{"name": "web"}, "dst": "203.0.113.9", "ech": true},
+	} {
+		if err := printEvent(e, false, &buf); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("%q", buf.String())
+	}
+	for i, want := range []string{"name=pool.example.org  qtype=A", "sni=api.example.org  tls=1.3  alpn=h2", "sni=-  tls=-  ech"} {
+		if !strings.HasSuffix(lines[i], want) {
+			t.Fatalf("line %d %q does not end with %q", i, lines[i], want)
+		}
+	}
+	if strings.Contains(lines[0], "sni=") || strings.Contains(lines[1], "name=") {
+		t.Fatalf("the two kinds must not borrow each other's fields: %q", lines)
+	}
+}

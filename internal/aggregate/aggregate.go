@@ -244,9 +244,13 @@ func group(vms []identity.VM, byPID map[uint32]Counters) []bucket {
 	for _, vm := range vms {
 		index[vm.Name] = len(rows)
 		rows = append(rows, bucket{name: vm.Name, runtime: vm.Runtime})
-		owned[uint32(vm.PID)] = vm.Name
+		if id := identity.PID32(vm.PID); id != 0 {
+			owned[id] = vm.Name
+		}
 		for _, tid := range vm.Threads {
-			owned[uint32(tid)] = vm.Name
+			if id := identity.PID32(tid); id != 0 {
+				owned[id] = vm.Name
+			}
 		}
 	}
 	host := bucket{name: Host}
@@ -401,8 +405,9 @@ func SchedThreads(vms []identity.VM, byPID map[uint32]Counters, vm string) []Thr
 			}
 		}
 		for _, t := range info {
-			c, ok := byPID[uint32(t.TID)]
-			if !ok {
+			id := identity.PID32(t.TID)
+			c, ok := byPID[id]
+			if id == 0 || !ok {
 				continue
 			}
 			out = append(out, ThreadRow{

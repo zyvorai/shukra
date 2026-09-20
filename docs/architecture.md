@@ -56,10 +56,11 @@ Identity comes from the host, never from inside the guest.
 It is the only program that touches traffic, so it is the one to understand.
 
 - **TCX, not clsact.** It attaches with TCX (Linux 6.6+), at ingress (frames from the guest) and egress (frames to it), and returns `TCX_NEXT`, never `TCX_PASS`, so anything else on the tap (Cilium, another tool) still runs.
-- **Pinned.** Its links and most maps live under `/sys/fs/bpf/shukra/tap/`, which is why isolation outlives the daemon and counters continue across a restart. The pinned maps are `tap_stats`, `tap_policy`, `allow4`, `allow6`, `tap_rate`, `tap_events`, `tap_outcomes`, `tap_handshake_hist`, `tap_timeouts`, and for DNS names `tap_dns` (the ring) and `dns_cfg` (the on/off switch). `udp_flows`, `pending_syn` and `dns_seen` (all LRU, all keyed by values the guest controls) and `dns_rate` are not pinned, so a restart does not inherit stale flows, in-flight handshakes or de-duplication state.
+- **Pinned.** Its links and most maps live under `/sys/fs/bpf/shukra/tap/`, which is why isolation outlives the daemon and counters continue across a restart. The pinned maps are `tap_stats`, `tap_policy`, `allow4`, `allow6`, `tap_rate`, `tap_events`, `tap_outcomes`, `tap_handshake_hist`, `tap_timeouts`, for DNS names `tap_dns` (the ring) and `dns_cfg` (the on/off switch), and for TLS names `tap_tls` and `tls_cfg`. `udp_flows`, `pending_syn`, `dns_seen` and `tls_flows` (all LRU, all keyed by values the guest controls), `dns_rate` and `tls_rate` are not pinned, so a restart does not inherit stale flows, in-flight handshakes or de-duplication state.
 - **Upgrades.** Maps are loaded by pin name. A new map is a new pin, so an upgrade that only adds maps keeps every existing map and link. Only a change to an existing map's layout forces the old pins to be replaced, with a brief gap that the daemon closes by re-applying recorded isolations. The rule when changing the program is never to change a pinned map's layout: add a new map.
 - **Isolation.** A flag in `tap_policy` per interface index. While set, every frame is dropped except ARP, IPv6 neighbour discovery and addresses in the `allow4`/`allow6` LPM tries.
 - **Events.** A 56-byte record in a 256 KiB ring, decoded by offset in `internal/observe/tap.go` (asserted at compile time). One per TCP SYN, per new UDP flow and per SYN sent to the guest, at most 200 per tap per second.
+- **TLS server names.** For a guest TCP segment whose payload starts a handshake record (`0x16`, version 3.0 to 3.4) carrying a ClientHello (type 1, shorter than 64 KiB), the program checks the flow against a fixed-size LRU (a retransmitted hello is not a second event), applies its own 100-per-second budget per tap, and copies up to 1504 bytes of the payload into a third ring, `tap_tls`, as a 1560-byte record: the header is cleared and `rawlen` says how much of `raw` is the packet's, so nothing left in the ring by an earlier record is ever read. `internal/observe/tls.go` decodes it, in Go, for the same reason as DNS: the server name, ALPN list, version, Encrypted Client Hello and a JA3 fingerprint (only for a whole hello). The length of the copy is built by arithmetic on 64-bit values so the verifier can prove it in bounds. `tls_cfg[0]` switches it off (`shukrad -tls-events=false`), and with it off the program reads no TCP payload at all. See [TLS server names](tap.md#tls-server-names).
 - **DNS names.** For a plain query to UDP port 53 the program checks the header (`QR=0`, `OPCODE=0`, one question), hashes the name to announce it once a minute per tap, and copies the first 128 bytes of the question into a second ring, `tap_dns`, as a 176-byte record, on its own 200-per-second budget. It does not decode the name: `internal/observe/dns.go` does, in Go, where a bug cannot upset the verifier and the decoder can be unit-tested. `dns_cfg[0]` switches it off (`shukrad -dns-events=false`), and the daemon sets it on every start because the map is pinned. See [DNS names](tap.md#dns-names).
 - **Handshakes.** Each SYN is remembered in `pending_syn` until it is answered. A SYN-ACK or RST that matches counts it accepted or refused and forgets it. A SYN never answered is counted by userspace when the counters are read, after 3 seconds, in its own map (BPF has no timers, and a userspace write to a per-CPU value would race the program's increments).
 
@@ -75,7 +76,7 @@ It is the only program that touches traffic, so it is the one to understand.
 
   | Class | Kinds | Share |
   |---|---|---|
-  | guest | `guest_connect`, `guest_flow`, `guest_inbound`, `guest_dns` | 512 |
+  | guest | `guest_connect`, `guest_flow`, `guest_inbound`, `guest_dns`, `guest_tls` | 512 |
   | host network | `tcp_connect`, `tcp_retransmit` | 512 |
   | notable | `detection`, `vm_start`, `vm_stop` | 256 |
   | process | `exec`, `exit` | 256 |
@@ -115,7 +116,7 @@ The unit runs as root with six capabilities and a read-only filesystem apart fro
 | `CAP_NET_ADMIN` | load and attach the TCX tap program |
 | `CAP_SYS_PTRACE`, `CAP_DAC_READ_SEARCH` | read a VM's tap names from the tun fds of a QEMU that runs as another user |
 
-No program reads application payloads: they count and sample metadata. The one exception is the first question of a DNS query to UDP port 53, whose name is recorded unless `-dns-events=false`. See [SECURITY.md](../SECURITY.md).
+No program reads application payloads: they count and sample metadata. The exceptions are the first question of a DNS query to UDP port 53, whose name is recorded unless `-dns-events=false`, and the first segment of a TLS ClientHello, whose server name and fingerprint are recorded unless `-tls-events=false` (a hello is sent before anything is encrypted and holds no application data). See [SECURITY.md](../SECURITY.md).
 
 ## Kernel requirements
 

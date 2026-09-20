@@ -57,6 +57,11 @@ dns:                   # names the guest looked up over DNS (UDP port 53), one o
     contains: pastebin
     severity: medium
 
+tls:                   # the server name in a guest's TLS ClientHello, same three matchers (see docs/tap.md)
+  - name: doh-google
+    suffix: dns.google
+    severity: medium
+
 baselines:             # optional: learn what is normal for each VM, and report what is new (see docs/baselines.md)
   learn: 24h
 
@@ -77,6 +82,8 @@ thresholds:            # per VM, over a window
 ```
 
 **`dns`** rules match the name the guest asked for, in lower case (the rule is lower-cased too). `suffix: example.com` matches `example.com` and `a.b.example.com`, not `badexample.com`; `exact` is the whole name; `contains` is a substring. A rule takes exactly one of the three. The detection says the guest asked, is `guest_attributed`, and is held back for the suppression time per rule, VM and name. Names are only recorded while `shukrad` runs without `-dns-events=false`, so a `dns` rule says nothing on a daemon that has names off. See [DNS names](../tap.md#dns-names).
+
+**`tls`** rules are `dns` rules for the server name in a guest's TLS ClientHello (`suffix`, `exact` or `contains`, one each, lower case). They catch a guest that reaches a name without asking DNS for it, or over DNS-over-HTTPS: `- {name: doh, suffix: dns.google}`. A `dns` rule does not judge a TLS name and a `tls` rule does not judge a lookup, so give both if you want both. Names are only recorded while `shukrad` runs without `-tls-events=false`. See [TLS server names](../tap.md#tls-server-names).
 
 **`baselines`** is the other way round from every rule above: no one names what is bad, the daemon learns what each VM normally does for `learn` (24 hours by default) and then reports the first sighting of a network, a site or an inbound peer it has not seen. It is off unless the section is present, and it needs `-data-dir`. See [learned baselines](../baselines.md).
 

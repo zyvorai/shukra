@@ -83,17 +83,19 @@ func (s *State) dueRollLocked(now time.Time) (*RollupSnap, RollupStore) {
 		var all []aggregate.Counters
 		seen := map[uint32]bool{}
 		for _, tid := range vm.Threads {
-			if c, ok := s.byPID[uint32(tid)]; ok {
+			id := identity.PID32(tid)
+			if c, ok := s.byPID[id]; ok && id != 0 {
 				all = append(all, c)
-				seen[uint32(tid)] = true
+				seen[id] = true
 			}
 		}
 		v.Total = aggregate.Sum(all)
 		for _, t := range vm.ThreadInfo {
-			if t.Role != "vcpu" || !seen[uint32(t.TID)] {
+			id := identity.PID32(t.TID)
+			if t.Role != "vcpu" || id == 0 || !seen[id] {
 				continue
 			}
-			v.VCPUs = append(v.VCPUs, VCPURoll{TID: t.TID, Comm: t.Comm, C: vcpuView(s.byPID[uint32(t.TID)])})
+			v.VCPUs = append(v.VCPUs, VCPURoll{TID: t.TID, Comm: t.Comm, C: vcpuView(s.byPID[id])})
 		}
 		snap.VMs = append(snap.VMs, v)
 	}
@@ -213,9 +215,10 @@ func (s *State) ExplainAt(name string, at time.Time, window time.Duration) Expla
 	vendor := s.cpuVendorLocked()
 
 	syn := identity.VM{Name: name, UUID: curVM.UUID, Runtime: curVM.Runtime, PID: curVM.PID, Threads: []int{curVM.PID}, Taps: curVM.Taps}
-	window1 := map[uint32]aggregate.Counters{uint32(curVM.PID): aggregate.Delta(curVM.Total, baseVM.Total)}
+	pid := identity.PID32(curVM.PID)
+	window1 := map[uint32]aggregate.Counters{pid: aggregate.Delta(curVM.Total, baseVM.Total)}
 	rows := windowRows(syn, window1, vendor)
-	life := windowRows(syn, map[uint32]aggregate.Counters{uint32(curVM.PID): curVM.Total}, vendor)
+	life := windowRows(syn, map[uint32]aggregate.Counters{pid: curVM.Total}, vendor)
 	carryMeasured(rows.kvm, rows.sched, rows.block, life.kvm, life.sched, life.block)
 
 	// The vCPU threads are per-thread rows, so a slow vCPU can be told from the rest of the VM.
@@ -228,7 +231,7 @@ func (s *State) ExplainAt(name string, at time.Time, window time.Duration) Expla
 	for _, v := range curVM.VCPUs {
 		synT.Threads = append(synT.Threads, v.TID)
 		synT.ThreadInfo = append(synT.ThreadInfo, identity.Thread{TID: v.TID, Comm: v.Comm, Role: "vcpu"})
-		perT[uint32(v.TID)] = aggregate.Delta(v.C, baseV[v.TID])
+		perT[identity.PID32(v.TID)] = aggregate.Delta(v.C, baseV[v.TID])
 	}
 	threads := aggregate.SchedThreads([]identity.VM{synT}, perT, name)
 

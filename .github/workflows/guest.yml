@@ -23,6 +23,9 @@ on:
       - "scripts/test-live-guest.sh"
       - ".github/workflows/guest.yml"
 
+permissions:
+  contents: read
+
 jobs:
   guest:
     runs-on: ubuntu-latest

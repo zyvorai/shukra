@@ -321,6 +321,8 @@ type Config struct {
 	Watch *Watchlist
 	Ports []PortRule
 	DNS   []DNSRule
+	// TLS rules judge the server name in a guest's TLS ClientHello, as DNS rules judge a looked-up name.
+	TLS []DNSRule
 	// Baselines is nil unless the rules file turns learned baselines on.
 	Baselines *BaselineConfig
 	// Responses and Guard are what to do when a detection fires. There are none unless the file has them.
@@ -344,6 +346,7 @@ type doc struct {
 	Destinations []Rule          `yaml:"destinations"`
 	Ports        []PortRule      `yaml:"ports"`
 	DNS          []DNSRule       `yaml:"dns"`
+	TLS          []DNSRule       `yaml:"tls"`
 	Baselines    *BaselineConfig `yaml:"baselines"`
 	Responses    []Response      `yaml:"responses"`
 	Guardrails   *Guardrails     `yaml:"guardrails"`
@@ -419,32 +422,43 @@ func Parse(b []byte) (*Config, error) {
 		}
 		c.Ports = append(c.Ports, r)
 	}
-	for _, r := range d.DNS {
-		set := 0
-		norm := func(v string) string { return strings.Trim(strings.ToLower(strings.TrimSpace(v)), ".") }
-		r.Suffix, r.Exact = norm(r.Suffix), norm(r.Exact)
-		r.Contains = strings.ToLower(strings.TrimSpace(r.Contains))
-		for _, v := range []string{r.Suffix, r.Exact, r.Contains} {
-			if v != "" {
-				set++
+	// dns and tls rules are the same thing: a name, judged by suffix, exact match or substring.
+	nameRules := func(kind string, in []DNSRule) ([]DNSRule, error) {
+		var out []DNSRule
+		for _, r := range in {
+			set := 0
+			norm := func(v string) string { return strings.Trim(strings.ToLower(strings.TrimSpace(v)), ".") }
+			r.Suffix, r.Exact = norm(r.Suffix), norm(r.Exact)
+			r.Contains = strings.ToLower(strings.TrimSpace(r.Contains))
+			for _, v := range []string{r.Suffix, r.Exact, r.Contains} {
+				if v != "" {
+					set++
+				}
 			}
+			if set != 1 {
+				return nil, fmt.Errorf("%s: rule %q needs exactly one of suffix, exact or contains", kind, r.Name)
+			}
+			if r.Name == "" {
+				r.Name = kind + "-" + r.Suffix + r.Exact + r.Contains
+			}
+			if r.Severity == "" {
+				r.Severity = "high"
+			}
+			if !severities[r.Severity] {
+				return nil, fmt.Errorf("%s: %q: severity %q is not low, medium, high or critical", kind, r.Name, r.Severity)
+			}
+			if err := name(kind, r.Name); err != nil {
+				return nil, err
+			}
+			out = append(out, r)
 		}
-		if set != 1 {
-			return nil, fmt.Errorf("dns: rule %q needs exactly one of suffix, exact or contains", r.Name)
-		}
-		if r.Name == "" {
-			r.Name = "dns-" + r.Suffix + r.Exact + r.Contains
-		}
-		if r.Severity == "" {
-			r.Severity = "high"
-		}
-		if !severities[r.Severity] {
-			return nil, fmt.Errorf("dns: %q: severity %q is not low, medium, high or critical", r.Name, r.Severity)
-		}
-		if err := name("dns", r.Name); err != nil {
-			return nil, err
-		}
-		c.DNS = append(c.DNS, r)
+		return out, nil
+	}
+	if c.DNS, err = nameRules("dns", d.DNS); err != nil {
+		return nil, err
+	}
+	if c.TLS, err = nameRules("tls", d.TLS); err != nil {
+		return nil, err
 	}
 	if d.Baselines != nil {
 		if err := d.Baselines.validate(); err != nil {
@@ -554,11 +568,26 @@ func (c *Config) MatchPortDir(port uint16, proto, dir string) (PortRule, bool) {
 
 // MatchDNS returns the first DNS rule that a looked-up name matches.
 func (c *Config) MatchDNS(name string) (DNSRule, bool) {
-	if c == nil || name == "" {
+	if c == nil {
+		return DNSRule{}, false
+	}
+	return matchName(c.DNS, name)
+}
+
+// MatchTLS returns the first TLS rule that a server name matches.
+func (c *Config) MatchTLS(name string) (DNSRule, bool) {
+	if c == nil {
+		return DNSRule{}, false
+	}
+	return matchName(c.TLS, name)
+}
+
+func matchName(rules []DNSRule, name string) (DNSRule, bool) {
+	if name == "" {
 		return DNSRule{}, false
 	}
 	name = strings.TrimSuffix(strings.ToLower(name), ".")
-	for _, r := range c.DNS {
+	for _, r := range rules {
 		if r.matches(name) {
 			return r, true
 		}

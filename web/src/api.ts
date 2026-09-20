@@ -1,19 +1,25 @@
 import { fixtureMode, fixtureResponse } from './fixtures';
 
-const TOKEN = 'shukra-token';
+// The API token is the credential itself. It is kept in memory for this page
+// load only: sessionStorage would store that secret in clear text. A reload
+// asks for it again. Any copy left by an older console is removed.
+let bearer = '';
+
+const storedToken = 'shukra-token';
+try {
+  sessionStorage.removeItem(storedToken);
+} catch {
+  /* ignore */
+}
 
 export function token(): string {
-  try {
-    return sessionStorage.getItem(TOKEN) || '';
-  } catch {
-    return '';
-  }
+  return bearer;
 }
 
 export function setToken(value: string) {
+  bearer = value;
   try {
-    if (value) sessionStorage.setItem(TOKEN, value);
-    else sessionStorage.removeItem(TOKEN);
+    sessionStorage.removeItem(storedToken);
   } catch {
     /* ignore */
   }

@@ -28,6 +28,9 @@ func TapSample() []TapCounters { return nil }
 // SetDNSEvents has no program to tell in this build.
 func SetDNSEvents(bool) {}
 
+// SetTLSEvents has no program to tell in this build.
+func SetTLSEvents(bool) {}
+
 // StartTap reads no ring in this build.
 func StartTap(func(event.Event)) {}
 

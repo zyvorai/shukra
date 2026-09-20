@@ -11,7 +11,6 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
-	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -41,6 +40,7 @@ func main() {
 	tlsKey := flag.String("tls-key", "", "private key for -tls-cert (PEM)")
 	isolateAllow := flag.String("isolate-allow", "", "comma-separated CIDRs an isolated VM can still reach (your management and monitoring networks). Without it isolate is refused")
 	dnsEvents := flag.Bool("dns-events", true, "record the names a guest looks up (guest_dns events). Names identify what a VM does: with false the program does not read DNS at all")
+	tlsEvents := flag.Bool("tls-events", true, "record the server names a guest asks for in a TLS ClientHello (guest_tls events). Names identify what a VM does: with false the program does not read a TCP payload at all")
 	noAuth := flag.Bool("no-auth", false, "serve the API without a bearer key")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	detachAll := flag.Bool("detach-all", false, "remove every pinned tap program and its isolation, then exit. Works while the daemon is stopped")
@@ -131,6 +131,7 @@ func main() {
 	}
 	st.SetEnforcer(observe.NewEnforcer(allow))
 	observe.SetDNSEvents(*dnsEvents)
+	observe.SetTLSEvents(*tlsEvents)
 	st.SetTapSource(func() []state.TapStat {
 		var out []state.TapStat
 		for _, t := range observe.TapSample() {
@@ -348,20 +349,31 @@ func isLoopback(addr string) bool {
 }
 
 func spa(dir string) http.Handler {
-	files := http.FileServer(http.Dir(dir))
+	root, err := filepath.Abs(dir)
+	if err != nil {
+		return http.NotFoundHandler()
+	}
+	root = filepath.Clean(root)
+	files := http.FileServer(http.Dir(root))
+	index := filepath.Join(root, "index.html")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rel := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
-		if rel != "" {
-			p := filepath.Join(dir, filepath.FromSlash(rel))
-			if !strings.HasPrefix(p, filepath.Clean(dir)+string(os.PathSeparator)) && p != filepath.Clean(dir) {
-				http.NotFound(w, r)
-				return
-			}
-			if st, err := os.Stat(p); err == nil && !st.IsDir() {
-				files.ServeHTTP(w, r)
-				return
-			}
+		// Clean against "/" first so the request path cannot climb out of the
+		// console directory, then require a lexical local path and a resolved
+		// path that is still inside root.
+		rel := strings.TrimPrefix(filepath.Clean("/"+r.URL.Path), "/")
+		if !filepath.IsLocal(rel) {
+			http.ServeFile(w, r, index)
+			return
 		}
-		http.ServeFile(w, r, filepath.Join(dir, "index.html"))
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if !strings.HasPrefix(p, root+string(os.PathSeparator)) {
+			http.NotFound(w, r)
+			return
+		}
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			files.ServeHTTP(w, r)
+			return
+		}
+		http.ServeFile(w, r, index)
 	})
 }

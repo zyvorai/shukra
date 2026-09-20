@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/zyvorai/shukra/internal/baseline"
@@ -53,6 +54,14 @@ func baselineItem(e event.Event) (baseline.Kind, string) {
 			return "", ""
 		}
 		return baseline.DNSSuffix, baseline.Registrable(e.DNSName)
+	case event.KindGuestTLS:
+		// The site a guest connected to is what a DNS lookup would have taught, so one item covers both. An
+		// address in the name field teaches nothing, and neither does no name at all (ECH, or a hello cut
+		// before it): the site of "" is "".
+		if net.ParseIP(e.SNI) != nil {
+			return "", ""
+		}
+		return baseline.DNSSuffix, baseline.Registrable(e.SNI)
 	}
 	return "", ""
 }
@@ -88,6 +97,9 @@ func (a *Agent) observeBaseline(e event.Event, cfg *detect.Config) {
 func newItemMessage(e event.Event, kind baseline.Kind, item string) string {
 	switch kind {
 	case baseline.DNSSuffix:
+		if e.Kind == event.KindGuestTLS {
+			return fmt.Sprintf("%s connected to %s for the first time (TLS server name %s, port %d)", e.VM.Name, item, e.SNI, e.DPort)
+		}
 		return fmt.Sprintf("%s looked up %s for the first time (%s, %s)", e.VM.Name, item, e.DNSName, e.QType)
 	case baseline.InboundPeer:
 		return fmt.Sprintf("%s was connected to from %s for the first time (%s, to port %d)", e.VM.Name, item, e.Src, e.DPort)

@@ -96,17 +96,25 @@ func (a *Agent) Refresh() {
 	a.vendorOnce.Do(func() { a.State.SetCPUVendor(cpuVendor(a.ProcRoot)) })
 	tgids := make([]uint32, 0, len(vms))
 	for _, vm := range vms {
-		tgids = append(tgids, uint32(vm.PID))
+		if id := identity.PID32(vm.PID); id != 0 {
+			tgids = append(tgids, id)
+		}
 	}
 	observe.SetWatched(tgids)
 	refs := map[uint32]observe.ThreadRef{}
 	for _, vm := range vms {
 		for _, t := range vm.ThreadInfo {
-			refs[uint32(t.TID)] = observe.ThreadRef{VM: vm.Name, Role: t.Role}
+			if id := identity.PID32(t.TID); id != 0 {
+				refs[id] = observe.ThreadRef{VM: vm.Name, Role: t.Role}
+			}
 		}
 		for _, tid := range vm.Threads {
-			if _, ok := refs[uint32(tid)]; !ok {
-				refs[uint32(tid)] = observe.ThreadRef{VM: vm.Name, Role: "unknown"}
+			id := identity.PID32(tid)
+			if id == 0 {
+				continue
+			}
+			if _, ok := refs[id]; !ok {
+				refs[id] = observe.ThreadRef{VM: vm.Name, Role: "unknown"}
 			}
 		}
 	}
@@ -146,7 +154,7 @@ func (a *Agent) evaluate(now time.Time, vms []identity.VM, byPID map[uint32]aggr
 			}
 		}
 		a.raise(now, cfg, "threshold|"+f.Rule.Name+"|"+f.VM, event.Event{
-			Kind: event.KindDetection, TS: now, TGID: uint32(joined.PID),
+			Kind: event.KindDetection, TS: now, TGID: identity.PID32(joined.PID),
 			VM:   event.VM{Name: joined.Name, UUID: joined.UUID, Runtime: joined.Runtime},
 			Rule: f.Rule.Name, Severity: f.Rule.Severity, Message: f.Message(),
 		})
@@ -175,7 +183,7 @@ func (a *Agent) Ingest(e event.Event) {
 		e.TS = time.Now().UTC()
 	}
 	cfg := a.cfg.Load()
-	if e.Kind == event.KindGuestConnect || e.Kind == event.KindGuestFlow || e.Kind == event.KindGuestInbound || e.Kind == event.KindGuestDNS {
+	if e.Kind == event.KindGuestConnect || e.Kind == event.KindGuestFlow || e.Kind == event.KindGuestInbound || e.Kind == event.KindGuestDNS || e.Kind == event.KindGuestTLS {
 		a.ingestGuest(e, cfg)
 		return
 	}
@@ -215,7 +223,7 @@ func (a *Agent) Ingest(e event.Event) {
 	}
 	if found {
 		e.VM = event.VM{Name: joined.Name, UUID: joined.UUID, Runtime: joined.Runtime}
-		e.TGID = uint32(joined.PID)
+		e.TGID = identity.PID32(joined.PID)
 	}
 	event.Normalize(&e)
 	a.State.AddEvent(e)
@@ -254,6 +262,10 @@ func (a *Agent) connectRules(e event.Event, cfg *detect.Config, detection func(r
 		a.dnsRules(e, cfg, detection)
 		return
 	}
+	if e.Kind == event.KindGuestTLS {
+		a.tlsRules(e, cfg, detection)
+		return
+	}
 	if e.Dst != "" {
 		if rule, ok := cfg.Watch.Match(net.ParseIP(e.Dst)); ok {
 			// TCP and UDP to the same address are different facts, so an alert for one
@@ -282,6 +294,16 @@ func (a *Agent) dnsRules(e event.Event, cfg *detect.Config, detection func(rule,
 	}
 }
 
+// tlsRules applies the tls rules to the server name in a guest's ClientHello. As for DNS, only the name is
+// judged: the flow itself has produced its own guest_connect event, which the destination and port rules
+// see. A hello with no name (an address, or a name hidden by ECH) matches nothing.
+func (a *Agent) tlsRules(e event.Event, cfg *detect.Config, detection func(rule, severity, msg string) event.Event) {
+	if rule, ok := cfg.MatchTLS(e.SNI); ok {
+		a.raise(e.TS, cfg, "tls|"+rule.Name+"|"+e.VM.Name+"|"+e.SNI,
+			detection(rule.Name, rule.Severity, fmt.Sprintf("%s: connected to %s (TLS, port %d)", rule.Name, e.SNI, e.DPort)))
+	}
+}
+
 // inboundRules applies the rules to a connection made TO a guest. The address that matters is the peer's
 // (e.Src), so a destinations rule fires when a watched network connects in, and a ports rule with
 // dir: in or any fires on the guest port it connected to. The direction is in the suppression key, so
@@ -307,7 +329,7 @@ func (a *Agent) ingestGuest(e event.Event, cfg *detect.Config) {
 		for _, t := range vm.Taps {
 			if t == e.Iface {
 				e.VM = event.VM{Name: vm.Name, UUID: vm.UUID, Runtime: vm.Runtime}
-				e.TGID = uint32(vm.PID)
+				e.TGID = identity.PID32(vm.PID)
 				e.Attribution = event.AttributionGuestTap
 			}
 		}
@@ -421,7 +443,7 @@ func (a *Agent) trackVMs(now time.Time, vms []identity.VM) {
 
 func (a *Agent) vmEvent(now time.Time, kind event.Kind, vm identity.VM, msg string) {
 	e := event.Event{
-		Kind: kind, TS: now, PID: uint32(vm.PID), TGID: uint32(vm.PID), Comm: vm.Comm,
+		Kind: kind, TS: now, PID: identity.PID32(vm.PID), TGID: identity.PID32(vm.PID), Comm: vm.Comm,
 		VM:      event.VM{Name: vm.Name, UUID: vm.UUID, Runtime: vm.Runtime},
 		Message: msg,
 	}

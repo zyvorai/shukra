@@ -217,6 +217,66 @@ struct {
 	__type(value, struct rate);
 } dns_rate SEC(".maps");
 
+/* Guest TLS ClientHellos. A guest TCP segment whose payload starts with a TLS handshake record (0x16, major
+   version 3) carrying a ClientHello (handshake type 1) is copied, up to TLS_RAW bytes (a whole first segment on an
+   Ethernet MTU), to userspace as raw
+   wire bytes: the server name, the ALPN list and the fingerprint are decoded there, where it can be tested
+   and cannot upset the verifier. Only the first segment of a hello is seen, so one that is longer than the
+   copy or is split over segments arrives cut short, and says so. A flow is announced once (a retransmitted
+   hello is not a second event), and hellos are rate-limited per tap on their own budget.
+   tls_cfg[0] is 1 when the operator turned TLS events off (shukrad -tls-events=false): the program then
+   does not read a TCP payload at all. An array starts as zero, so "on" is the default. */
+#define TLS_RAW 1504
+#define TLS_PEEK 7
+#define TLS_FLOW_REFRESH_NS 30000000000ull
+#define TLS_PER_SEC 100
+
+struct tls_event {
+	__u64 ts_ns;       /* 0 */
+	__u32 ifindex;     /* 8 */
+	__u8 family;       /* 12 */
+	__u8 flags;        /* 13: 1 when isolation dropped this segment */
+	__u16 rawlen;      /* 14: how many bytes of raw are the packet's */
+	__u16 sport;       /* 16 */
+	__u16 dport;       /* 18 */
+	__u8 pad[4];       /* 20 */
+	__u8 src[16];      /* 24 */
+	__u8 dst[16];      /* 40 */
+	__u8 raw[TLS_RAW]; /* 56: the TCP payload, from the record header */
+};                         /* 1560 */
+
+_Static_assert(sizeof(struct tls_event) == 1560, "tls_event layout changed: update internal/observe/tls.go");
+
+struct {
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 1 << 20);
+} tap_tls SEC(".maps");
+
+struct {
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} tls_cfg SEC(".maps");
+
+/* Hellos announced recently. The key is made of values the guest controls, so it is an LRU of a fixed size
+   and not pinned. */
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, 16384);
+	__type(key, struct flow_key);
+	__type(value, __u64);
+} tls_flows SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1024);
+	__type(key, __u32);
+	__type(value, struct rate);
+} tls_rate SEC(".maps");
+
 /* TCP handshake outcomes. A SYN is remembered until it is answered: a SYN-ACK means the connection was
    accepted, an RST means it was refused, and one that is never answered is counted as a timeout by
    userspace (BPF has no timers), which sweeps the pending table. dir says who started it. */
@@ -606,6 +666,91 @@ static __always_inline void dns_query(struct __sk_buff *skb, __u32 ifindex, __u8
 	bpf_ringbuf_submit(e, 0);
 }
 
+static __always_inline int tls_may_emit(__u32 ifindex) {
+	__u64 now = bpf_ktime_get_ns();
+	struct rate *r = bpf_map_lookup_elem(&tls_rate, &ifindex);
+	if (!r) {
+		struct rate fresh = {.window_ns = now, .count = 0};
+		bpf_map_update_elem(&tls_rate, &ifindex, &fresh, BPF_NOEXIST);
+		r = bpf_map_lookup_elem(&tls_rate, &ifindex);
+		if (!r)
+			return 0;
+	}
+	if (now - r->window_ns >= 1000000000ull) {
+		r->window_ns = now;
+		r->count = 0;
+	}
+	return __sync_fetch_and_add(&r->count, 1) < TLS_PER_SEC;
+}
+
+/* A TCP segment the guest sent. off is where its payload starts. It is a ClientHello when the payload begins
+   with a handshake record (0x16, version 3.x) whose first handshake message is of type 1. */
+static __always_inline void tls_hello(struct __sk_buff *skb, __u32 ifindex, __u8 family, const __u8 *src,
+				      const __u8 *dst, __u16 sport, __u16 dport, __u32 off, __u8 dropped) {
+	__u32 zero = 0;
+	__u32 *off_flag = bpf_map_lookup_elem(&tls_cfg, &zero);
+	if (off_flag && *off_flag)
+		return;
+
+	/* A record header (5 bytes), the handshake type and the top byte of its 24-bit length. Encrypted data is
+	   random, so every byte that is checked makes it less likely that a segment of it is taken for a hello: a
+	   record version of 3.0 to 3.4, and a hello shorter than 64 KiB. */
+	__u8 hdr[TLS_PEEK] = {};
+	if (bpf_skb_load_bytes(skb, off, hdr, sizeof(hdr)) < 0)
+		return;
+	if (hdr[0] != 0x16 || hdr[1] != 3 || hdr[2] > 4 || hdr[5] != 1 || hdr[6] != 0)
+		return;
+
+	struct flow_key k = {.ifindex = ifindex, .sport = sport, .dport = dport, .family = family};
+	if (family == FAMILY_INET) {
+		__builtin_memcpy(k.src, src, 4);
+		__builtin_memcpy(k.dst, dst, 4);
+	} else {
+		__builtin_memcpy(k.src, src, 16);
+		__builtin_memcpy(k.dst, dst, 16);
+	}
+	__u64 now = bpf_ktime_get_ns();
+	__u64 *last = bpf_map_lookup_elem(&tls_flows, &k);
+	if (last && now - *last < TLS_FLOW_REFRESH_NS)
+		return;
+	if (!tls_may_emit(ifindex))
+		return;
+	bpf_map_update_elem(&tls_flows, &k, &now, BPF_ANY);
+
+	struct tls_event *e = bpf_ringbuf_reserve(&tap_tls, sizeof(*e), 0);
+	if (!e)
+		return;
+	/* Only the header is cleared: raw is 1.5 KB, and only rawlen bytes of it are ever read. */
+	__builtin_memset(e, 0, __builtin_offsetof(struct tls_event, raw));
+
+	/* The verifier must be able to prove 1 <= have <= TLS_RAW. As for a DNS question, the bound is built by
+	   arithmetic on 64-bit values: m is 0 to TLS_RAW - 1 and have is m + 1. */
+	__u64 plen = skb->len, start = off;
+	__u64 m = plen - start - 1;
+	if (plen <= start || m > TLS_RAW - 1)
+		m = TLS_RAW - 1;
+	__u64 have = m + 1;
+	if (bpf_skb_load_bytes(skb, off, e->raw, have) < 0) {
+		bpf_ringbuf_discard(e, 0);
+		return;
+	}
+	e->ts_ns = now;
+	e->ifindex = ifindex;
+	e->family = family;
+	e->flags = dropped ? 1 : 0;
+	e->rawlen = (__u16)have;
+	e->sport = sport;
+	e->dport = dport;
+	if (family == FAMILY_INET) {
+		__builtin_memcpy(e->src, src, 4);
+		__builtin_memcpy(e->dst, dst, 4);
+	} else {
+		__builtin_memcpy(e->src, src, 16);
+		__builtin_memcpy(e->dst, dst, 16);
+	}
+	bpf_ringbuf_submit(e, 0);
+}
+
 static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 	/* Not a frame from the guest: the host's own, looped back. Leave it alone. */
 	if (from_guest && skb->pkt_type == PACKET_LOOPBACK)
@@ -630,7 +775,8 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 	__u16 sport = 0, dport = 0;
 	int syn = 0, synack = 0, rst = 0;
 	__u8 l4 = 0;
-	__u32 l4off = 0; /* where a UDP payload starts */
+	__u32 l4off = 0;  /* where a UDP payload starts */
+	__u32 tlsoff = 0; /* where a TCP payload starts */
 
 	if (proto == ETH_P_IP) {
 		struct iphdr *ip = (void *)(eth + 1);
@@ -653,6 +799,8 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 				synack = tcp->syn && tcp->ack;
 				rst = tcp->rst;
 				l4 = IPPROTO_TCP_;
+				if (tcp->doff >= 5)
+					tlsoff = sizeof(*eth) + ip->ihl * 4 + tcp->doff * 4;
 			}
 		} else if (ip->protocol == IPPROTO_UDP_ && ip->ihl >= 5) {
 			struct udphdr *udp = (void *)ip + ip->ihl * 4;
@@ -691,6 +839,8 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 				synack = tcp->syn && tcp->ack;
 				rst = tcp->rst;
 				l4 = IPPROTO_TCP_;
+				if (tcp->doff >= 5)
+					tlsoff = sizeof(*eth) + sizeof(*ip6) + tcp->doff * 4;
 			}
 		} else if (ip6->nexthdr == IPPROTO_UDP_) {
 			struct udphdr *udp = (void *)(ip6 + 1);
@@ -719,6 +869,9 @@ static __always_inline int handle(struct __sk_buff *skb, int from_guest) {
 			emit_connect(ifindex, family, IPPROTO_UDP_, src, dst, sport, dport, drop, DIR_OUT);
 		if (l4 == IPPROTO_UDP_ && dport == 53 && l4off)
 			dns_query(skb, ifindex, family, src, dst, l4off, drop);
+		/* A TCP segment that carries data: its payload may be the start of a ClientHello. */
+		if (l4 == IPPROTO_TCP_ && tlsoff && !syn && !synack && !rst && skb->len >= tlsoff + TLS_PEEK)
+			tls_hello(skb, ifindex, family, src, dst, sport, dport, tlsoff, drop);
 	} else if (inbound_new) {
 		/* Someone connecting INTO the guest. src is the peer, dst is the guest. */
 		emit_connect(ifindex, family, IPPROTO_TCP_, src, dst, sport, dport, drop, DIR_IN);

@@ -328,6 +328,16 @@ func printEvent(e map[string]any, asJSON bool, out io.Writer) error {
 	if n, ok := e["dns_name"].(string); ok {
 		extra = fmt.Sprintf("  name=%v  qtype=%v", n, e["qtype"])
 	}
+	if e["kind"] == "guest_tls" {
+		// A hello with no name (an address, or hidden by ECH) still says what it was.
+		extra = fmt.Sprintf("  sni=%v  tls=%v", orDash(e["sni"]), orDash(e["tls_version"]))
+		if a, ok := e["alpn"].(string); ok {
+			extra += "  alpn=" + a
+		}
+		if e["ech"] == true {
+			extra += "  ech"
+		}
+	}
 	_, err := fmt.Fprintf(out, "%v  %v  %v  vm=%v  dst=%v%s\n", e["ts"], e["kind"], e["attribution"], nested(e, "vm", "name"), e["dst"], extra)
 	return err
 }
@@ -924,4 +934,12 @@ func formatActions(w io.Writer, m map[string]any) {
 			}
 		}
 	}
+}
+
+// orDash shows a missing value as a dash.
+func orDash(v any) any {
+	if s, ok := v.(string); ok { // the API leaves an empty field out, so a missing one is not a string
+		return s
+	}
+	return "-"
 }

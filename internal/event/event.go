@@ -22,6 +22,10 @@ const (
 	// KindGuestDNS is a DNS query the guest sent, with the name it asked for. It is a first question over
 	// UDP port 53 seen on the tap, so a resolver the guest reaches over TLS or HTTPS is not seen.
 	KindGuestDNS Kind = "guest_dns"
+	// KindGuestTLS is a TLS ClientHello the guest sent, with the server name it asked for (SNI). It is the
+	// first segment of a hello seen on the tap, so a name hidden by Encrypted Client Hello, or a hello that
+	// does not fit the copy, is not seen in full, and a protocol that is not TLS over TCP (QUIC) is not seen.
+	KindGuestTLS Kind = "guest_tls"
 )
 
 const (
@@ -71,6 +75,15 @@ type Event struct {
 	DNSName      string `json:"dns_name,omitempty"`
 	QType        string `json:"qtype,omitempty"`
 	DNSTruncated bool   `json:"dns_truncated,omitempty"`
+	// SNI, ALPN, TLSVersion, JA3, ECH and TLSTruncated are set on guest_tls events. SNI is lower-cased and
+	// made printable. TLSVersion is the highest version the client offered. JA3 is only set when the whole
+	// hello was seen. ECH says the hello carries Encrypted Client Hello, so SNI is the outer name at most.
+	SNI          string `json:"sni,omitempty"`
+	ALPN         string `json:"alpn,omitempty"`
+	TLSVersion   string `json:"tls_version,omitempty"`
+	JA3          string `json:"ja3,omitempty"`
+	ECH          bool   `json:"ech,omitempty"`
+	TLSTruncated bool   `json:"tls_truncated,omitempty"`
 	// Rule names the detection rule that fired, so a consumer can route on it
 	// without parsing Message.
 	Rule      string `json:"rule,omitempty"`

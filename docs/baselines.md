@@ -23,7 +23,7 @@ All of it comes from what the VM's own tap sees, so it is `guest_attributed`. No
 | Kind | The item | Learned from | Reported as |
 |---|---|---|---|
 | `destination` | The **network** the guest connected or sent to: the /24 of an IPv4 address, the /64 of an IPv6 address | `guest_connect` and `guest_flow` | `new-destination`, medium |
-| `dns-suffix` | The **site** of a name it looked up: `www.api.example.com` is `example.com`, `shop.example.co.uk` is `example.co.uk` | `guest_dns` | `new-dns-suffix`, low |
+| `dns-suffix` | The **site** of a name it looked up: `www.api.example.com` is `example.com`, `shop.example.co.uk` is `example.co.uk` | `guest_dns`, and `guest_tls` when it has a name | `new-dns-suffix`, low |
 | `inbound-peer` | The **network** that connected in to it | `guest_inbound` | `new-inbound-peer`, medium |
 
 A whole network and a whole site, not an address and a host: a service that moves between neighbouring addresses, a client that lands on another member of a pool, or a site with a new subdomain is not new each time. Reverse lookups (`…in-addr.arpa`, `…ip6.arpa`) all collapse into one item, because every address has a different one and they say nothing about what the guest is doing. A name that was cut short (`dns_truncated`) is not a site and is skipped.

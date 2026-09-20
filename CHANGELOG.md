@@ -4,6 +4,13 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### TLS server names
+
+- **`guest_tls` events:** the server name (SNI) in the TLS ClientHello a guest sends, seen on its tap, with the protocols it offered (`alpn`), the highest version (`tls_version`), a JA3 fingerprint (only when the whole hello was seen), `ech` when Encrypted Client Hello is in use, and `tls_truncated` when the hello did not fit the copy. IPv4 and IPv6. One event per connection, with its own budget of 100 a second per tap, so a guest cannot flood the ring or starve the connect events. It names a site even when DNS was not used, and a guest that reaches a resolver over HTTPS is still seen going there. See [TLS server names](docs/tap.md#tls-server-names).
+- The tap program copies up to 1504 bytes of a TCP payload only when it starts a handshake record that carries a ClientHello (checked on several bytes, so encrypted data is not taken for one), and the daemon decodes it and throws the bytes away. `shukrad -tls-events=false` makes the program read no TCP payload at all; the switch is a pinned map that the daemon sets on every start. The README, SECURITY and architecture no longer say "no payloads" without naming this exception.
+- **`tls:` rules** in the rules file (suffix, exact or contains, like `dns:`), which do not judge each other's names; learned baselines count a server name as the site it names; `shukractl watch` shows `sni=`; the console's Connections page has a table of them, searchable by name, protocol and fingerprint.
+- New pinned maps `tap_tls` and `tls_cfg` and unpinned `tls_flows` and `tls_rate`; no existing map changed. A tap program from before this change still runs and just has no TLS names.
+
 ### Responses: acting on a detection, safely
 
 - A `responses:` section in the rules file lets a detection propose isolating a VM, which a person approves (`shukractl approve`, the Actions page), or, with `mode: enforce` and named rules only, do it on its own. Guardrails apply to every response: `never_isolate`, isolate must be enabled, an hourly cap on automatic isolations, a per-VM cooldown, proposal expiry and a timed `release_after` that survives a restart. `dry_run` tries one out and changes nothing. Off unless configured. See [responses](docs/responses.md).

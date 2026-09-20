@@ -41,7 +41,7 @@ var classShare = [classCount]int{
 
 func classOf(k event.Kind) eventClass {
 	switch k {
-	case event.KindGuestConnect, event.KindGuestFlow, event.KindGuestInbound, event.KindGuestDNS:
+	case event.KindGuestConnect, event.KindGuestFlow, event.KindGuestInbound, event.KindGuestDNS, event.KindGuestTLS:
 		return classGuest
 	case event.KindDetection, event.KindVMStart, event.KindVMStop:
 		return classNotable
