@@ -14,7 +14,7 @@ dns:           <span class="d"># a name the guest looked up</span>
   - {name: pool, suffix: nanopool.org}
 thresholds:    <span class="d"># a per-VM metric over a window</span>
   - {name: slow-disk, metric: block_write_p99_ms, value: 50}</pre>
-<p class="tiny">A detection keeps the attribution of the event that caused it. A rule says nothing until a full window of history exists.</p>
+<p class="tiny">A detection keeps the attribution of the event that caused it. A rule says nothing until a full window of history exists. Or add a <code>baselines:</code> section and let each VM teach it what is normal.</p>
 </div>
 <div class="col">
 <h2 style="margin-top:4px">Alert sinks</h2>
@@ -29,6 +29,7 @@ thresholds:    <span class="d"># a per-VM metric over a window</span>
 <tr><td><code>isolations.jsonl</code></td><td>on every isolate request</td></tr>
 <tr><td><code>recorder.json</code></td><td>every minute and at clean shutdown</td></tr>
 <tr><td><code>snapshots.jsonl</code></td><td>every 5 minutes; read on demand</td></tr>
+<tr><td><code>baselines.json</code></td><td>every minute, if it changed</td></tr>
 </table>
 <p class="tiny">Directory <code>0700</code>, files <code>0600</code>, each log rolls at 16 MiB.</p>
 </div>
@@ -38,8 +39,9 @@ thresholds:    <span class="d"># a per-VM metric over a window</span>
 <tr><th>Endpoint</th><th>Auth</th><th>What</th></tr>
 <tr><td class="k"><code>/healthz</code>, <code>/readyz</code></td><td>none</td><td>process is up; <code>200</code> after the first scan, <code>503</code> before</td></tr>
 <tr><td class="k"><code>/metrics</code></td><td>bearer</td><td>Prometheus text. A VM with no measured counters has no series, not a zero</td></tr>
+<tr><td class="k"><code>/api/v1/advice</code>, <code>/baseline</code></td><td>bearer</td><td>right-size advice per VM; what each VM has learned as normal</td></tr>
 <tr><td class="k"><code>/api/v1/stream</code></td><td>bearer</td><td>server-sent events; resume with <code>Last-Event-ID</code>. Every event carries a <code>seq</code> that only grows</td></tr>
-<tr><td class="k"><code>POST /api/v1/isolate</code>, <code>/release</code></td><td>admin key</td><td>the only two routes that change state</td></tr>
+<tr><td class="k"><code>POST /api/v1/isolate</code>, <code>/release</code></td><td>admin key</td><td>with <code>POST /api/v1/baseline/forget</code>, the only three routes that change state</td></tr>
 </table>
 </div></section>
 
@@ -70,7 +72,7 @@ thresholds:    <span class="d"># a per-VM metric over a window</span>
 </div>
 <h2>Tested for real, not just unit-tested</h2>
 <div class="cards c3">
-<div class="card warm"><h3>EVERY PUSH AND PULL REQUEST</h3><p>Go tests (313 test functions), the console's 41 tests and its build, the programs loaded into the runner's kernel, the installer.</p></div>
+<div class="card warm"><h3>EVERY PUSH AND PULL REQUEST</h3><p>Go tests (366 test functions), the console's 45 tests and its build, the programs loaded into the runner's kernel, the installer.</p></div>
 <div class="card on"><h3>REAL KERNEL, TAP RIG</h3><p>Guest traffic, isolation, drops and every handshake outcome, in a network namespace with a real veth, with exact counts.</p></div>
 <div class="card on"><h3>REAL KVM GUESTS</h3><p>Two guests booted by fluxvm on a runner with <code>/dev/kvm</code>: guest events are attributed, packet counts equal the kernel's, taps come off when the VMs go.</p></div>
 </div>
@@ -100,10 +102,11 @@ thresholds:    <span class="d"># a per-VM metric over a window</span>
 <li>Run <code>shukractl doctor</code> on a candidate hypervisor: exposure, what is attached, what it cannot see, each finding with a fix.</li>
 <li>Start observe-only. Read Overview, Programs and one real slow VM's Explain. Nothing is dropped.</li>
 <li>Check what the kernel supports: 5.17 for drops, 6.6 for the tap and isolation. Read what each host reports as detached, and why.</li>
-<li>Write a small rules file, check it offline with <code>shukractl rules check</code>, and wire one alert sink. Give Prometheus the read-only key.</li>
+<li>Write a small rules file (add a <code>baselines:</code> section if you want first sightings reported), check it offline with <code>shukractl rules check</code>, and wire one alert sink. Give Prometheus the read-only key.</li>
 <li>Set a real API key and TLS before any non-lab host is reachable.</li>
 <li>Rehearse isolate on a test VM with an allow list: confirm it is refused without one, survives a daemon restart, and releases.</li>
 <li>Run a day with a data directory, then ask <code>explain --at</code> and <code>incident</code> about a past time. Read the resolution line.</li>
+<li>Run <code>shukractl advise</code> and read the "neither" figure before trusting an over-provisioned verdict; it is advice, and a person decides.</li>
 <li>Decide whether PacketWolf or Zeus OS will consume the JSON, and which key they get.</li>
 </ol>
 <div class="chips" style="margin-top:12px"><span class="chip">See</span><span class="chip">Explain</span><span class="chip">Attribute</span><span class="chip">Contain</span><span class="chip">Integrate</span><span class="chip">Trust</span></div>

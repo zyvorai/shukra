@@ -4,6 +4,12 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### Brochure refresh
+
+- The product brochure is now **16 pages**. New pages cover the right-sizing advisor (what `shukractl advise` reads, the lower-bound and "neither" caveats, Intel-only exit names, advice and never an action) and learned baselines (the learning period, the three kinds of first sighting, how they are bounded against a guest, and forgetting). The hypervisor page gains a table of the **measured costs** that the docs publish (`drops`, `sched`), and the "what it reads" page says what a guest can and cannot do to a baseline.
+- Numbers brought up to date with `main`: 14 console pages, 28 routes (three that change state), 17 `shukractl` commands, 366 Go tests and 45 console tests. The claims table has the new rows.
+- The Right-size page is in the console screenshots (`capture.sh` now shoots it). README: the at-a-glance line and the brochure row.
+
 ### Learned baselines
 
 - A `baselines:` section in the rules file turns on learning what is normal for each VM: the networks it talks to (/24, /64), the sites it looks up (registrable names) and the networks that connect in. After a per-VM learning period (24h by default, from the first time the VM is seen) the first sighting of anything new is reported once as `new-destination`, `new-dns-suffix` or `new-inbound-peer`, guest-attributed. Off unless the section is present. See [learned baselines](docs/baselines.md).
