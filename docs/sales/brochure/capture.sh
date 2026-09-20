@@ -29,7 +29,7 @@ from playwright.sync_api import sync_playwright
 
 port, out = os.environ["PORT"], os.environ["OUT"]
 ALL = ["overview", "vms", "recorder", "explain", "kvm", "sched", "contention", "block",
-       "programs", "connections", "drops", "detections", "isolate"]
+       "programs", "connections", "drops", "detections", "isolate", "advice"]
 pages = sys.argv[1:] or ALL
 
 # Fixture mode signs in with the token "shukra"; the console keeps it in sessionStorage.

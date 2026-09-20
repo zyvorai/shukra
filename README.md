@@ -24,7 +24,7 @@ Shukra sits on the hypervisor and watches every QEMU/KVM workload from outside t
 
 Observe. Protect. Explain.
 
-**6** eBPF programs · **16** kernel attach points · **0** agents in the guest · **13** console pages · **25** HTTP routes · **15** `shukractl` commands
+**6** eBPF programs · **16** kernel attach points · **0** agents in the guest · **14** console pages · **28** HTTP routes · **17** `shukractl` commands
 
 <table>
   <tr>
@@ -272,7 +272,7 @@ Events that leave the daemon carry `product: "shukra"`. A joined host event has 
 | [Tap: what is left](docs/roadmap-taptrace.md) | What is not built yet |
 | [Security](SECURITY.md) | What it reads, what it can do, what a hostile guest can do to it |
 | [Changelog](CHANGELOG.md) | What changed |
-| [Product brochure](docs/sales/brochure/Zyvor-Shukra-Product-Brochure.pdf) | Fourteen pages for a buyer: the scenarios, the limits, and a checklist. [Source and claims table](docs/sales/brochure/README.md) |
+| [Product brochure](docs/sales/brochure/Zyvor-Shukra-Product-Brochure.pdf) | Sixteen pages for a buyer: the scenarios, right-sizing and baselines, the limits, and a checklist. [Source and claims table](docs/sales/brochure/README.md) |
 
 ## Development
 

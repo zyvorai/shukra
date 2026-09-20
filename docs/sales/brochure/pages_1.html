@@ -5,19 +5,19 @@
 <div class="pill4" style="margin-top:22px">
   <div><b>OBSERVE</b><span>KVM exits, run-queue delay, disk latency and every TCP connect a guest makes. No agent in the VM.</span></div>
   <div><b>EXPLAIN</b><span>Ranked host-side causes with the evidence, for now or for 03:12 last night.</span></div>
-  <div><b>PROTECT</b><span>Detection rules, and isolate a compromised VM without touching it.</span></div>
+  <div><b>PROTECT</b><span>Detection rules, learned baselines, and isolate a compromised VM without touching it.</span></div>
   <div><b>SAY WHAT IT CANNOT SEE</b><span>Every answer lists its blind spots. A program that is not measuring says so.</span></div>
 </div>
 <div class="callout" style="margin-top:24px"><div class="eyebrow" style="margin-bottom:5px">Recently added</div>
 <div class="chips">
-<span class="chip">Explain a past time</span><span class="chip">Incident bundles</span><span class="chip">Noisy-neighbour map</span>
+<span class="chip">Right-sizing advice</span><span class="chip">Learned baselines</span><span class="chip">Explain a past time</span><span class="chip">Incident bundles</span><span class="chip">Noisy-neighbour map</span>
 <span class="chip">Who took the vCPU's CPU</span><span class="chip">Kernel drops on the VM's tap</span><span class="chip">TCP handshake outcomes</span>
 <span class="chip">DNS names the guest looks up</span><span class="chip">FluxVM guests</span><span class="chip">A share of events for each kind</span>
 <span class="chip">Filterable connection tables</span><span class="chip">Tested on real KVM guests</span>
 </div></div>
 <p class="soft" style="margin-top:30px;font-size:9.6pt">Standalone eBPF for KVM hosts &nbsp;&middot;&nbsp; QEMU, libvirt, kubevirt and FluxVM &nbsp;&middot;&nbsp; x86_64 and arm64 packages</p>
 <p class="soft" style="font-size:9.6pt">Open source under the Apache License 2.0. Copyright 2026 Zyvor.</p>
-<figure style="margin-top:12px;width:100%"><img class="shot" style="height:3.0in;object-fit:cover;object-position:top" src="shots/overview.png" alt=""><figcaption>Illustrative: the Shukra overview, rendered from the console's fixture data. UI captures in this brochure are fixtures, not customer data; diagrams are conceptual.</figcaption></figure>
+<figure style="margin-top:12px;width:100%"><img class="shot" style="height:2.55in;object-fit:cover;object-position:top" src="shots/overview.png" alt=""><figcaption>Illustrative: the Shukra overview, rendered from the console's fixture data. UI captures in this brochure are fixtures, not customer data; diagrams are conceptual.</figcaption></figure>
 </div></section>
 
 <section class="page" data-title="Why Shukra"><div class="body">
@@ -29,6 +29,8 @@
 <li>Slowness is reported after the fact, and the counters that would explain it have already moved on.</li>
 <li>A compromised VM has to be cut off now, without logging in to it and without cutting off the people managing it.</li>
 <li>Agents inside guests are a fleet to install, patch and trust. Someone else's VM is not yours to change.</li>
+<li>VMs are sized once and never revisited: some idle at eight vCPUs while others wait for a CPU.</li>
+<li>The first unusual connection from a VM has no rule yet, because nobody knew to write one.</li>
 <li>Every tool should say what it cannot see. A missing measurement must never look like a healthy zero.</li>
 </ol>
 <h2>What Shukra is, in one sentence</h2>
@@ -36,16 +38,16 @@
 <h2>Two programs you run</h2>
 <div class="cards c2">
 <div class="card"><h3>shukrad (on the hypervisor)</h3><p>Privileged. Loads the eBPF programs, scans <code>/proc</code> for QEMU and FluxVM guests, keeps the flight recorder and detection rules, and serves the API and the console on port 30970.</p></div>
-<div class="card"><h3>shukractl (anywhere)</h3><p>An operator CLI that talks to the API only and never loads BPF. Status, doctor, traces, explain, incident, watch, isolate: one screen to trust first, then the detail.</p></div>
+<div class="card"><h3>shukractl (anywhere)</h3><p>An operator CLI that talks to the API only and never loads BPF. Status, doctor, traces, explain, advise, baseline, incident, watch, isolate: one screen to trust first, then the detail.</p></div>
 </div>
 <h2>At a glance</h2>
 <div class="cards c3">
 <div class="tile"><div class="n">6</div><div class="l">eBPF programs, each loaded on its own so one missing tracepoint detaches only that program</div></div>
 <div class="tile"><div class="n">16</div><div class="l">kernel attach points across kvm, sched, block, net, tap and drops</div></div>
 <div class="tile"><div class="n">0</div><div class="l">agents, modules or changes inside any guest</div></div>
-<div class="tile"><div class="n">13</div><div class="l">console pages in five groups: overview, investigate, diagnostics, network and security</div></div>
-<div class="tile"><div class="n">25</div><div class="l">HTTP routes: three for operations, 22 under <code>/api/v1</code>, only two of which change state</div></div>
-<div class="tile"><div class="n">15</div><div class="l">shukractl commands, including <code>explain</code>, <code>incident</code>, <code>isolate</code> and <code>doctor</code></div></div>
+<div class="tile"><div class="n">14</div><div class="l">console pages in five groups: overview, investigate, diagnostics, network and security</div></div>
+<div class="tile"><div class="n">28</div><div class="l">HTTP routes: three for operations, 25 under <code>/api/v1</code>, only three of which change state</div></div>
+<div class="tile"><div class="n">17</div><div class="l">shukractl commands, including <code>explain</code>, <code>advise</code>, <code>baseline</code>, <code>isolate</code> and <code>doctor</code></div></div>
 </div>
 </div></section>
 
@@ -72,10 +74,17 @@
 <section class="page" data-title="Where the hooks sit"><div class="body">
 <h1>Where Shukra sits on the hypervisor</h1>
 <p class="lede">A VM's life crosses the same layers on every host. Shukra places one program at each layer that matters and reads names and threads from <code>/proc</code>, so the picture of a slow or silent VM runs from the guest's exits to the last function that freed its packet.</p>
-<figure class="dia">{{dia:hypervisor}}</figure>
+<figure class="dia" style="width:86%;margin:6px auto 4px">{{dia:hypervisor}}</figure>
 <div class="cards c3">
 <div class="card"><h3>Why the KVM and scheduler hooks</h3><p>A VM is slow for host-side reasons first: it exits too often, or its vCPU threads are runnable and waiting for a CPU. Both are visible only from the host.</p></div>
 <div class="card"><h3>Why the tap</h3><p>The guest's own traffic crosses the host side of its tap. Seeing it there gives the guest's addresses and DNS names, with no agent and without reading application data.</p></div>
 <div class="card"><h3>Why the drop tracepoint</h3><p>Most packet loss is decided inside the host kernel. The tracepoint says why, and which function freed the packet, so a firewall rule and a full queue are told apart.</p></div>
 </div>
+<h2>What it costs (measured)</h2>
+<table>
+<tr><th>Program</th><th>Measured cost</th><th>Where, and the caveat</th></tr>
+<tr><td class="k">drops</td><td>about 255 ns per drop; 69 a second is 0.002% of one CPU</td><td>12-CPU Xeon hypervisor. It runs once per packet dropped anywhere on the host, so scale by your drop rate: a million a second is about a quarter of a CPU</td></tr>
+<tr><td class="k">sched</td><td>about 490 ns per switch with no VM watched, about 615 ns with ten; about 435 ns before preemption tracking</td><td>same host, ten VMs, about 60,000 switches a second: about 11 ms of CPU per second more, under 0.1% of the host. Includes the kernel's own run-time accounting, switched on for the measurement</td></tr>
+</table>
+<p class="tiny">Measured on a lab hypervisor; results depend on your kernel, hardware and traffic. Costs of the other programs are not published.</p>
 </div></section>
