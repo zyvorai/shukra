@@ -24,13 +24,13 @@ The full topology, what is skipped (a stopped VM, user-mode NAT), and how that i
 
 `exec` and `exit` events are joined to a VM by the parent's tgid, which the kernel program reads when the event happens, so a short-lived child is still attributed after it has gone. Only children of a watched VMM are emitted at all. The watched set is every QEMU pid and every live FluxVM VMM pid from the last scan.
 
-KVM exit, scheduler, and block counters use the same PID join, against the VMM's thread group. Block latency is that process's I/O thread, not a filesystem inside the guest.
+KVM exit, scheduler (including vCPU preemption, and who took the CPU), and block counters use the same PID join, against the VMM's thread group. A preemptor that is another QEMU thread is named by its VM; anything else is a host command name. Block latency is that process's I/O thread, not a filesystem inside the guest.
 
 **A detection keeps the attribution of the event that caused it**, so a rule that fires on something the guest did says the guest did it, and a rule that fires on the VMM's own socket says `qemu-process`.
 
 ## What is not measured
 
-- **CPU steal**, and which **process** inside the guest made a connection. A guest event names the VM and the address, not the guest process. Shukra never runs anything in the VM.
+- **The guest's own CPU steal counter**, and which **process** inside the guest made a connection. A guest event names the VM and the address, not the guest process. Shukra never runs anything in the VM.
 - **What is inside a connection.** The programs count and sample metadata and never read payloads: HTTP requests and TLS content are not parsed. The one thing read beyond headers is the name in a DNS query over UDP port 53 (see [DNS names](tap.md#dns-names)); DNS over TCP, TLS or HTTPS is seen only as a connection.
 - **A VM with no tap it can attach to.** User-mode networking (QEMU SLIRP, including a FluxVM guest with `network.mode` `user`) has no host interface. A tap that is not in the host namespace, and that the scan could not map to one, is the same: no guest events, no drop counts, no isolation. `shukractl doctor` names both (`blind-vms`, or `vm-tap-other-netns` when a name is known but the interface is not here). Host-side counters still work. FluxVM's default per-VM netns is not this case: it is mapped to the host veth and traced. See [FluxVM](tap.md#fluxvm).
 - **Traffic that never crosses the tap**, such as two guests on the same host bridge whose traffic does not pass through this tap, vhost-user, and SR-IOV.

@@ -9,7 +9,7 @@ Shukra's claims are about what a real kernel does, so most of its tests load rea
 | Go unit tests | `make test` (`go test ./...`) | Go 1.25 | Logic: joins, windows, resets, rules, findings, the API, the CLI. Runs on any OS with the stub build |
 | Console tests and build | `make web` | Node 22 | The console's units, type-check and production build |
 | Loader build | `make test-bpf` | Linux, clang, BTF, `make generate` first | The `shukrabpf` build compiles and its tests pass |
-| Kernel integration | `make test-kernel` | Linux, root | Loads the sched, block and net programs into this kernel and checks counters against load the test generates itself: connect counts, block bytes, the exec filter |
+| Kernel integration | `make test-kernel` | Linux, root | Loads the sched, block and net programs into this kernel and checks counters against load the test generates itself: connect counts, block bytes, the exec filter, and vCPU preemption (two CPU-bound threads on one CPU, with a sleeping thread as a control) |
 | Tap rig | `make test-tap` (`scripts/test-tap.sh`) | Linux 6.6+, root, `ip`, `curl`, `python3`, `tc`, `iptables` | The tap program, isolation and drops on a real kernel with no KVM. See below |
 | Installer | `scripts/test-install.sh` | Linux | The shared install routine, the tarball and the `.deb` lay down the same files |
 | Live guest | `make test-live-guest` (`scripts/test-live-guest.sh`) | A hypervisor with fluxvm, `/dev/kvm`, a running `shukrad`, root | Real KVM guests: hot-plug attach, attributed events, packet counts equal to the kernel's, guests reaching each other, handshake outcomes, drops |

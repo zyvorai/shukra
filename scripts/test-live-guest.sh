@@ -329,6 +329,7 @@ check "the guest's DNS lookup arrives as a guest_dns event with exactly the name
 check "five lookups of one name in two spellings are one event per cycle, not five (A events $NDA, cycles $NT)" "[ \$(( $NT - $NDA )) -ge 0 ] && [ \$(( $NT - $NDA )) -le 1 ]"
 check "no event on an ordinary run is marked blocked (nothing is isolated)" "[ \"\$(val notblocked)\" = 1 ]"
 check "host tcp_connect events are still not guest-attributed" "api $URL/api/v1/events | J \"any(e['guest_attributed'] for e in d['events'] if e['kind']=='tcp_connect')\" | grep -q False"
+check "the guest's vCPU preemption is measured: a row with a preemptor list (never null), and a time below the VM's lifetime" "api $URL/api/v1/trace/sched | J \"[(r['vcpuPreemptedNs'], isinstance(r['topPreemptors'], list)) for r in d['rows'] if r['vm']=='$VMNAME'][0]\" | awk -F'[(), ]+' '\$3==\"True\" && \$2<300000000000{f=1} END{exit !f}'"
 check "shukra still traces the KVM exits of this VM" "api $URL/api/v1/trace/kvm | J \"sum(r['exits'] for r in d['rows'])\" | awk '\$1>0{f=1} END{exit !f}'"
 
 echo "== 5b. the two guests reach each other, and shukra sees both ends"

@@ -96,7 +96,7 @@ What it does not see: answers (so a name is not tied to the addresses it resolve
 
 `guest_attributed` is `true` only when the event was seen on a VM's tap **and** the tap belongs to a VM in the current scan. A tap no VM owns produces an unattributed event, never a guessed name. Host `tcp_v4_connect` events are still `attribution: "qemu-process"` and `guest_attributed: false`: that is QEMU's own socket, not the guest.
 
-Still not measured: CPU steal, and what runs inside the guest. A guest connect tells you which VM and which address, not which process.
+Still not measured: the guest's own CPU steal counter (the host's view is vCPU preemption, see [signals](signals.md#vcpu-preemption)), and what runs inside the guest. A guest connect tells you which VM and which address, not which process.
 
 ## Isolate
 

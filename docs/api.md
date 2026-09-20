@@ -48,7 +48,7 @@ All take `?vm=<name>` to narrow to one VM. Every response has a `rows` list.
 | Route | What a row is |
 |---|---|
 | `GET /api/v1/trace/kvm` | Exit, entry, MMIO and PIO counts, exit-handling latency (`exitLatencyP50Ns`, `exitLatencyP99Ns`, `exitLatencyHist`), the costliest reasons by count and by time (Intel hosts name them). `measured` |
-| `GET /api/v1/trace/sched` | On-CPU time, run-queue delay (`wakeupDelayP50Ns`, `wakeupDelayP99Ns`, `wakeupHist`). `?threads=1` adds a `threads` list, one row per VMM thread with its role, so a slow vCPU can be told from a slow iothread |
+| `GET /api/v1/trace/sched` | On-CPU time, run-queue delay (`wakeupDelayP50Ns`, `wakeupDelayP99Ns`, `wakeupHist`). `vcpuPreemptedNs`, `vcpuPreemptions` and `topPreemptors` (`[{who, ns}]`, most time first, at most five, `[]` when none): time the VM's vCPUs were runnable but off a host CPU and who had it (`vm:<name>` or a host command name). `?threads=1` adds a `threads` list, one row per VMM thread with its role (and `preemptedNs` for a vCPU), so a slow vCPU can be told from a slow iothread |
 | `GET /api/v1/trace/block` | Requests, bytes, slowest request and read/write latency histograms |
 | `GET /api/v1/trace/net` | `tcp_v4_connect`/`tcp_v6_connect` counts and sampled retransmits **from the VMM process**. Always `guestAttributed: false`. The attribution string is `qemu-process` for every backend |
 | `GET /api/v1/trace/tap` | Per VM interface, from the guest's point of view: `fromGuestPackets/Bytes`, `toGuestPackets/Bytes`, `droppedPackets/Bytes` (isolation's), `isolated`, and what became of every TCP handshake (below). The interface name is the tap, or FluxVM's host veth |

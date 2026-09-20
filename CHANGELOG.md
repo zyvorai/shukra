@@ -4,6 +4,15 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### vCPU preemption: who took the CPU
+
+- **The `sched` program now records preemption:** when a QEMU thread leaves a CPU while still runnable, who took the CPU is remembered, and the wait is charged when the thread runs again. Reported for vCPU threads only, by VM (`vm:<name>`) or host command name. See [vCPU preemption](docs/signals.md#vcpu-preemption).
+- `trace sched` (`vcpuPreemptedNs`, `vcpuPreemptions`, `topPreemptors`), the Scheduler page, `shukra_sched_vcpu_preempted_seconds_total` and `shukra_sched_vcpu_preempted_by_seconds_total`.
+- New Explain cause `cpu_preempted` (200 ms and 5% of the time the vCPUs wanted to run; 20% is high confidence), with the top preemptors as evidence.
+- New threshold metric `vcpu_preempted_ms_per_sec`.
+- The Explain `missing` list now says the guest's own steal counter is not read, and that the host's view is.
+- Checked on a real 6.8 kernel with a test that pins two CPU-bound threads to one CPU (the victim is charged about half the run and the taker is named; a sleeping control is not charged; the test fails without the runnable check). Cost: about 490 ns per context switch with no VM watched, about 615 ns with ten watched, against about 435 ns before.
+
 ### FluxVM guests
 
 - **All four backends are VMs.** QEMU, Cloud Hypervisor, Firecracker and `fluxvm-hypervisor` are named from `{state_dir}/vms.json` (`state_dir` in `/etc/fluxvm.toml`, otherwise `/var/lib/fluxvm`) and joined by pid. `runtime` is `fluxvm`. A QEMU pid already found is updated, not duplicated. Libvirt and plain QEMU that are not in the store are unchanged. See [FluxVM](docs/tap.md#fluxvm).

@@ -10,8 +10,8 @@ The tap program, guest attribution, isolate, handshake outcomes, inbound connect
 - **VLAN tags and IPv6 extension headers** are not parsed past the outer headers.
 - **ICMP events.** TCP connects, connections made to the guest and new UDP flows produce events. ICMP is only counted.
 - **DNS beyond the query name.** Names of queries over UDP port 53 are recorded (`guest_dns`). Answers are not read, so a name is not mapped to the addresses it resolved to. Queries over TCP port 53, DNS over TLS and DNS over HTTPS are not seen, nor are second questions or compressed names.
-- **Who took the vCPU's CPU.** CPU steal is not measured. The planned host-side answer is to record, when a vCPU thread is preempted, who preempted it and for how long, per VM. It would be the host's view of preemption, not the guest's steal.
+- **Steal as the guest counts it.** The host's view is measured (vCPU preemption, and who caused it). The guest's own steal counter is not read: it would need something inside the guest.
 - **Memory pressure.** Direct reclaim stalls and OOM kills of QEMU are not observed, and no program touches memory.
 - **Block I/O errors and queue time.** The block program measures latency, not failed requests.
 - **Per-VM allow lists.** One allow list applies to every isolated VM.
-- **Which process in the guest.** Attribution stops at the VM. CPU steal is not measured either.
+- **Which process in the guest.** Attribution stops at the VM.

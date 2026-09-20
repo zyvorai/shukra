@@ -80,6 +80,7 @@ thresholds:            # per VM, over a window
 | `wakeup_delay_ms` | mean scheduler wakeup delay in the window |
 | `kvm_exit_latency_p99_ms` | p99 host time handling a KVM exit in the window. Halts are excluded, since they are guest idle |
 | `runqueue_delay_p99_ms` | p99 wait for a host CPU after a wakeup, across the VM's threads |
+| `vcpu_preempted_ms_per_sec` | Milliseconds per second the VM's vCPU threads were runnable but off a host CPU, summed over its vCPUs (so a 4-vCPU VM can exceed 1000). The host's view of losing the CPU, not the guest's steal counter |
 | `block_read_bytes_per_sec`, `block_write_bytes_per_sec`, `block_iops` | Throughput and request rate on the QEMU I/O thread |
 | `guest_connect_refused_per_sec`, `guest_connect_timeouts_per_sec` | The guest's own TCP connections that were refused, or that nobody answered. Needs the tap program |
 | `guest_inbound_per_sec` | Connections per second attempted to the guest. Needs the tap program |
