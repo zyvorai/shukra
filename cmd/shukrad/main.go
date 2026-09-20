@@ -42,10 +42,14 @@ func main() {
 	isolateAllow := flag.String("isolate-allow", "", "comma-separated CIDRs an isolated VM can still reach (your management and monitoring networks). Without it isolate is refused")
 	dnsEvents := flag.Bool("dns-events", true, "record the names a guest looks up (guest_dns events). Names identify what a VM does: with false the program does not read DNS at all")
 	tlsEvents := flag.Bool("tls-events", true, "record the server names a guest asks for in a TLS ClientHello (guest_tls events). Names identify what a VM does: with false the program does not read a TCP payload at all")
+	vmmTripwires := flag.Bool("vmm-tripwires", true, "watch QEMU processes, and what they start, for the files they open and the calls they make that a VMM never does (vmm_file_open and vmm_syscall events, and detections). The program runs on every open on the host, and costs about 200 ns of each, plus a hook on every process creation and exit; with false it is not loaded")
 	noAuth := flag.Bool("no-auth", false, "serve the API without a bearer key")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	detachAll := flag.Bool("detach-all", false, "remove every pinned tap program and its isolation, then exit. Works while the daemon is stopped")
 	flag.Parse()
+	if !*vmmTripwires {
+		observe.DisableVMM() // before anything attaches the programs
+	}
 	if *detachAll {
 		n := observe.DetachAllTaps()
 		fmt.Printf("detached %d tap links; every isolated VM is open again\n", n)

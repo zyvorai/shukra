@@ -106,6 +106,8 @@ An event carries `seq` (only grows), `product: "shukra"`, `kind`, `ts`, `vm` (`n
 | `guest_connect` | The guest sent a TCP SYN. `src` is the guest, `dst` and `dport` where to, `proto: "tcp"`, `iface`, `blocked`, and `policy` (`audit` or `enforce`) when the VM's [egress policy](egress-policy.md) judged it to be outside it | `guest-tap` |
 | `guest_flow` | The guest started a new UDP flow. `proto: "udp"`; `policy` as above | `guest-tap` |
 | `guest_inbound` | A TCP SYN was sent **to** the guest. `src` is the peer, `dst` the guest, `dport` the guest port | `guest-tap` |
+| `vmm_file_open` | A QEMU process, or a program it started, opened a file. `path` (as given; made absolute when a relative one could be resolved), `comm` the program, `pid`, `write`, `syscall`, `detail`. A steady-state VMM opens nothing. See [VMM tripwires](vmm-tripwires.md) | `qemu-process` |
+| `vmm_syscall` | The same made `ptrace`, `process_vm_*`, `mount`, `unshare`, `setns`, a module load or a kexec load (`syscall`, `detail`), or more calls in a second than the tripwire reports (`syscall: "flood"`, `count` unreported) | `qemu-process` |
 | `guest_tls` | The guest sent a TLS ClientHello. `sni` (lower-case, absent when there is none), `alpn`, `tls_version`, `ja3` (only for a whole hello), `ech`, `tls_truncated`, `src` the guest, `dst` the server, `dport`, `blocked`. See [TLS server names](tap.md#tls-server-names) | `guest-tap` |
 | `guest_dns` | The guest asked for a name over UDP port 53. `dns_name` (lower-case), `qtype`, `src` the guest, `dst` the resolver, `dport: 53`, `blocked`, and `dns_truncated` when the name did not fit | `guest-tap` |
 | `detection` | A rule fired. `rule`, `severity`, `message`, and the attribution of the event that triggered it | as the trigger |

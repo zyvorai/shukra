@@ -30,12 +30,13 @@ Shukra is one privileged daemon on the hypervisor, a CLI and a console that only
 | `sched` | `sched_switch`, `sched_wakeup`, `sched_process_exec`, `sched_process_exit` | On-CPU time, run-queue delay and vCPU preemption (runnable but off CPU, and who took it) per thread, a `watched` set of VMM thread groups | Exec and exit events are filtered in the kernel to children of a watched VMM (QEMU, or a FluxVM backend) |
 | `block` | `block_rq_issue`, `block_rq_complete` | Latency histogram, bytes and requests per direction, slowest request | Attributed to the task that dispatched the request. About 3% land on a kernel worker |
 | `net` | `tcp_v4_connect`, `tcp_v6_connect`, `tcp_retransmit_skb` | Exact connect counts; 1 in 64 retransmits become events | The VMM's own sockets. Never the guest. The attribution string is still `qemu-process` |
+| `vmm` | `syscalls:sys_enter_openat`, `openat2`, `open`, `ptrace`, `process_vm_writev`, `process_vm_readv`, `mount`, `unshare`, `setns`, `init_module`, `finit_module`, `kexec_load`, `kexec_file_load`, and `sched:sched_process_fork` and `sched_process_exit` to keep the table of descendants | Nothing but a ring of events: a file opened, or a call made, by a VMM process or by something within three parents of one | Reads the tracepoint record through the kernel's own `trace_event_raw_sys_enter`. Fires for every process on the host, so it finds out first whether the caller is a VMM (`vmm_watched`), or descends from one (`vmm_desc`, an LRU filled at fork, so lineage survives a parent's exit), or is a process already running that a walk through up to three `real_parent`s finds; only then does it read the path. A per-VMM limit of 300 a second, and a report of how many went over. Paths are judged in the daemon. See [VMM tripwires](vmm-tripwires.md) |
 | `drops` | `skb:kfree_skb` | Per VM tap and drop reason: a count and the kernel function that freed the packet | Filters to VM taps first. Reads the record by field name (CO-RE). See [drops](drops.md) |
 | `tap` | TCX ingress and egress on each VM's host interface (Linux 6.6+) | Counters, TCP handshake outcomes, isolation policy, an event ring | The only program that sees the guest. On FluxVM's default netns the interface is the host veth, not the inner tap. See [guest traffic](tap.md) |
 
 The `sched` program's preemption tables (`preempt_start`, `preempt_by`) are small LRUs that only QEMU threads ever enter; the per-thread totals in `sched_stats` are the exact ones. See [vCPU preemption](signals.md#vcpu-preemption).
 
-Each of the first five loads on its own, and a missing hook detaches only that program: a host without a KVM tracepoint still gets scheduler, block and network data. `tap` is attached per VM interface and comes and goes with the VMs, so its status changes at runtime.
+Each of the first six loads on its own, and a missing hook detaches only that program: a host without a KVM tracepoint still gets scheduler, block and network data. `tap` is attached per VM interface and comes and goes with the VMs, so its status changes at runtime.
 
 **Hot paths stay in maps.** Counters and histograms are BPF maps that userspace reads on a timer. The ring buffer carries discrete events only (an exec, a connect, a slow request), and every producer of events is rate-limited or sampled so a busy guest cannot fill it.
 
@@ -95,6 +96,7 @@ Rules live in one YAML file (`-watchlist`), re-read on `SIGHUP`:
 - **dns**: a name a guest looked up, by `suffix`, `exact` or `contains`.
 - **responses**: what to do when a detection fires (`internal/response`): propose an isolation for a person to approve, or, where the rules are named, do it, under guardrails. See [responses](responses.md).
 - **baselines**: what is learned as normal for each VM (`internal/baseline`) and reported once when new; off unless the section is present. See [baselines](baselines.md).
+- **vmm**: what a VMM process tree may not open or call (`internal/detect/vmm.go`), with built-in defaults that need no section: sensitive paths (`*` is one segment, a match is the path and all beneath it), paths to ignore, and which calls to report. See [VMM tripwires](vmm-tripwires.md).
 - **exec_allow**: names that may start under QEMU without an alert.
 - **thresholds**: a per-VM metric over a window (block p99, run-queue delay, vCPU preemption, retransmits, KVM exit rate and latency, guest drops, connection failures, inbound connections).
 - **suppress**: a repeat of the same detection inside a window is held back and counted.

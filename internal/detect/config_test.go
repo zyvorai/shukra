@@ -143,7 +143,7 @@ func TestShippedExampleParses(t *testing.T) {
 	for _, line := range strings.Split(string(raw), "\n") {
 		body, isComment := strings.CutPrefix(line, "# ")
 		switch {
-		case isComment && regexp.MustCompile(`^(suppress|ports|dns|tls|baselines|responses|guardrails|exec_allow|thresholds):`).MatchString(body):
+		case isComment && regexp.MustCompile(`^(suppress|ports|dns|tls|vmm|baselines|responses|guardrails|exec_allow|thresholds):`).MatchString(body):
 			live = true
 			on = append(on, body)
 		case live && strings.HasPrefix(line, "#  "):
@@ -159,7 +159,7 @@ func TestShippedExampleParses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("with examples enabled: %v\n%s", err, strings.Join(on, "\n"))
 	}
-	if len(full.Ports) != 3 || full.Ports[1].Proto != "udp" || full.Ports[2].Dir != "in" || len(full.DNS) != 2 || len(full.TLS) != 2 || full.TLS[0].Name != "doh-resolver" || full.Baselines == nil || len(full.Responses) != 1 || full.Guard.MaxPerHour != 3 || len(full.Guard.NeverIsolate) != 1 || full.Baselines.Learn != 24*time.Hour || len(full.Thresholds) != 1 || len(full.ExecAllow) != 1 || full.Suppress != DefaultSuppress {
+	if len(full.Ports) != 3 || full.Ports[1].Proto != "udp" || full.Ports[2].Dir != "in" || len(full.DNS) != 2 || len(full.TLS) != 2 || full.TLS[0].Name != "doh-resolver" || full.VMM == nil || sensitive(full.VMM, "/srv/secrets/k") == "" || sensitive(full.VMM, "/root/images/a") != "" || full.VMM.WatchesSyscall("mount") || !full.VMM.WatchesSyscall("setns") || full.Baselines == nil || len(full.Responses) != 1 || full.Guard.MaxPerHour != 3 || len(full.Guard.NeverIsolate) != 1 || full.Baselines.Learn != 24*time.Hour || len(full.Thresholds) != 1 || len(full.ExecAllow) != 1 || full.Suppress != DefaultSuppress {
 		t.Fatalf("%+v", full)
 	}
 }

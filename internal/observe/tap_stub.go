@@ -70,3 +70,9 @@ func (*EgressKernel) CanEnforce() (bool, string) {
 func (*EgressKernel) Set(string, uint8, []netip.Prefix) error { return errNoBPF }
 func (*EgressKernel) Mode(string) uint8                       { return 0 }
 func (*EgressKernel) Stats() []EgressCounters                 { return nil }
+
+// StartVMM reads no ring in this build.
+func StartVMM(func(event.Event)) {}
+
+// DisableVMM has no program to keep out in this build.
+func DisableVMM() {}

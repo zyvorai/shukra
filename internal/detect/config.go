@@ -325,6 +325,8 @@ type Config struct {
 	TLS []DNSRule
 	// Baselines is nil unless the rules file turns learned baselines on.
 	Baselines *BaselineConfig
+	// VMM is what the VMM tripwires judge by. It is never nil: with no vmm: section it is the defaults.
+	VMM *VMMRules
 	// Responses and Guard are what to do when a detection fires. There are none unless the file has them.
 	Responses  []Response
 	Guard      Guardrails
@@ -338,7 +340,7 @@ type Config struct {
 // DefaultConfig is what runs when no detection file is given: no rules, and the
 // built-in unexpected-exec check with default suppression.
 func DefaultConfig() *Config {
-	return &Config{Watch: &Watchlist{}, Suppress: DefaultSuppress}
+	return &Config{Watch: &Watchlist{}, Suppress: DefaultSuppress, VMM: DefaultVMMRules()}
 }
 
 type doc struct {
@@ -348,6 +350,7 @@ type doc struct {
 	DNS          []DNSRule       `yaml:"dns"`
 	TLS          []DNSRule       `yaml:"tls"`
 	Baselines    *BaselineConfig `yaml:"baselines"`
+	VMM          *VMMConfig      `yaml:"vmm"`
 	Responses    []Response      `yaml:"responses"`
 	Guardrails   *Guardrails     `yaml:"guardrails"`
 	ExecAllow    []string        `yaml:"exec_allow"`
@@ -458,6 +461,9 @@ func Parse(b []byte) (*Config, error) {
 		return nil, err
 	}
 	if c.TLS, err = nameRules("tls", d.TLS); err != nil {
+		return nil, err
+	}
+	if c.VMM, err = compileVMM(d.VMM); err != nil {
 		return nil, err
 	}
 	if d.Baselines != nil {

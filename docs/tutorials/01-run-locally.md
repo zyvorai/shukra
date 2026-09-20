@@ -39,6 +39,7 @@ Flags:
 | `-no-auth` | off | Serve without a bearer key. Otherwise `SHUKRA_API_KEY`, or the dev token with a warning |
 | `-tls-cert`, `-tls-key` | off | Serve HTTPS. `SIGHUP` reloads the certificate |
 | `-isolate-allow` | empty | Comma-separated CIDRs an isolated VM can still reach. Without it, isolate is refused. See [guest traffic](../tap.md) |
+| `-vmm-tripwires` | on | Watch QEMU processes, and what they start, for the files they open and the calls a VMM never makes (`vmm_file_open`, `vmm_syscall`, and detections). `-vmm-tripwires=false` does not load the program. See [VMM tripwires](../vmm-tripwires.md) |
 | `-tls-events` | on | Record the server name in a guest's TLS ClientHello (`guest_tls` events). `-tls-events=false` makes the tap program read no TCP payload at all. See [TLS server names](../tap.md#tls-server-names) |
 | `-dns-events` | on | Record the names a guest looks up (`guest_dns` events). `-dns-events=false` makes the tap program not read DNS at all. See [DNS names](../tap.md#dns-names) |
 | `-detach-all` | off | Remove every pinned tap program and its isolation, then exit. Works while the daemon is stopped |

@@ -45,7 +45,7 @@ func classOf(k event.Kind) eventClass {
 		return classGuest
 	case event.KindDetection, event.KindVMStart, event.KindVMStop:
 		return classNotable
-	case event.KindExec, event.KindExit:
+	case event.KindExec, event.KindExit, event.KindVMMOpen, event.KindVMMCall:
 		return classProcess
 	case event.KindBlockSlow, event.KindSchedDelay:
 		return classLatency

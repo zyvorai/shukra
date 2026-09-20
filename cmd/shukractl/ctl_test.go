@@ -1211,3 +1211,26 @@ func TestPolicyJSONIsPassedThrough(t *testing.T) {
 		t.Fatalf("%v %q", err, buf.String())
 	}
 }
+
+func TestWatchLinesNameThePathAndTheProgramForAVMMOpenAndTheCallForAVMMSyscall(t *testing.T) {
+	var buf bytes.Buffer
+	for _, e := range []map[string]any{
+		{"ts": "T1", "kind": "vmm_file_open", "attribution": "qemu-process", "vm": map[string]any{"name": "web"}, "path": "/etc/shadow", "comm": "cat", "pid": 4321},
+		{"ts": "T2", "kind": "vmm_file_open", "attribution": "qemu-process", "vm": map[string]any{"name": "web"}, "path": "/tmp/x", "comm": "sh", "pid": 9, "write": true},
+		{"ts": "T3", "kind": "vmm_syscall", "attribution": "qemu-process", "vm": map[string]any{"name": "web"}, "syscall": "ptrace", "comm": "gdb", "pid": 77, "detail": "request 16 (ATTACH) on pid 5"},
+		{"ts": "T4", "kind": "vmm_syscall", "attribution": "qemu-process", "vm": map[string]any{"name": "web"}, "syscall": "init_module", "comm": "insmod", "pid": 78},
+	} {
+		if err := printEvent(e, false, &buf); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	for i, want := range []string{"path=/etc/shadow  comm=cat  pid=4321", "path=/tmp/x  comm=sh  pid=9  write", "syscall=ptrace  comm=gdb  pid=77  request 16 (ATTACH) on pid 5", "syscall=init_module  comm=insmod  pid=78"} {
+		if !strings.HasSuffix(lines[i], want) {
+			t.Fatalf("line %d %q does not end with %q", i, lines[i], want)
+		}
+	}
+	if strings.Contains(lines[0], "write") || strings.HasSuffix(lines[3], "  ") {
+		t.Fatalf("no write on a read, no trailing space on a call with no detail: %q", lines)
+	}
+}
