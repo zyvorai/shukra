@@ -1,5 +1,7 @@
 import HostBanner from '../components/HostBanner';
 import LatencyHist from '../components/LatencyHist';
+import { useState } from 'react';
+import { type Ev, hasText, inVM, newestFirst, NO_VM, page, PAGE } from '../eventView';
 import { fmtBytes, fmtNs } from '../hist';
 import { LIVE_MS, useAPI } from '../useAPI';
 
@@ -130,42 +132,99 @@ export function Programs() {
   return <Trace title="Programs" err={err} rows={data?.programs} cols={['name', 'status', 'detail']} />;
 }
 
+/**
+ * A table of events, newest first, that shows PAGE rows and says how many more there are. A long list is the
+ * normal case on a busy host, so the count is always stated and nothing is silently cut off.
+ */
+export function LimitedTrace({ title, rows, cols, format, filtered }: { title: string; rows: Row[]; cols: string[]; format?: Record<string, (v: unknown) => string>; filtered: boolean }) {
+  const [limit, setLimit] = useState(PAGE);
+  const p = page(newestFirst(rows as Ev[]), limit);
+  return (
+    <Trace
+      title={`${title} (${p.total})`}
+      err=""
+      rows={p.shown}
+      cols={cols}
+      format={format}
+      empty={filtered ? 'Nothing matches this filter.' : 'None seen yet.'}
+    >
+      {p.total > 0 && (
+        <p className="hint">
+          Showing the newest {p.shown.length} of {p.total}.{' '}
+          {p.more > 0 && (
+            <button type="button" onClick={() => setLimit(limit + PAGE)}>
+              Show {Math.min(PAGE, p.more)} more
+            </button>
+          )}
+        </p>
+      )}
+    </Trace>
+  );
+}
+
+const vmCell = (v: unknown) => String((v as { name?: string } | undefined)?.name ?? '—');
+const droppedCell = (v: unknown) => (v ? 'dropped' : '—');
+
 export function Connections() {
   const { data, err } = useAPI<{ events: Row[] }>('/api/v1/events', { refreshMs: LIVE_MS });
   const tap = useAPI<{ rows: Row[] }>('/api/v1/trace/tap', { refreshMs: LIVE_MS });
-  const all = data?.events || [];
+  const vms = useAPI<{ vms?: { name: string }[] }>('/api/v1/vms');
+  const [vm, setVM] = useState('');
+  const [q, setQ] = useState('');
+  const all = (data?.events || []).filter((e) => inVM(e, vm) && hasText(e, q));
   const host = all.filter((e) => e.kind === 'tcp_connect' || e.kind === 'tcp_retransmit');
   const guest = all.filter((e) => e.kind === 'guest_connect' || e.kind === 'guest_flow' || e.kind === 'guest_inbound');
   const names = all.filter((e) => e.kind === 'guest_dns');
+  const filtered = vm !== '' || q.trim() !== '';
   return (
     <div>
       <HostBanner />
-      <Trace title="Host connections" err={err} rows={host} cols={['ts', 'kind', 'dst', 'dport', 'attribution', 'guest_attributed']} />
-      {guest.length > 0 && (
-        <Trace
+      <div className="toolbar">
+        <label>
+          Show
+          <select value={vm} onChange={(e) => setVM(e.target.value)} aria-label="Filter by VM">
+            <option value="">everything</option>
+            <option value={NO_VM}>host processes (no VM)</option>
+            {(vms.data?.vms ?? []).map((v) => (
+              <option key={v.name} value={v.name}>
+                {v.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Search
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="address, port or name" aria-label="Search connections" />
+        </label>
+      </div>
+      {err && <p className="warning">{err}</p>}
+      <LimitedTrace title="Host connections" rows={host} cols={['ts', 'kind', 'dst', 'dport', 'attribution', 'guest_attributed']} filtered={filtered} />
+      {(guest.length > 0 || filtered) && (
+        <LimitedTrace
           title="Guest connections, connections into the guest, and UDP flows (seen on the VM tap)"
-          err=""
           rows={guest}
           cols={['ts', 'vm', 'kind', 'proto', 'src', 'dst', 'dport', 'blocked', 'attribution', 'guest_attributed']}
-          format={{ vm: (v) => String((v as { name?: string } | undefined)?.name ?? '—'), blocked: (v) => (v ? 'dropped' : '—') }}
+          format={{ vm: vmCell, blocked: droppedCell }}
+          filtered={filtered}
         />
       )}
-      {names.length > 0 && (
-        <Trace
+      {(names.length > 0 || filtered) && (
+        <LimitedTrace
           title="Names the guest looked up (DNS over UDP port 53, seen on the VM tap)"
-          err=""
           rows={names}
           cols={['ts', 'vm', 'dns_name', 'qtype', 'src', 'dst', 'blocked']}
-          format={{ vm: (v) => String((v as { name?: string } | undefined)?.name ?? '—'), blocked: (v) => (v ? 'dropped' : '—') }}
+          format={{ vm: vmCell, blocked: droppedCell }}
+          filtered={filtered}
         />
       )}
       {tap.data && tap.data.rows.length > 0 && (
         <Trace
           title="Guest TCP connections: what became of them (per tap)"
           err={tap.err}
-          rows={tap.data.rows}
+          rows={tap.data.rows.filter((r) => (vm === '' ? true : vm === NO_VM ? false : r.vm === vm))}
           cols={['vm', 'tap', 'outSyn', 'outAccepted', 'outRefused', 'outTimedOut', 'outBlocked', 'handshakeP50Ns', 'handshakeP99Ns', 'inSyn', 'inAccepted', 'inRefused', 'inIgnored']}
           format={{ handshakeP50Ns: ns, handshakeP99Ns: ns }}
+          empty="No tap for this selection."
         />
       )}
     </div>
@@ -184,6 +243,7 @@ function Trace({
   rows,
   cols,
   format = {},
+  empty,
   children,
 }: {
   title: string;
@@ -191,6 +251,8 @@ function Trace({
   rows?: Row[];
   cols: string[];
   format?: Record<string, (v: unknown) => string>;
+  /** What to say when there are no rows, if that is not "the programs may be detached". */
+  empty?: string;
   children?: React.ReactNode;
 }) {
   return (
@@ -198,7 +260,7 @@ function Trace({
       <p className="eyebrow">TRACE</p>
       <h3>{title}</h3>
       {err && <p className="warning">{err}</p>}
-      {rows && rows.length === 0 && <p className="empty-state">No rows. Programs may be detached, and Shukra does not invent counters.</p>}
+      {rows && rows.length === 0 && <p className="empty-state">{empty ?? 'No rows. Programs may be detached, and Shukra does not invent counters.'}</p>}
       {rows && rows.length > 0 && (
         <div className="investigation-table">
           <table>
