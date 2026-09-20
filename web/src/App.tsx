@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import Nav, { type Page } from './components/Nav';
 import PageHero, { type HeroTint } from './components/PageHero';
 import Login from './components/Login';
+import Contention from './pages/Contention';
 import Overview from './pages/Overview';
 import VMs from './pages/VMs';
 import Recorder from './pages/Recorder';
@@ -11,7 +12,7 @@ import { Detections, Isolate } from './pages/Security';
 import { token, setToken } from './api';
 import { applyTheme, readStoredTheme, toggleTheme, type Theme } from './theme';
 
-const pages: Page[] = ['overview', 'vms', 'recorder', 'explain', 'kvm', 'sched', 'block', 'programs', 'connections', 'drops', 'detections', 'isolate'];
+const pages: Page[] = ['overview', 'vms', 'recorder', 'explain', 'kvm', 'sched', 'contention', 'block', 'programs', 'connections', 'drops', 'detections', 'isolate'];
 
 function readPage(): Page {
   const m = window.location.hash.match(/page=([a-z]+)/);
@@ -25,6 +26,7 @@ const heroes: Partial<Record<Page, { eyebrow: string; title: string; lede: strin
   explain: { eyebrow: 'Investigate', title: 'Why is this VM slow?', lede: 'Only the evidence this build collected. Missing signals stay listed.', tint: 'amber' },
   kvm: { eyebrow: 'Diagnostics', title: 'KVM exits, counted.', lede: 'Exit counts, how long the host spends handling them, and which reasons cost the most. Not one event per exit.', tint: 'green' },
   sched: { eyebrow: 'Diagnostics', title: 'Scheduler delay.', lede: 'On-CPU time and run-queue delay for QEMU threads, which thread is slow, and how long the vCPUs were taken off a host CPU and by whom.', tint: 'amber' },
+  contention: { eyebrow: 'Diagnostics', title: 'Who took whose CPU.', lede: 'Which VM preempted which, how much of a VM\'s preemption it accounts for, and what that VM was doing meanwhile. The host\'s view, not the guest\'s steal counter.', tint: 'red' },
   block: { eyebrow: 'Diagnostics', title: 'Block latency.', lede: 'Requests, bytes, worst case and the latency distribution, from a log2 histogram on the QEMU I/O thread.', tint: 'amber' },
   programs: { eyebrow: 'Diagnostics', title: 'What is attached.', lede: 'kvm, sched, block, net, tap and drops. Detached is an honest state.', tint: 'green' },
   connections: { eyebrow: 'Network', title: 'Host connections.', lede: "QEMU's own connects, and the guest's own on its tap when the tap program is attached.", tint: 'purple' },
@@ -74,6 +76,7 @@ export default function App() {
     explain: <Explain />,
     kvm: <KVM />,
     sched: <Sched />,
+    contention: <Contention />,
     block: <Block />,
     programs: <Programs />,
     connections: <Connections />,

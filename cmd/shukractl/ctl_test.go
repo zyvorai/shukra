@@ -639,3 +639,38 @@ func TestTraceSchedShowsWhoTookTheVCPUsCPU(t *testing.T) {
 		}
 	}
 }
+
+func TestTraceContentionShowsWhoTookWhoseCPUAndWhatTheCulpritDid(t *testing.T) {
+	var query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"note":"n","window":"1m0s",
+			"pairs":[{"victim":"db","culprit":"web","preemptedNs":800000000,"share":0.8}],
+			"victims":[{"vm":"db","preemptedNs":1000000000,"preemptions":30,"byOtherVmsNs":800000000,"bySelfNs":100000000,"byHostNs":100000000,"topHostTasks":[{"who":"kworker","ns":60000000}]},
+			           {"vm":"quiet","preemptedNs":0,"preemptions":0,"byOtherVmsNs":0,"bySelfNs":0,"byHostNs":0,"topHostTasks":[]}],
+			"culprits":[{"vm":"web","tookNs":800000000,"victims":1,"onCpuNs":9000000000,"exits":700}]}`))
+	}))
+	defer srv.Close()
+	t.Setenv("SHUKRA_URL", srv.URL)
+	var buf bytes.Buffer
+	if err := run([]string{"trace", "contention", "--vm", "db", "--window", "5m"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if query != "vm=db&window=5m" {
+		t.Fatalf("%q", query)
+	}
+	for _, want := range []string{
+		"TRACE CONTENTION  window=1m0s",
+		"vm=db  preempted=1000000000ns over 30 preemptions  (other VMs 800000000ns, its own threads 100000000ns, host tasks 100000000ns)",
+		"taken by VM web: 800000000ns (80%)", "taken by host tasks: kworker 60000000ns",
+		"vm=web  took=800000000ns from 1 VMs  its own on-cpu=9000000000ns  exits=700", "vm=quiet  preempted=0ns",
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("missing %q:\n%s", want, buf.String())
+		}
+	}
+	if err := run([]string{"trace", "sched", "--window", "5m"}, &bytes.Buffer{}); err != nil || query != "" {
+		t.Fatalf("--window is only for contention: %q %v", query, err)
+	}
+}

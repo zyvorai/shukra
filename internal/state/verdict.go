@@ -33,6 +33,8 @@ const (
 	preemptFloorNs = 200_000_000
 	preemptMedium  = 0.05
 	preemptHigh    = 0.20
+	// noisyShare is how much of a VM's preempted time one other VM must account for to be named the cause.
+	noisyShare = 0.5
 )
 
 var confRank = map[string]int{"high": 3, "medium": 2, "low": 1}
@@ -40,7 +42,7 @@ var confRank = map[string]int{"high": 3, "medium": 2, "low": 1}
 // preemptorName names a preemptor for a person: a thread of another VM, of this VM (its own iothread or another
 // vCPU), or a host task.
 func preemptorName(label, self string) string {
-	name, isVM := strings.CutPrefix(label, "vm:")
+	name, isVM := strings.CutPrefix(label, aggregate.VMLabel)
 	switch {
 	case isVM && name == self:
 		return "this VM's own other threads"
@@ -136,6 +138,18 @@ func diagnose(found bool, kvm []aggregate.KVMRow, sched []aggregate.SchedRow, th
 				Summary:  "The host took CPU away from this VM's vCPUs. Look at what else is running on those host CPUs: other VMs, host services, interrupt load, and CPU pinning.",
 				Evidence: ev,
 			})
+			// When most of it went to one other VM, that VM is the finding: it is the thing to move or limit.
+			if len(s.Preemptors) > 0 {
+				top := s.Preemptors[0]
+				if name, isVM := strings.CutPrefix(top.Who, aggregate.VMLabel); isVM && name != s.VM && float64(top.Ns) >= noisyShare*float64(s.PreemptedNs) {
+					out = append(out, Finding{
+						Cause: "noisy_neighbour", Confidence: conf,
+						Summary: fmt.Sprintf("Another VM, %s, took most of the CPU this VM's vCPUs were denied. Look at %s's load, and at CPU pinning or separating the two onto different cores.", name, name),
+						Evidence: []string{fmt.Sprintf("%s took %s of the %s the vCPUs were preempted (%.0f%%). shukractl trace contention shows what %s was doing meanwhile.",
+							name, dur(top.Ns), dur(s.PreemptedNs), 100*float64(top.Ns)/float64(s.PreemptedNs), name)},
+					})
+				}
+			}
 		}
 	}
 

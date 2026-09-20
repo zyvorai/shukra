@@ -8,6 +8,7 @@ export type Page =
   | 'explain'
   | 'kvm'
   | 'sched'
+  | 'contention'
   | 'block'
   | 'programs'
   | 'connections'
@@ -33,6 +34,7 @@ const groups: NavGroup[] = [
     children: [
       { page: 'kvm', label: 'KVM', blurb: 'Exit, entry, MMIO, and PIO counters per QEMU thread group.' },
       { page: 'sched', label: 'Scheduler', blurb: 'On-CPU time, wakeup delay and vCPU preemption for those threads.' },
+      { page: 'contention', label: 'Contention', blurb: 'Which VM took whose CPU, and what it was doing meanwhile.' },
       { page: 'block', label: 'Block', blurb: 'Log2 latency histogram for the QEMU I/O thread.' },
       { page: 'programs', label: 'Programs', blurb: 'Attached, detached, or missing. A missing KVM module does not stop the others.' },
     ],

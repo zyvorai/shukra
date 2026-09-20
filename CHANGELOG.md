@@ -4,6 +4,12 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### Noisy-neighbour map
+
+- `shukractl trace contention` and `GET /api/v1/trace/contention`: who took whose vCPU time across VMs, how much of each VM's preemption one other VM accounts for, the VM's own threads and host tasks, and what each culprit VM was doing over the same window. A **Contention** page in the console.
+- New Explain cause `noisy_neighbour` when one other VM accounts for at least half of a VM's preempted time. `cpu_preempted` stays beside it.
+- No new Prometheus series: `shukra_sched_vcpu_preempted_by_seconds_total{by="vm:<name>"}` already carries the pairs.
+
 ### Console text and defaults
 
 - The VM field on Explain, Flight recorder and Isolate opens on the first VM the daemon actually knows and suggests the others, instead of a fixture name (`payment-prod-03`) that does not exist on the host.

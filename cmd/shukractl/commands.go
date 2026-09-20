@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -168,18 +169,29 @@ func traceCmd(args []string, out io.Writer) error {
 	}
 	kind := args[0]
 	switch kind {
-	case "kvm", "sched", "block", "net", "tap", "drops":
+	case "kvm", "sched", "block", "net", "tap", "drops", "contention":
 	default:
-		return fmt.Errorf("trace kvm|sched|block|net|tap|drops")
+		return fmt.Errorf("trace kvm|sched|block|net|tap|drops|contention")
 	}
 	vm := flagValue(args[1:], "--vm", "")
-	path := "/api/v1/trace/" + kind
+	q := url.Values{}
 	if vm != "" {
-		path += "?vm=" + vm
+		q.Set("vm", vm)
+	}
+	if w := flagValue(args[1:], "--window", ""); w != "" && kind == "contention" {
+		q.Set("window", w)
+	}
+	path := "/api/v1/trace/" + kind
+	if len(q) > 0 {
+		path += "?" + q.Encode()
 	}
 	return getBoard(out, path, has(args[1:], "--json"), func(w io.Writer, m map[string]any) {
-		if kind == "drops" {
+		switch kind {
+		case "drops":
 			formatDrops(w, m)
+			return
+		case "contention":
+			formatContention(w, m)
 			return
 		}
 		formatTrace(w, kind, m)
@@ -415,6 +427,7 @@ func formatTraceList(w io.Writer, m map[string]any) {
 	fmt.Fprintln(w, "  net     tcp_v4/v6_connect (exact) and sampled retransmits. QEMU process, not the guest")
 	fmt.Fprintln(w, "  tap     TCX on each VM tap: the guest's own traffic, and isolation")
 	fmt.Fprintln(w, "  drops   skb:kfree_skb on each VM tap: what the kernel dropped, why, and whether it was Shukra")
+	fmt.Fprintln(w, "  contention  not a program: sched preemption, joined across VMs (who took whose CPU, and what they did meanwhile)")
 	fmt.Fprintln(w)
 	formatPrograms(w, m)
 }
@@ -605,4 +618,41 @@ func joinTaps(v any) string {
 		return "-"
 	}
 	return strings.Join(parts, ",")
+}
+
+// formatContention shows, per victim VM, who took its vCPU time, and then each culprit VM's own activity.
+func formatContention(w io.Writer, m map[string]any) {
+	if note := str(m, "note"); note != "" {
+		fmt.Fprintln(w, note)
+	}
+	fmt.Fprintf(w, "TRACE CONTENTION  window=%s\n", str(m, "window"))
+	victims := list(m, "victims")
+	if len(victims) == 0 {
+		fmt.Fprintln(w, "  no VM has been measured by the sched program yet")
+		return
+	}
+	pairs := list(m, "pairs")
+	for _, v := range victims {
+		fmt.Fprintf(w, "  vm=%s  preempted=%sns over %s preemptions  (other VMs %sns, its own threads %sns, host tasks %sns)\n",
+			str(v, "vm"), num(v, "preemptedNs"), num(v, "preemptions"), num(v, "byOtherVmsNs"), num(v, "bySelfNs"), num(v, "byHostNs"))
+		for _, p := range pairs {
+			if str(p, "victim") == str(v, "vm") {
+				share, _ := p["share"].(float64)
+				fmt.Fprintf(w, "      taken by VM %s: %sns (%.0f%%)\n", str(p, "culprit"), num(p, "preemptedNs"), share*100)
+			}
+		}
+		var hosts []string
+		for _, h := range list(v, "topHostTasks") {
+			hosts = append(hosts, fmt.Sprintf("%s %sns", str(h, "who"), num(h, "ns")))
+		}
+		if len(hosts) > 0 {
+			fmt.Fprintf(w, "      taken by host tasks: %s\n", strings.Join(hosts, ", "))
+		}
+	}
+	if culprits := list(m, "culprits"); len(culprits) > 0 {
+		fmt.Fprintln(w, "  culprits (what each VM did meanwhile)")
+		for _, c := range culprits {
+			fmt.Fprintf(w, "    vm=%s  took=%sns from %s VMs  its own on-cpu=%sns  exits=%s\n", str(c, "vm"), num(c, "tookNs"), num(c, "victims"), num(c, "onCpuNs"), num(c, "exits"))
+		}
+	}
 }

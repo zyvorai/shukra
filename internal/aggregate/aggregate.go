@@ -97,6 +97,10 @@ type SchedRow struct {
 	Measured      bool        `json:"measured"`
 }
 
+// VMLabel starts the name of a preemptor that is a thread of a QEMU process: "vm:web-01". Any other name is
+// a host command.
+const VMLabel = "vm:"
+
 // Preemptor is who took a vCPU's CPU, and for how long in total. Who is "vm:<name>" for a thread of a QEMU
 // process (possibly the same VM) or a command name such as "kworker" or "ksoftirqd".
 type Preemptor struct {

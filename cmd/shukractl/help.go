@@ -24,7 +24,7 @@ func helpSections() []helpSection {
 		}},
 		{title: "🔬  Trace", cmds: []helpCmd{
 			{"trace list", "kvm, sched, block, net, tap and drops programs"},
-			{"trace kvm|sched|block|net|tap|drops [--vm NAME] [--json]", "Per-VM counters from the daemon"},
+			{"trace kvm|sched|block|net|tap|drops|contention [--vm NAME] [--json]", "Per-VM counters from the daemon. contention: which VM took whose CPU"},
 		}},
 		{title: "🔍  Investigate", cmds: []helpCmd{
 			{"vms [--json]", "Virtual machines from the host (QEMU and FluxVM)"},

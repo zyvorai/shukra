@@ -3,6 +3,8 @@ package observe
 import (
 	"strings"
 	"sync"
+
+	"github.com/zyvorai/shukra/internal/aggregate"
 )
 
 // ThreadRef says which VM a host thread belongs to and what it does (vcpu, iothread, ...), from the
@@ -33,7 +35,7 @@ func threadRef(tid uint32) (ThreadRef, bool) {
 }
 
 // VMPrefix marks a preemptor that is a thread of a VM: "vm:web-01".
-const VMPrefix = "vm:"
+const VMPrefix = aggregate.VMLabel
 
 // preemptorLabel names who took a vCPU's CPU. A thread of a QEMU process is the VM's (which may be the
 // victim's own VM: its iothread or another vCPU), and anything else is its command name with the per-CPU or
