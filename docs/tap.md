@@ -118,6 +118,20 @@ The connection still produces its own `guest_connect` event: the name adds to it
 - **A `tls` rule** (see [detection rules](tutorials/06-watchlist.md)) fires on a name by suffix, exact match or substring, exactly like a `dns` rule, and the two do not judge each other's names. Learned [baselines](baselines.md) count a server name as the site it names, so a site a VM looked up by DNS is not new when it connects to it.
 - **Privacy.** A name identifies what a VM is doing, and a fingerprint identifies its software. Both are held in the event list, the flight recorder and, with `-data-dir`, the detection log. The bytes copied from the kernel are decoded and thrown away: nothing but the fields above is kept, and the hello has no application data in it. `shukrad -tls-events=false` makes the program **not read a TCP payload at all**. The switch lives in a pinned map and the daemon sets it on every start.
 
+### What it costs
+
+Measured with [`scripts/bench-tap.sh`](../scripts/bench-tap.sh) on the production hypervisor (Intel Xeon E-2336, Linux 6.8), as nanoseconds per packet for the guest-to-host program, on a private copy with its own maps, each figure the median of five runs of two million:
+
+| Packet | Before TLS names | TLS names off | TLS names on |
+|---|---|---|---|
+| Full data segment (1448 bytes) | 65 to 68 | 71 to 80 | 77 to 81 |
+| Application-data record | 67 to 68 | 68 to 73 | 74 to 86 |
+| Pure ACK | 68 to 73 | 67 to 73 | 68 to 83 |
+| UDP datagram | 123 to 124 | 118 to 134 | 120 to 132 |
+| A hello of a flow already announced | 67 to 69 | 71 to 78 | 131 to 154 |
+
+Read it as a floor, since the same packet is run over and over and the caches are as warm as they will get. What it says is that the payload check adds about **10 to 15 ns to a data segment** (one array lookup and one 7-byte read), nothing to ACKs or UDP, and about 60 to 85 ns to the one segment per connection that is a hello. At a million data segments a second that is about 1 to 1.5% of one core. A hello that is announced also does a map update and a ring write, bounded at 100 a second per tap.
+
 What it does not see: a name hidden by Encrypted Client Hello (only the outer one), QUIC and HTTP/3 (UDP), and a hello that does not begin at the start of a segment. TLS that starts after another protocol's exchange (STARTTLS in mail, for example) is seen, because the start of every data segment the guest sends is checked. It does not read the server's answer, so it does not know whether the connection succeeded, which certificate it got, or what was said. **JA3 says what kind of client library made the hello, not who the client is**: a client that randomises the order of its extensions, as current browsers do, has a different JA3 each time, and many programs share one. Treat it as a hint to compare, not as an identity.
 
 ## What guest_attributed means now
