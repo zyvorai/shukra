@@ -465,14 +465,14 @@ vdet() { api "$U/api/v1/events" | J "len([e for e in d['events'] if e['kind']=='
 
 check "the vmm program is attached" "api $U/api/v1/programs | J \"[p['status'] for p in d['programs'] if p['name']=='vmm'][0]\" | grep -q attached"
 check "what the VMM's own children open is reported, with the VM, as the VMM's and not the guest's" \
-  "vrec \"any(e['vm']['name']=='taptest' and e['attribution']=='qemu-process' and not e['guest_attributed'] and e['comm'] in ('true','sleep') and e['path'].startswith('/') for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True"
+  "vrec \"any(e['vm']['name']=='taptest' and e['attribution']=='qemu-process' and not e['guest_attributed'] and e['comm'] in ('true','sleep') and e.get('path','').startswith('/') for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True"
 check "and none of it is a detection: opening a shared library is not sensitive" "[ \"\$(vevents \"len([e for e in d['events'] if e['kind']=='detection' and str(e.get('rule','')).startswith('vmm-')])\")\" = 0 ]"
 
 trigger 'cat /etc/shadow >/dev/null 2>&1'
 check "a program a VMM started opening /etc/shadow is a critical detection naming the VM, the program and the file" \
   "api $U/api/v1/events | J \"any(e['severity']=='critical' and e['vm']['name']=='taptest' and not e['guest_attributed'] and e['message'].startswith('cat (pid ') and 'in taptest' in e['message'] and 'opened /etc/shadow, which matches /etc/shadow' in e['message'] for e in d['events'] if e['kind']=='detection' and e.get('rule')=='vmm-sensitive-open')\" | grep -q True"
 check "and the open itself is an event: the path as given, the syscall, and the program" \
-  "vrec \"any(e['path']=='/etc/shadow' and e['comm']=='cat' and e['syscall']=='openat' and not e.get('write') for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True"
+  "vrec \"any(e.get('path','')=='/etc/shadow' and e['comm']=='cat' and e['syscall']=='openat' and not e.get('write') for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True"
 trigger 'cat /etc/shadow >/dev/null 2>&1'
 check "the same program opening the same file again is held back, not a second detection" "[ \"\$(vdet vmm-sensitive-open '/etc/shadow' 'cat (pid')\" = 1 ]"
 trigger 'cat /etc/../etc//sudoers >/dev/null 2>&1'
@@ -480,13 +480,13 @@ check "a path written to hide it is cleaned before it is judged: /etc/../etc//su
 trigger 'cat /proc/self/mem >/dev/null 2>&1'
 check "a wildcard pattern matches: /proc/self/mem is /proc/*/mem" "[ \"\$(vdet vmm-sensitive-open 'matches /proc/*/mem' '')\" -ge 1 ]"
 trigger 'cat /etc/hostname >/dev/null 2>&1'
-check "an ordinary file is an event and no detection" "vrec \"any(e['path']=='/etc/hostname' for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True && [ \"\$(vdet vmm-sensitive-open '/etc/hostname' '')\" = 0 ]"
+check "an ordinary file is an event and no detection" "vrec \"any(e.get('path','')=='/etc/hostname' for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True && [ \"\$(vdet vmm-sensitive-open '/etc/hostname' '')\" = 0 ]"
 trigger 'cat /tmp/rig-vmm-secret >/dev/null 2>&1'
 check "a path the rules file adds is sensitive" "[ \"\$(vdet vmm-sensitive-open 'matches /tmp/rig-vmm-secret' '')\" -ge 1 ]"
 trigger 'cat /etc/gshadow >/dev/null 2>&1'
-check "a path the rules file exempts is an event and no detection, though the defaults would have flagged it" "vrec \"any(e['path']=='/etc/gshadow' for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True && [ \"\$(vdet vmm-sensitive-open '/etc/gshadow' '')\" = 0 ]"
+check "a path the rules file exempts is an event and no detection, though the defaults would have flagged it" "vrec \"any(e.get('path','')=='/etc/gshadow' for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True && [ \"\$(vdet vmm-sensitive-open '/etc/gshadow' '')\" = 0 ]"
 trigger 'echo x > /tmp/rig-vmm-secret; rm -f /tmp/rig-vmm-secret'
-check "an open that writes says so" "[ \"\$(vdet vmm-sensitive-open 'opened for writing /tmp/rig-vmm-secret' '')\" -ge 1 ] && vrec \"any(e.get('write') and e['path']=='/tmp/rig-vmm-secret' for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True"
+check "an open that writes says so" "[ \"\$(vdet vmm-sensitive-open 'opened for writing /tmp/rig-vmm-secret' '')\" -ge 1 ] && vrec \"any(e.get('write') and e.get('path','')=='/tmp/rig-vmm-secret' for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True"
 trigger "python3 -c \"
 import os, time
 os.chdir('/etc')
@@ -495,7 +495,7 @@ try:
 except OSError:
     pass
 time.sleep(4)\" &"
-check "a relative path from a process still there is resolved from its working directory, and the event says how" "vrec \"any(e['path']=='/etc/shadow' and e['comm']=='python3' and 'resolved from the process' in e.get('detail','') and '(/etc)' in e['detail'] for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True"
+check "a relative path from a process still there is resolved from its working directory, and the event says how" "vrec \"any(e.get('path','')=='/etc/shadow' and e['comm']=='python3' and 'resolved from the process' in e.get('detail','') and '(/etc)' in e['detail'] for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True"
 check "and, resolved, it is judged: a detection from the program that opened it" "[ \"\$(vdet vmm-sensitive-open '/etc/shadow' 'python3 (pid')\" -ge 1 ]"
 
 echo "-- the calls a VMM never makes"
@@ -521,7 +521,7 @@ for i in range(1500):
 sleep 2
 check "a VMM that opens more than the limit in a second is reported as a flood, critical, with how many were not reported" \
   "api $U/api/v1/events | J \"any(e['severity']=='critical' and 'more file opens and calls in a second' in e['message'] for e in d['events'] if e['kind']=='detection' and e.get('rule')=='vmm-flood')\" | grep -q True"
-check "and no more than the limit of them were reported one by one" "vrec \"50 <= len([e for e in d['events'] if e['kind']=='vmm_file_open' and e['path'].startswith('/nonexistent-rig-flood-')]) <= 320\" | grep -q True"
+check "and no more than the limit of them were reported one by one" "vrec \"50 <= len([e for e in d['events'] if e['kind']=='vmm_file_open' and e.get('path','').startswith('/nonexistent-rig-flood-')]) <= 320\" | grep -q True"
 
 echo "-- only a VMM and what it started"
 cat /etc/shadow >/dev/null 2>&1 & NOTVMM=$!; wait $NOTVMM 2>/dev/null; sleep 1
