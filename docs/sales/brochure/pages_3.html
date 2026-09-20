@@ -18,6 +18,44 @@
 <div class="callout"><b>Isolation is real, and conditional.</b> It needs an explicit allow list (<code>-isolate-allow</code>) and Linux 6.6 or newer, and is refused without them, because a VM that could reach nothing could not be reached by the host that isolated it. <code>applied</code> is true only after the kernel took the change on every tap; a half-applied isolation is reported <code>partial</code>, not silently reopened. It blocks the VM's tap: it does not touch vhost-user or SR-IOV interfaces.</div>
 </div></section>
 
+<section class="page" data-title="Right-size"><div class="body">
+<div class="eyebrow">Beyond the incident &middot; capacity</div>
+<h1>Is this VM the right size?</h1>
+<p class="lede">A VM that idles at eight vCPUs wastes host CPU, and one that wants CPU and is not getting it costs its users. The counters Shukra already has answer both, in both directions. The answer is advice for a person, with the numbers and how sure it is. Nothing here resizes a VM.</p>
+<figure class="dia" style="width:88%;margin:4px auto 2px">{{dia:rightsize}}</figure>
+<p class="caption" style="margin-top:0">Illustrative fixture numbers, over a five-minute window.</p>
+<div class="cards c2">
+<div class="card"><h3>What it prints</h3><p><code>shukractl advise</code> shows, per VM, the share of the window its vCPUs were halted, busy and preempted, then advice: <code>overprovisioned</code> (with a size that leaves twice the headroom it used), <code>starved</code>, <code>nearly_idle</code>, <code>no_change</code>, <code>not_enough_data</code> or <code>idle_unavailable</code>.</p></div>
+<div class="card warm"><h3>A lower bound, and a gap it shows</h3><p>Idleness is HLT exit time, so a guest that idles by polling reads as busy. The share that is neither halted nor on a CPU is reported, and when it is 30% or more, <code>no_change</code> says that is not proof the VM is right-sized.</p></div>
+<div class="card warm"><h3>Only where the CPU names the exit</h3><p>Exit reasons are named on Intel hosts. Elsewhere Shukra says <code>idle_unavailable</code> and claims nothing about over-provisioning; starvation is still reported.</p></div>
+<div class="card"><h3>How sure</h3><p>Every piece of advice carries a confidence and its evidence. A window under three minutes lowers it; under 20 seconds of history the answer is <code>not_enough_data</code>. Only vCPU threads count.</p></div>
+</div>
+<figure style="margin:8px 0 4px"><div class="crop" style="height:1.72in"><img style="margin-top:-20.8%" src="shots/advice.png" alt=""></div><figcaption>Illustrative: the Right-size page, rendered from fixture data. It sits in the Diagnostics group.</figcaption></figure>
+<div class="callout"><b>Advice, not an action.</b> Starved VMs are told to reduce what they compete with (pinning, moving a neighbour) before adding vCPUs, because more vCPUs mean more threads competing for the same host CPUs. A person decides.</div>
+</div></section>
+
+<section class="page" data-title="Baselines"><div class="body">
+<div class="eyebrow">Beyond the incident &middot; what is new</div>
+<h1>What is new for this VM?</h1>
+<p class="lede">A watchlist needs someone to know what is bad. A baseline needs no one to know: it learns what each VM normally does and reports the first time it does something new. A web server that has talked to the same three networks for a month and suddenly talks to a fourth is worth a look, and no rule had to name that network in advance.</p>
+<figure class="dia" style="width:94%;margin:6px auto 4px">{{dia:baseline}}</figure>
+<div class="cards c2">
+<div class="card"><h3>Coarse on purpose</h3><p>A whole network and a whole site, not an address and a host, so a service that moves between neighbouring addresses or a site with a new subdomain is not new each time. A short built-in list of 63 two-label suffixes (<code>co.uk</code>, <code>com.au</code>) keeps names right without the full public suffix list; for one it lacks, a name is learned too wide, which is quieter and never louder.</p></div>
+<div class="card"><h3>Only what the tap sees</h3><p>Everything is learned from the VM's own tap, so every detection is guest-attributed. A host connect belongs to QEMU and is never learned. A VM first seen later has its own learning period, so a new VM does not alarm for its first day.</p></div>
+</div>
+<pre class="term"><span class="p">$</span> shukractl baseline
+BASELINE  learning period 24h0m0s, at most 20 new-item alerts per VM per day
+  vm=web-01  learning until 2026-09-21T03:00:00Z  (destination 4, dns-suffix 2, inbound-peer 0)  new alerts today 0, held back in all 0
+  vm=db-01  reporting  (destination 9, dns-suffix 1, inbound-peer 1)  new alerts today 3, held back in all 5
+<span class="d">[medium] new-destination  web-01 contacted 192.0.2.0/24 for the first time (tcp to 192.0.2.44:22)</span>
+<span class="d">as printed in docs/baselines.md (documentation example addresses)</span></pre>
+<div class="cards c2">
+<div class="card on"><h3>Turned on by you</h3><p>Off unless the rules file has a <code>baselines:</code> section. It needs <code>-data-dir</code>: without it, learning starts over with every restart and a daemon that restarts more often than the learning period would never report anything. <code>shukractl doctor</code> warns about exactly that.</p></div>
+<div class="card"><h3>Forgetting is recorded</h3><p><code>shukractl baseline VM --forget</code> (admin key only) restarts a VM's learning after a deliberate change. It could also hide a change, so it is recorded as a <code>baseline-forgotten</code> detection naming who did it.</p></div>
+</div>
+<div class="callout red"><b>A guest can hide inside its own learning period.</b> Whatever it does in the first 24 hours becomes normal. Start a VM you do not trust under a watchlist (<code>destinations</code>, <code>dns</code>), not a baseline. Past the daily cap, new items are still learned and counted but not reported, and one <code>baseline-cap</code> detection says so.</div>
+</div></section>
+
 <section class="page" data-title="What Shukra reads"><div class="body">
 <h1>What Shukra reads, and what it never does</h1>
 <p class="lede">The accurate promise is stronger than "no agent": nothing runs inside a guest, no application data is read, and the one thing read beyond headers is stated here, can be turned off, and is bounded.</p>
@@ -32,7 +70,9 @@
 <tr><td class="k">Are host TCP events the guest's?</td><td>No. Host connects are the QEMU process's own sockets, labelled <code>qemu-process</code> and <code>guest_attributed: false</code>. Only events seen on a VM's tap are <code>guest-tap</code> and guest-attributed, and only for a tap that belongs to a VM in the current scan. A tap no VM owns stays <code>unattributed</code>.</td></tr>
 <tr><td class="k">Can a guest change what is attributed to it?</td><td>No. Attribution comes from the tap's owner, found on the host, not from anything in a packet.</td></tr>
 <tr><td class="k">Can a hostile guest hurt the daemon?</td><td>It can generate load, not growth. Tables keyed by packet contents are fixed-size LRUs; events from a tap are rate-limited to 200 per second; DNS names are cut at 253 bytes with every non-printable byte replaced, so a name cannot carry an escape sequence into a log.</td></tr>
-<tr><td class="k">Who can isolate a VM?</td><td>The admin key only. A separate read-only key reads everything, including <code>/metrics</code> and the stream, and cannot isolate or release. Give that one to Prometheus.</td></tr>
+<tr><td class="k">Can a guest game the baselines?</td><td>Only its own learning period: whatever it does in the first 24 hours becomes normal. Its sets are fixed-size, alerts are capped per VM per day with one <code>baseline-cap</code> detection, and a forget request is recorded with who made it. Untrusted VMs belong under a watchlist.</td></tr>
+<tr><td class="k">Does the advisor change anything?</td><td>No. Right-size advice is text for a person, with the evidence and a confidence. Nothing resizes a VM.</td></tr>
+<tr><td class="k">Who can isolate a VM?</td><td>The admin key only, which is also the only key that can forget a learned baseline. A separate read-only key reads everything, including <code>/metrics</code> and the stream, and cannot change anything. Give that one to Prometheus.</td></tr>
 <tr><td class="k">What does an incident bundle expose?</td><td>VM names, addresses and DNS names, as the event list does. It holds nothing from the daemon's configuration except the allow list. It is written with mode 0600.</td></tr>
 <tr><td class="k">What does the daemon need to run?</td><td>Root with six capabilities and a read-only filesystem apart from its data directory (<code>0700</code>). <code>CAP_SYS_PTRACE</code> and <code>CAP_DAC_READ_SEARCH</code> are used only to read a libvirt VM's tap names from <code>/proc/&lt;pid&gt;/fd</code>; drop them if you run no libvirt VMs.</td></tr>
 </table>
@@ -40,12 +80,12 @@
 </div></section>
 
 <section class="page" data-title="Console tour"><div class="body">
-<h1>The console: thirteen pages, five groups</h1>
+<h1>The console: fourteen pages, five groups</h1>
 <p class="lede">The console is served by the daemon on port 30970 and talks only to its API. Every page says what it knows, how it knows it, and what it cannot see.</p>
 <div class="cards c4" style="margin-bottom:6px">
 <div class="card warm"><h3>Overview</h3><p>Programs attached, VMs found, detections, and the host banner.</p></div>
 <div class="card warm"><h3>Investigate</h3><p>Virtual machines, Flight recorder, Explain.</p></div>
-<div class="card warm"><h3>Diagnostics</h3><p>KVM, Scheduler, Contention, Block, Programs.</p></div>
+<div class="card warm"><h3>Diagnostics</h3><p>KVM, Scheduler, Contention, Right-size, Block, Programs.</p></div>
 <div class="card warm"><h3>Network + Security</h3><p>Host connections, Drops. Detections, Isolate.</p></div>
 </div>
 <figure style="margin:8px 0 4px"><div class="crop" style="height:2.9in"><img style="margin-top:-18.5%" src="shots/explain.png" alt=""></div><figcaption>Explain: ranked findings in the daemon's own words, an At field for a past time, and the incident bundle download.</figcaption></figure>

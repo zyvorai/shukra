@@ -220,7 +220,7 @@ def system():
     o.append(text(190, 281, "detections · isolations · recorder · snapshots", 9, 400, SOFT))
     o.append(line(215, 244, 215, 256, SOFT, 1.2, "3 3"))
     outs = [
-        (10, "shukractl and the console", "the operator loop: 15 commands, 13 pages", "#fff", INK, None),
+        (10, "shukractl and the console", "the operator loop: 17 commands, 14 pages", "#fff", INK, None),
         (70, "Prometheus", "GET /metrics with the read-only key", "#fff", INK, None),
         (130, "Alert sinks", "signed webhook, syslog, JSONL file", "#fff", INK, None),
         (190, "Detection rules", "one YAML file, reloaded on SIGHUP", "#fff", INK, None),
@@ -235,6 +235,81 @@ def system():
     return svg(720, 312, "".join(o), "Shukra on a hypervisor and what connects to it")
 
 
+# ---------------------------------------------------------------- 8. right-sizing
+def rightsize():
+    o = []
+    o.append(text(0, 12, "WHAT THE ADVICE STANDS ON: THE SHARE OF EACH VM'S vCPU CAPACITY OVER THE WINDOW", 9.5, 700, DEEP, spacing=0.6))
+    rows = [
+        ("batch-etl-01", "8 vCPUs", (91, 7, 2), "overprovisioned: about 0.6 vCPUs used; 2 would leave twice the headroom it used"),
+        ("payment-prod-03", "4 vCPUs", (10, 74, 16), "starved: preempted 17% of the time it wanted to run"),
+    ]
+    y = 26
+    for name, cpus, (h, b, n), verdict in rows:
+        o.append(text(0, y + 12, name, 10.5, 700))
+        o.append(text(0, y + 25, cpus, 9, 400, SOFT))
+        x0, w = 150, 560
+        segs = [(h, "#c9c1b5", "halted", INK), (b, SIG, "busy", "#fff"), (n, "#efe9df", "", INK)]
+        x = x0
+        for pct, col, lab, tc in segs:
+            sw = w * pct / 100
+            o.append(rect(x, y, sw, 26, col, "none", 0, 0))
+            if sw > 60 and lab:
+                o.append(text(x + sw / 2, y + 17, f"{lab} {pct}%", 9.5, 700, tc, "middle"))
+            elif pct >= 10 and not lab:
+                o.append(text(x + sw / 2, y + 17, f"neither {pct}%", 9, 700, tc, "middle"))
+            x += sw
+        if b < 40 and h > 50:
+            pass
+        o.append(text(x0, y + 42, verdict, 9.2, 400, SOFT, italic=True))
+        y += 62
+    o.append(rect(150, y - 4, 12, 10, "#c9c1b5", "none", 0, 2))
+    o.append(text(168, y + 5, "halted: HLT exit time, a lower bound on idleness", 8.8, 400, SOFT))
+    o.append(rect(420, y - 4, 12, 10, SIG, "none", 0, 2))
+    o.append(text(438, y + 5, "busy: the vCPU threads on a CPU", 8.8, 400, SOFT))
+    o.append(rect(150, y + 12, 12, 10, "#efe9df", LINE, 1, 2))
+    o.append(text(168, y + 21, "neither: never halted and not on a CPU (polling, MWAIT, or offline in the guest)", 8.8, 400, SOFT))
+    y += 40
+    cards = [
+        ("Overprovisioned", "2 or more vCPUs, halted at least 80% and busy at most 20%"),
+        ("Starved", "busy at least 50%, and preempted 10% or a vCPU waiting 2 ms for a CPU"),
+        ("Nearly idle", "one vCPU, halted at least 95%: a consolidation candidate"),
+    ]
+    for i, (t, b) in enumerate(cards):
+        x = i * 247
+        o.append(card(x, y, 226, 66, t, b, cw(226, 9.5), "#fff", INK, size=9.5, tsize=11))
+    return svg(720, y + 76, "".join(o), "How the right-sizing advisor reads a VM's vCPU capacity")
+
+
+# ---------------------------------------------------------------- 9. learned baselines
+def baseline():
+    o = []
+    o.append(text(0, 12, "A VM IS ONLY OBSERVED FIRST; THEN THE FIRST SIGHTING OF ANYTHING NEW IS REPORTED, ONCE", 9.5, 700, DEEP, spacing=0.6))
+    o.append(rect(0, 24, 300, 36, GREY, LINE, 1.2, 8))
+    o.append(text(12, 46, "learning: recorded, nothing reported", 10.2, 700))
+    o.append(rect(300, 24, 420, 36, PALE, SIG, 1.4, 8))
+    o.append(text(312, 46, "reporting: a first sighting becomes one detection", 10.2, 700))
+    o.append(line(300, 20, 300, 68, DEEP, 1.4, "3 3"))
+    o.append(text(0, 78, "first time the VM is seen", 9, 400, SOFT))
+    o.append(text(300, 78, "24 h later (learn: 24h is the default)", 9, 700, DEEP, "middle"))
+    kinds = [
+        ("new-destination", "medium", "a network the guest never contacted before: the /24 of an IPv4 address, the /64 of an IPv6 address"),
+        ("new-dns-suffix", "low", "a site it never looked up: example.co.uk, not the host name in front of it"),
+        ("new-inbound-peer", "medium", "a network that never connected in to the guest before"),
+    ]
+    for i, (t, sev, b) in enumerate(kinds):
+        x = i * 247
+        o.append(rect(x, 96, 226, 92, "#fff", SIG, 1.4, 9))
+        o.append(text(x + 12, 116, t, 10.5, 700, DEEP, mono=True))
+        o.append(text(x + 12, 130, "severity " + sev, 8.6, 700, SOFT))
+        bb, _ = lines(x + 12, 145, b, cw(226, 9), 9, 10.5, 400, SOFT)
+        o.append(bb)
+    o.append(rect(0, 204, 720, 62, WARM, LINE, 1.2, 9))
+    o.append(text(12, 222, "Bounded against a guest that controls what it says", 10.5, 700))
+    bb, _ = lines(12, 237, "Fixed-size sets (2048 per kind); at most 20 alerts per VM per day, then one baseline-cap detection; unseen items are forgotten after 30 days. Off unless the rules file has a baselines: section.", cw(720, 9.2), 9.2, 11, 400, SOFT)
+    o.append(bb)
+    return svg(720, 276, "".join(o), "Learned baselines: a learning period, then first sightings reported once")
+
+
 ALL = {
     "ebpf": ebpf_pipeline,
     "hypervisor": hypervisor,
@@ -243,4 +318,6 @@ ALL = {
     "pasttime": past_time,
     "handshake": handshake_isolate,
     "system": system,
+    "rightsize": rightsize,
+    "baseline": baseline,
 }
