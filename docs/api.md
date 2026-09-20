@@ -103,7 +103,7 @@ An event carries `seq` (only grows), `product: "shukra"`, `kind`, `ts`, `vm` (`n
 
 | Route | Returns |
 |---|---|
-| `GET /api/v1/events?since=<seq>&vm=<name>` | `{"seq", "events"}`: events newer than `seq`, so a poller never misses one or repeats one. The daemon keeps the last 2048 |
+| `GET /api/v1/events?since=<seq>&vm=<name>` | `{"seq", "events"}`: events newer than `seq`, so a poller never misses one or repeats one. The daemon keeps 2048 in all, with a share reserved for each kind of event so a flood of one cannot push out the others (see [architecture](architecture.md#state-windows-and-history)) |
 | `GET /api/v1/stream?since=<seq>&vm=<name>` | The same as server-sent events. Each frame's `id` is the event `seq`, so a reconnect resumes with `Last-Event-ID` |
 | `GET /api/v1/detections?vm=<name>` | Detections, capped like events |
 

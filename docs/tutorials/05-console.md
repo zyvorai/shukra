@@ -41,6 +41,17 @@ The Explain page has an **At** field. Left blank it is the live verdict, refresh
 
 Explain, Flight recorder and Isolate each have a VM field. It opens on the first VM the daemon knows and suggests the others as you type. If the daemon knows no VM the field is empty; it never opens on a made-up name.
 
+## Filtering the connection tables
+
+Host connections, guest connections and DNS names are lists of recent events, and on a busy host (k3s, cilium) the host list alone is hundreds of rows. Each table is **newest first**, shows **50 rows**, and says how many there are in all (`Host connections (247)`, `Showing the newest 50 of 247.`) with a button to show 50 more. Nothing is cut off silently.
+
+Two controls above the tables narrow all of them at once:
+
+- **Show**: everything, **host processes (no VM)** (the connects made by k3s, cilium and other host software, which belong to no VM), or one VM. Choosing a VM also narrows the per-tap table to that VM's tap, and choosing host processes empties it, since a host process has no tap.
+- **Search**: text matched, ignoring case, against the address, port, DNS name, query type, protocol, kind and attribution.
+
+An empty result says `Nothing matches this filter.`, which is different from `None seen yet.`. The filter is in your browser: it works on the events the daemon holds: 2048 in all, with a share reserved for each kind (guest events, host connects, detections and so on), so a flood of host connects cannot push a guest's events out. A busy kind is still trimmed to its share when the list is full, so the oldest host connects are the ones that go.
+
 ## Isolate
 
 The controls are enabled only when the daemon reports it can enforce: the tap program is attached and a management allow list is configured. Otherwise the page says why (for example that no allow list is set) and the buttons stay disabled. Isolate asks for a second confirmation that names what will be cut off, what stays reachable, and what happens if the daemon stops, and the result shown is what the daemon reported: applied, refused, or only partly done. Release lifts it. See [Guest traffic and isolation](../tap.md).

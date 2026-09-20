@@ -11,6 +11,14 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 - The Explain page has an **At** field and a **Download incident bundle** button.
 - Fixed: a live Explain with no recorder events returned `"events": null` instead of `[]`.
 
+### Events: a share for each kind
+
+- The daemon's 2048-event list is no longer one oldest-first queue. Each kind of event has a share that a flood of another kind cannot take (guest 512, host network 512, and 256 each for notable, process, latency and other), so a guest's DNS name or an inbound connect is no longer evicted within minutes by a k3s node's connects or slow-block samples. A kind may still use every slot while nothing else wants them. See [architecture](docs/architecture.md#state-windows-and-history).
+
+### Console: filtering the connection tables
+
+- Host connections, guest connections and DNS names are newest first, show 50 rows with the total (`Host connections (247)`) and a "show 50 more" button, and can be narrowed by VM (or "host processes (no VM)") and by a search on address, port, name or kind. An empty result says whether it is the filter or nothing has happened.
+
 ### Console text and defaults
 
 - The VM field on Explain, Flight recorder and Isolate opens on the first VM the daemon actually knows and suggests the others, instead of a fixture name (`payment-prod-03`) that does not exist on the host.

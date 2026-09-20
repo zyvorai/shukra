@@ -70,7 +70,19 @@ It is the only program that touches traffic, so it is the one to understand.
 - A snapshot of every VM's counters is taken at most every **10 seconds** and kept for **6 minutes**. Drop counts and handshake outcomes are snapshotted beside them.
 - **Explain, doctor, and the threshold rules read the difference between now and a snapshot one window ago.** The default window is 60 seconds and the longest is 5 minutes. With less than 20 seconds of history the answer falls back to the lifetime and says so. A counter that went backwards was reset, and reads as what happened since the reset, not as a huge number.
 - Whether a program is measuring at all is always a lifetime fact, so a quiet minute is never mistaken for a detached program.
-- Events (last 2048), detections (last 2048) and the flight recorder (4096 events per VM) are bounded rings.
+- Events, detections and the flight recorder (4096 events per VM) are bounded. Detections are the last 2048.
+- **Events are 2048 in all, but not one queue.** A busy host produces a few kinds by the hundreds a second (a k3s node's connects, slow-block samples), and a plain oldest-first queue lets them push out the rare ones an operator is looking for: a guest's DNS name, a connection made into a VM, a detection. Each kind belongs to a class with a share no other class can take:
+
+  | Class | Kinds | Share |
+  |---|---|---|
+  | guest | `guest_connect`, `guest_flow`, `guest_inbound`, `guest_dns` | 512 |
+  | host network | `tcp_connect`, `tcp_retransmit` | 512 |
+  | notable | `detection`, `vm_start`, `vm_stop` | 256 |
+  | process | `exec`, `exit` | 256 |
+  | latency | `block_slow`, `sched_delay` | 256 |
+  | other | any kind this build does not know | 256 |
+
+  The shares add up to 2048 and only matter once the list is full. A class may use every slot while nobody else wants them, so a host that produces one kind still keeps 2048 of it. When the list is full, the oldest event of the class **furthest over its share** is dropped, so a class under its share is never the one that loses. Events still come back in `Seq` order, and a poller resuming from the last `Seq` it saw never misses or repeats one that is still held. The tests pin all of this, including that the victim is chosen by share and not by size.
 
 ## Detection
 

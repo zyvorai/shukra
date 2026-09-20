@@ -97,7 +97,7 @@ type State struct {
 	programs      []Program
 	byPID         map[uint32]aggregate.Counters
 	detections    []event.Event
-	events        []event.Event
+	events        eventStore
 	isolations    []Isolation
 	rec           *recorder.Recorder
 	seq           uint64
@@ -212,10 +212,7 @@ func (s *State) AddEvent(e event.Event) {
 	s.mu.Lock()
 	s.seq++
 	e.Seq = s.seq
-	s.events = append(s.events, e)
-	if len(s.events) > MaxEvents {
-		s.events = append([]event.Event(nil), s.events[len(s.events)-MaxEvents:]...)
-	}
+	s.events.add(e)
 	switch e.Kind {
 	case event.KindDetection:
 		s.detections = append(s.detections, e)
@@ -255,13 +252,7 @@ func (s *State) Events(vm string) []event.Event {
 func (s *State) EventsSince(vm string, since uint64) []event.Event {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var out []event.Event
-	for _, e := range s.events {
-		if e.Seq > since && (vm == "" || e.VM.Name == vm) {
-			out = append(out, e)
-		}
-	}
-	return out
+	return s.events.since(vm, since)
 }
 
 func (s *State) Detections(vm string) []event.Event {
