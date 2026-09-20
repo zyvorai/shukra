@@ -4,6 +4,10 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### Console: filtering the connection tables
+
+- Host connections, guest connections and DNS names are newest first, show 50 rows with the total (`Host connections (247)`) and a "show 50 more" button, and can be narrowed by VM (or "host processes (no VM)") and by a search on address, port, name or kind. An empty result says whether it is the filter or nothing has happened.
+
 ### Console text and defaults
 
 - The VM field on Explain, Flight recorder and Isolate opens on the first VM the daemon actually knows and suggests the others, instead of a fixture name (`payment-prod-03`) that does not exist on the host.
