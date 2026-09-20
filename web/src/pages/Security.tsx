@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { api } from '../api';
+import VMInput from '../components/VMInput';
 import { describeEnforcement, describeResult, type Isolation, type Security } from '../enforce';
 import { LIVE_MS, useAPI } from '../useAPI';
+import { useVMName } from '../useVMName';
 
 type Det = { severity?: string; dst?: string; message?: string; guest_attributed: boolean; ts: string };
 
@@ -27,7 +29,7 @@ export function Detections() {
 }
 
 export function Isolate() {
-  const [vm, setVM] = useState('payment-prod-03');
+  const { vm, setVM: setTyped, names } = useVMName();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
@@ -59,7 +61,7 @@ export function Isolate() {
       <div className="toolbar">
         <label>
           VM
-          <input value={vm} onChange={(e) => { setVM(e.target.value); setConfirming(false); setResult(null); }} aria-label="VM to isolate" />
+          <VMInput value={vm} names={names} onChange={(v) => { setTyped(v); setConfirming(false); setResult(null); }} label="VM to isolate" />
         </label>
         <button type="button" className="primary" disabled={!view.canAct || busy || vm === ''} aria-describedby="isolate-why" onClick={() => setConfirming(true)}>
           Isolate…
@@ -70,7 +72,7 @@ export function Isolate() {
       </div>
       {!view.canAct && (
         <p id="isolate-why" className="warning">
-          The controls stay disabled until the daemon can enforce. shukractl isolate {vm} would only record an audit row.
+          The controls stay disabled until the daemon can enforce, because an isolate request would be refused. What is missing is described above.
         </p>
       )}
       {confirming && (

@@ -20,11 +20,11 @@ function readPage(): Page {
 }
 
 const heroes: Partial<Record<Page, { eyebrow: string; title: string; lede: string; tint?: HeroTint }>> = {
-  vms: { eyebrow: 'Investigate', title: 'Know the virtual machine.', lede: 'Name, UUID, and tap names come from the QEMU command line.', tint: 'green' },
+  vms: { eyebrow: 'Investigate', title: 'Know the virtual machine.', lede: 'Name, UUID and the traced interface come from the host: the QEMU command line, or FluxVM\'s store.', tint: 'green' },
   recorder: { eyebrow: 'Investigate', title: 'Replay the last minute.', lede: 'A bounded ring per VM. Spikes, not every KVM exit.', tint: 'purple' },
   explain: { eyebrow: 'Investigate', title: 'Why is this VM slow?', lede: 'Only the evidence this build collected. Missing signals stay listed.', tint: 'amber' },
   kvm: { eyebrow: 'Diagnostics', title: 'KVM exits, counted.', lede: 'Exit counts, how long the host spends handling them, and which reasons cost the most. Not one event per exit.', tint: 'green' },
-  sched: { eyebrow: 'Diagnostics', title: 'Scheduler delay.', lede: 'On-CPU time and run-queue delay for QEMU threads, and which thread is slow.', tint: 'amber' },
+  sched: { eyebrow: 'Diagnostics', title: 'Scheduler delay.', lede: 'On-CPU time and run-queue delay for QEMU threads, which thread is slow, and how long the vCPUs were taken off a host CPU and by whom.', tint: 'amber' },
   block: { eyebrow: 'Diagnostics', title: 'Block latency.', lede: 'Requests, bytes, worst case and the latency distribution, from a log2 histogram on the QEMU I/O thread.', tint: 'amber' },
   programs: { eyebrow: 'Diagnostics', title: 'What is attached.', lede: 'kvm, sched, block, net, tap and drops. Detached is an honest state.', tint: 'green' },
   connections: { eyebrow: 'Network', title: 'Host connections.', lede: "QEMU's own connects, and the guest's own on its tap when the tap program is attached.", tint: 'purple' },

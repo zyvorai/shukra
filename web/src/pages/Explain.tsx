@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import VMInput from '../components/VMInput';
 import { LIVE_MS, useAPI } from '../useAPI';
+import { useVMName } from '../useVMName';
 
 type Finding = { cause: string; confidence: string; summary: string; evidence?: string[] };
 
@@ -14,7 +16,7 @@ type ExplainBody = {
 };
 
 export default function Explain() {
-  const [vm, setVM] = useState('payment-prod-03');
+  const { vm, setVM, names } = useVMName();
   const [window, setWindow] = useState('60s');
   const { data, err } = useAPI<ExplainBody>(`/api/v1/explain?vm=${encodeURIComponent(vm)}&window=${window}`, { refreshMs: LIVE_MS });
   return (
@@ -22,7 +24,7 @@ export default function Explain() {
       <div className="toolbar">
         <label>
           VM
-          <input value={vm} onChange={(e) => setVM(e.target.value)} aria-label="VM to explain" />
+          <VMInput value={vm} names={names} onChange={setVM} label="VM to explain" />
         </label>
         <label>
           Look back

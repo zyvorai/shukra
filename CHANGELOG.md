@@ -4,6 +4,13 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### Console text and defaults
+
+- The VM field on Explain, Flight recorder and Isolate opens on the first VM the daemon actually knows and suggests the others, instead of a fixture name (`payment-prod-03`) that does not exist on the host.
+- The sign-in page names the daemon you are talking to, not `127.0.0.1:30970`.
+- Text that had fallen behind the product: the Overview said network events stay on the QEMU process "until tap/TCX ships" and that guest tap flows are not measured; the Host connections banner said tap attribution is not attached; the Isolate page said isolate "would only record an audit row". The Overview now says a guest is not measured only when it has fetched the programs and the tap is off.
+- Table titles no longer say "Ns" for durations that are shown with a unit (1.2 ms); the Scheduler and VMs heroes mention preemption and FluxVM.
+
 ### vCPU preemption: who took the CPU
 
 - **The `sched` program now records preemption:** when a QEMU thread leaves a CPU while still runnable, who took the CPU is remembered, and the wait is charged when the thread runs again. Reported for vCPU threads only, by VM (`vm:<name>`) or host command name. See [vCPU preemption](docs/signals.md#vcpu-preemption).

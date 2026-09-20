@@ -1,10 +1,12 @@
 import { useState } from 'react';
+import VMInput from '../components/VMInput';
 import { useAPI } from '../useAPI';
+import { useVMName } from '../useVMName';
 
 type Ev = { ts: string; kind: string; message?: string; dst?: string; attribution: string; guest_attributed: boolean };
 
 export default function Recorder() {
-  const [vm, setVM] = useState('payment-prod-03');
+  const { vm, setVM, names } = useVMName();
   const [windowed, setWindowed] = useState(true);
   const { data, err } = useAPI<{ window: string; events: Ev[] }>(`/api/v1/recorder?vm=${encodeURIComponent(vm)}&window=${windowed ? '60s' : '24h'}`);
   return (
@@ -12,7 +14,7 @@ export default function Recorder() {
       <div className="toolbar">
         <label>
           VM
-          <input value={vm} onChange={(e) => setVM(e.target.value)} aria-label="VM name" />
+          <VMInput value={vm} names={names} onChange={setVM} label="VM name" />
         </label>
         <button type="button" className="primary" onClick={() => setWindowed(true)}>
           Replay last 60 seconds
