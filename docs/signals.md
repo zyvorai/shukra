@@ -1,6 +1,6 @@
 # What each program measures
 
-Five of the six programs see the **VMM process** from the host: QEMU, or a FluxVM backend (`cloud-hypervisor`, `firecracker`, `fluxvm-hypervisor`). That is the vCPU and I/O threads, its block requests, its own sockets. The `tap` and `drops` programs see the **guest's traffic** on the host side of its tap, or on the host veth FluxVM uses when the tap is in a per-VM netns. None of it is measured inside the guest: Shukra never runs anything in the VM, so it can say which VM and which address, never which process. See [attribution](attribution.md) and [FluxVM](tap.md#fluxvm).
+Six of the seven programs see the **VMM process** from the host (the `vmm` program watches what it and its children open and call, see [VMM tripwires](vmm-tripwires.md)): QEMU, or a FluxVM backend (`cloud-hypervisor`, `firecracker`, `fluxvm-hypervisor`). That is the vCPU and I/O threads, its block requests, its own sockets. The `tap` and `drops` programs see the **guest's traffic** on the host side of its tap, or on the host veth FluxVM uses when the tap is in a per-VM netns. None of it is measured inside the guest: Shukra never runs anything in the VM, so it can say which VM and which address, never which process. See [attribution](attribution.md) and [FluxVM](tap.md#fluxvm).
 
 | Program | Records | Caveat |
 |---|---|---|

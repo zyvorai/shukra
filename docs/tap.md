@@ -59,6 +59,7 @@ User-mode NAT (`network.mode` `user`, QEMU SLIRP) has no host interface. The VM 
 | What | Joined by | Notes |
 |---|---|---|
 | KVM exits, on-CPU time, run-queue delay, block latency | The VMM's thread group | Block latency is the VMM's I/O, not a filesystem inside the guest. A `vhost-*` kernel thread outside the thread group is not included. |
+| `vmm_file_open` and `vmm_syscall` | The VMM the calling process is, or descends from within three parents (`vmm_watched`, the same pids as above) | `attribution` is `qemu-process`: what the VMM or something it started did. See [VMM tripwires](vmm-tripwires.md) |
 | `exec` and `exit` | The parent's tgid, if that tgid is watched | The watched set is every VMM pid from the scan. `qemu-system*`, `cloud-hypervisor`, `firecracker`, `fluxvm-hypervisor` and `jailer` are allowed execs, so a boot is not an unexpected-exec detection. `cpu`, `io`, `vhost` and `kvm` in the comm are allowed too. |
 | Host TCP (`tcp_v4_connect`, `tcp_v6_connect`, retransmits) | The socket owner | `attribution` stays `qemu-process` for every backend. That string means "the VMM's socket, not the guest". It was not renamed, so a client that matches it still matches. |
 | Guest connects, flows, inbound SYNs, DNS and TLS names, handshakes, drops, isolation | The host interface above | `attribution` is `guest-tap`. DNS and TLS names are read from the packets on that interface the same way they are on a QEMU tap. |

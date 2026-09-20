@@ -26,8 +26,23 @@ func Attach() ([]Status, error) {
 		try("sched", LoadSched),
 		try("block", LoadBlock),
 		try("net", LoadNet),
+		tryUnlessDisabled("vmm", LoadVmm),
 		tryDrops(),
 	}, nil
+}
+
+// disabled holds the programs an operator turned off, with the reason each reports.
+var disabled = map[string]string{}
+
+// Disable keeps a program from being loaded, and gives the reason it will report. It must be called before
+// Attach, which is the first use of Programs.
+func Disable(name, why string) { disabled[name] = why }
+
+func tryUnlessDisabled(name string, load specFunc) Status {
+	if why, off := disabled[name]; off {
+		return Status{Name: name, Status: "detached", Detail: why}
+	}
+	return try(name, load)
 }
 
 // Loaded is one attached collection. Sample and the ring reader use it.

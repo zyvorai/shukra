@@ -55,6 +55,21 @@ destinations:
 #     suffix: cloudflare-dns.com
 #     severity: medium
 
+# VMM tripwires: the files a QEMU process (or anything it started) opens, and the calls it has
+# no business making, reported with no configuration at all. A VMM in steady state opens nothing
+# and never calls ptrace, mount, unshare, setns or the module and kexec calls, so when one does,
+# something is wrong: a guest that escaped into the VMM, or a shell inside it. This section only
+# changes what counts. Paths are absolute; * stands for one path segment (/proc/*/mem); a path
+# matches itself and everything under it. The built-in list has /etc/shadow, /etc/sudoers, /etc/ssh,
+# /root/.ssh, /home/*/.ssh, /proc/*/mem, /proc/kcore, docker and containerd sockets, /etc/shukra and
+# /var/lib/shukra. Run shukrad with -vmm-tripwires=false to not load the program at all.
+# vmm:
+#   paths: [/srv/secrets]            # sensitive as well as the built-in list
+#   ignore: [/root/images]           # never reported: a disk image kept under a directory above
+#   syscalls: [ptrace, setns]        # report only these (default: all of them)
+#   severity: critical               # of a sensitive open (low, medium, high, critical)
+#   defaults: true                   # false leaves only `paths`
+
 # Learned baselines: what is new for a VM, with no rule to write. Each VM is only observed
 # for `learn` from the first time it is seen; after that the first sighting of a network it
 # talks to, a site it looks up, or a network that connects in is reported once, as a

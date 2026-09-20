@@ -47,10 +47,12 @@ sudo ip -n g1 link set vethg up; sudo ip -n g1 link set lo up
 HTTP_PID=$!
 sleep 1
 # a QEMU that says its tap is vethh
-printf '#!/bin/bash\nwhile true; do /bin/true; sleep 0.2; done\n' > "$D/loop.sh"; chmod +x "$D/loop.sh"
+# The loop stands in for a VMM. If a file named trigger.<vm name> appears, it runs it once, as a child of the VMM: that is
+# how a test makes "something a VMM started" open a file or make a call.
+printf '#!/bin/bash\nT="%s/trigger.$2"\nwhile true; do /bin/true; if [ -f "$T" ]; then bash "$T"; rm -f "$T"; fi; sleep 0.2; done\n' "$D" > "$D/loop.sh"; chmod +x "$D/loop.sh"
 bash -c "exec -a /usr/bin/qemu-system-x86_64 bash $D/loop.sh -name taptest -uuid 9999 -netdev tap,id=n0,ifname=vethh,script=no" >/dev/null 2>&1 &
 
-printf 'destinations:\n  - cidr: 10.99.0.3/32\n    name: watched-host\n    severity: high\nports:\n  - port: 5300\n    name: udp-watch\n    proto: udp\n  - port: 8090\n    name: guest-inbound-watch\n    dir: in\n  - port: 5311\n    name: response-enforce\n    proto: udp\n  - port: 5312\n    name: response-ask\n    proto: udp\ndns:\n  - name: dns-watch\n    suffix: watched.test\n    severity: high\ntls:\n  - name: tls-watch\n    suffix: watched.test\n    severity: high\nresponses:\n  - {name: rig-ask, action: isolate, rules: [response-ask]}\n  - {name: rig-auto, action: isolate, mode: enforce, rules: [response-enforce], release_after: 1m}\n' > $D/rules.yaml
+printf 'destinations:\n  - cidr: 10.99.0.3/32\n    name: watched-host\n    severity: high\nports:\n  - port: 5300\n    name: udp-watch\n    proto: udp\n  - port: 8090\n    name: guest-inbound-watch\n    dir: in\n  - port: 5311\n    name: response-enforce\n    proto: udp\n  - port: 5312\n    name: response-ask\n    proto: udp\ndns:\n  - name: dns-watch\n    suffix: watched.test\n    severity: high\ntls:\n  - name: tls-watch\n    suffix: watched.test\n    severity: high\nresponses:\n  - {name: rig-ask, action: isolate, rules: [response-ask]}\n  - {name: rig-auto, action: isolate, mode: enforce, rules: [response-enforce], release_after: 1m}\nvmm:\n  paths:\n    - /tmp/rig-vmm-secret\n  ignore:\n    - /etc/gshadow\n' > $D/rules.yaml
 A="Authorization: Bearer k"; U=127.0.0.1:30990
 guest() { sudo ip netns exec g1 "$@"; }
 code4() { guest curl -s -o /dev/null -m 2 -w %{http_code} "http://$1:8080/"; }
@@ -448,6 +450,88 @@ check "but the connection still is (the program is running, it just does not rea
 stopd; start -isolate-allow 10.99.0.1/32,fd99::1/128
 tls 10.99.0.1:8080 public.example.com
 check "and starting again without the flag turns names back on, whatever the last run left in the map" "[ \"\$(tlsn public.example.com)\" = 1 ]"
+
+echo "== 16. VMM tripwires: what a VMM, or something it started, opens and calls"
+# The program watches every process that is, or descends from, a QEMU process. The fake VMM's children are that: they
+# open shared libraries as they start, which is reported and never a detection. What follows makes one of them open a
+# sensitive file or make a call a VMM never makes. The opens fail for want of permission, which does not matter: it is
+# the call that is watched, and it is seen before the kernel decides.
+trigger() { printf '%s\n' "$1" > "$D/trigger.taptest"; sleep 3; }
+vevents() { api "$U/api/v1/events" | J "$1"; }
+vdet() { api "$U/api/v1/events" | J "len([e for e in d['events'] if e['kind']=='detection' and e.get('rule')=='$1' and '$2' in e['message'] and '$3' in e['message']])"; }
+
+check "the vmm program is attached" "api $U/api/v1/programs | J \"[p['status'] for p in d['programs'] if p['name']=='vmm'][0]\" | grep -q attached"
+check "what the VMM's own children open is reported, with the VM, as the VMM's and not the guest's" \
+  "vevents \"any(e['vm']['name']=='taptest' and e['attribution']=='qemu-process' and not e['guest_attributed'] and e['comm'] in ('true','sleep') and e['path'].startswith('/') for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True"
+check "and none of it is a detection: opening a shared library is not sensitive" "[ \"\$(vevents \"len([e for e in d['events'] if e['kind']=='detection' and str(e.get('rule','')).startswith('vmm-')])\")\" = 0 ]"
+
+trigger 'cat /etc/shadow >/dev/null 2>&1'
+check "a program a VMM started opening /etc/shadow is a critical detection naming the VM, the program and the file" \
+  "api $U/api/v1/events | J \"any(e['severity']=='critical' and e['vm']['name']=='taptest' and not e['guest_attributed'] and e['message'].startswith('cat (pid ') and 'in taptest' in e['message'] and 'opened /etc/shadow, which matches /etc/shadow' in e['message'] for e in d['events'] if e['kind']=='detection' and e.get('rule')=='vmm-sensitive-open')\" | grep -q True"
+check "and the open itself is an event: the path as given, the syscall, and the program" \
+  "vevents \"any(e['path']=='/etc/shadow' and e['comm']=='cat' and e['syscall']=='openat' and not e.get('write') for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True"
+trigger 'cat /etc/shadow >/dev/null 2>&1'
+check "the same program opening the same file again is held back, not a second detection" "[ \"\$(vdet vmm-sensitive-open '/etc/shadow' 'cat (pid')\" = 1 ]"
+trigger 'cat /etc/../etc//sudoers >/dev/null 2>&1'
+check "a path written to hide it is cleaned before it is judged: /etc/../etc//sudoers is /etc/sudoers" "[ \"\$(vdet vmm-sensitive-open 'matches /etc/sudoers' '')\" -ge 1 ]"
+trigger 'cat /proc/self/mem >/dev/null 2>&1'
+check "a wildcard pattern matches: /proc/self/mem is /proc/*/mem" "[ \"\$(vdet vmm-sensitive-open 'matches /proc/*/mem' '')\" -ge 1 ]"
+trigger 'cat /etc/hostname >/dev/null 2>&1'
+check "an ordinary file is an event and no detection" "vevents \"any(e['path']=='/etc/hostname' for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True && [ \"\$(vdet vmm-sensitive-open '/etc/hostname' '')\" = 0 ]"
+trigger 'cat /tmp/rig-vmm-secret >/dev/null 2>&1'
+check "a path the rules file adds is sensitive" "[ \"\$(vdet vmm-sensitive-open 'matches /tmp/rig-vmm-secret' '')\" -ge 1 ]"
+trigger 'cat /etc/gshadow >/dev/null 2>&1'
+check "a path the rules file exempts is an event and no detection, though the defaults would have flagged it" "vevents \"any(e['path']=='/etc/gshadow' for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True && [ \"\$(vdet vmm-sensitive-open '/etc/gshadow' '')\" = 0 ]"
+trigger 'echo x > /tmp/rig-vmm-secret; rm -f /tmp/rig-vmm-secret'
+check "an open that writes says so" "[ \"\$(vdet vmm-sensitive-open 'opened for writing /tmp/rig-vmm-secret' '')\" -ge 1 ] && vevents \"any(e.get('write') and e['path']=='/tmp/rig-vmm-secret' for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True"
+trigger "python3 -c \"
+import os, time
+os.chdir('/etc')
+try:
+    open('shadow')
+except OSError:
+    pass
+time.sleep(4)\" &"
+check "a relative path from a process still there is resolved from its working directory, and the event says how" \
+  "api $U/api/v1/events | J \"any(e['path']=='/etc/shadow' and e['comm']=='python3' and 'resolved from the process' in e.get('detail','') and '(/etc)' in e['detail'] for e in d['events'] if e['kind']=='vmm_file_open') and [e for e in d['events'] if e['kind']=='detection' and e.get('rule')=='vmm-sensitive-open' and e['message'].startswith('python3 (pid ')]\" | grep -q True"
+
+echo "-- the calls a VMM never makes"
+trigger "python3 -c \"
+import ctypes
+l = ctypes.CDLL(None, use_errno=True)
+l.unshare(0x20000)
+l.ptrace(16, 1, 0, 0)
+l.mount(b'none', b'/nonexistent-rig', b'tmpfs', 0, None)
+l.setns(-1, 0)\""
+check "unshare is a high detection saying which namespace" "[ \"\$(vdet vmm-syscall 'called unshare (new mount namespace)' '')\" -ge 1 ] && api $U/api/v1/events | J \"any(e['severity']=='high' for e in d['events'] if e['kind']=='detection' and e.get('rule')=='vmm-syscall' and 'called unshare' in e['message'])\" | grep -q True"
+check "ptrace is critical and says the request and the process" "api $U/api/v1/events | J \"any(e['severity']=='critical' and 'called ptrace (request 16 (ATTACH) on pid 1)' in e['message'] for e in d['events'] if e['kind']=='detection' and e.get('rule')=='vmm-syscall')\" | grep -q True"
+check "mount and setns are reported too" "[ \"\$(vdet vmm-syscall 'called mount' '')\" -ge 1 ] && [ \"\$(vdet vmm-syscall 'called setns' '')\" -ge 1 ]"
+check "each is also an event, by name, from the program that made it" "vevents \"len(set(e['syscall'] for e in d['events'] if e['kind']=='vmm_syscall' and e['comm']=='python3' and e['syscall'] in ('unshare','ptrace','mount','setns')))\" | grep -q '^4$'"
+
+echo "-- a flood"
+trigger "python3 -c \"
+for i in range(1500):
+    try:
+        open('/nonexistent-rig-flood-%d' % i)
+    except OSError:
+        pass\""
+sleep 2
+check "a VMM that opens more than the limit in a second is reported as a flood, critical, with how many were not reported" \
+  "api $U/api/v1/events | J \"any(e['severity']=='critical' and 'more file opens and calls in a second' in e['message'] for e in d['events'] if e['kind']=='detection' and e.get('rule')=='vmm-flood')\" | grep -q True"
+check "and no more than the limit of them were reported one by one" "vevents \"50 <= len([e for e in d['events'] if e['kind']=='vmm_file_open' and e['path'].startswith('/nonexistent-rig-flood-')]) <= 320\" | grep -q True"
+
+echo "-- only a VMM and what it started"
+cat /etc/shadow >/dev/null 2>&1 & NOTVMM=$!; wait $NOTVMM 2>/dev/null; sleep 1
+check "a process that is not a VMM's is not reported, whatever it opens" "vevents \"not any(e['pid']==$NOTVMM for e in d['events'] if e['kind']=='vmm_file_open')\" | grep -q True"
+
+echo "-- turning it off"
+stopd; start -vmm-tripwires=false
+check "with -vmm-tripwires=false the program is not loaded, and says why" "api $U/api/v1/programs | J \"[(p['status'], p['detail']) for p in d['programs'] if p['name']=='vmm'][0]\" | grep -q \"'detached', 'turned off with -vmm-tripwires=false'\""
+trigger 'cat /etc/shadow >/dev/null 2>&1'
+check "and nothing is reported" "[ \"\$(vevents \"len([e for e in d['events'] if e['kind'] in ('vmm_file_open','vmm_syscall')])\")\" = 0 ]"
+stopd; start
+trigger 'cat /etc/shadow >/dev/null 2>&1'
+check "started again without the flag it reports again" "api $U/api/v1/programs | J \"[p['status'] for p in d['programs'] if p['name']=='vmm'][0]\" | grep -q attached && [ \"\$(vdet vmm-sensitive-open '/etc/shadow' '')\" -ge 1 ]"
 
 echo "== 13. responses: a proposal changes nothing until a person approves it, and an enforced one acts and releases itself"
 # Two trigger ports used only here (5312 is answered by a response that proposes, 5311 by one that enforces), so no

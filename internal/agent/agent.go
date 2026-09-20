@@ -138,6 +138,7 @@ func (a *Agent) Refresh() {
 	}
 	observe.Start(a.Ingest)
 	observe.StartTap(a.Ingest)
+	observe.StartVMM(a.Ingest)
 }
 
 // evaluate runs the threshold rules against the latest counters.
@@ -183,6 +184,10 @@ func (a *Agent) Ingest(e event.Event) {
 		e.TS = time.Now().UTC()
 	}
 	cfg := a.cfg.Load()
+	if e.Kind == event.KindVMMOpen || e.Kind == event.KindVMMCall {
+		a.ingestVMM(e, cfg)
+		return
+	}
 	if e.Kind == event.KindGuestConnect || e.Kind == event.KindGuestFlow || e.Kind == event.KindGuestInbound || e.Kind == event.KindGuestDNS || e.Kind == event.KindGuestTLS {
 		a.ingestGuest(e, cfg)
 		return

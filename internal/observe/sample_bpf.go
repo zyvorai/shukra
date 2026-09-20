@@ -180,16 +180,23 @@ func forEach[K, V any](m *ebpf.Map, f func(K, V)) {
 }
 
 // SetWatched tells the sched program which tgids are QEMU processes, so exec and
-// exit events are only emitted for them and their children. It adds the missing
-// ones and removes the ones that are gone.
+// exit events are only emitted for them and their children, and the vmm program the
+// same, so that only they are watched for the calls a VMM has no business making.
+// It adds the missing ones and removes the ones that are gone.
 func SetWatched(tgids []uint32) {
 	for _, live := range bpfgen.Collections() {
-		if live.Coll == nil || live.Name != "sched" {
+		if live.Coll == nil {
 			continue
 		}
-		m := live.Coll.Maps["watched"]
+		var m *ebpf.Map
+		switch live.Name {
+		case "sched":
+			m = live.Coll.Maps["watched"]
+		case "vmm":
+			m = live.Coll.Maps["vmm_watched"]
+		}
 		if m == nil {
-			return
+			continue
 		}
 		want := make(map[uint32]bool, len(tgids))
 		for _, t := range tgids {

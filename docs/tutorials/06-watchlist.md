@@ -85,6 +85,8 @@ thresholds:            # per VM, over a window
 
 **`tls`** rules are `dns` rules for the server name in a guest's TLS ClientHello (`suffix`, `exact` or `contains`, one each, lower case). They catch a guest that reaches a name without asking DNS for it, or over DNS-over-HTTPS: `- {name: doh, suffix: dns.google}`. A `dns` rule does not judge a TLS name and a `tls` rule does not judge a lookup, so give both if you want both. Names are only recorded while `shukrad` runs without `-tls-events=false`. See [TLS server names](../tap.md#tls-server-names).
 
+**`vmm`** changes what the VMM tripwires count. They watch every QEMU process, and what it started, for the files it opens and the calls a VMM never makes, with built-in defaults and no section needed: `paths` adds sensitive paths (`*` is one path segment), `ignore` exempts one (a VM image kept under a directory the list names), `syscalls` narrows the calls, and `defaults: false` leaves only your `paths`. See [VMM tripwires](../vmm-tripwires.md).
+
 **`baselines`** is the other way round from every rule above: no one names what is bad, the daemon learns what each VM normally does for `learn` (24 hours by default) and then reports the first sighting of a network, a site or an inbound peer it has not seen. It is off unless the section is present, and it needs `-data-dir`. See [learned baselines](../baselines.md).
 
 **`responses`** say what to do when a detection fires, and the only thing they can do is isolate the VM. By default a response **proposes** and a person approves; `mode: enforce` acts on its own but must name the rules it answers, and `guardrails` protect VMs and cap how much can happen. See [responses](../responses.md).

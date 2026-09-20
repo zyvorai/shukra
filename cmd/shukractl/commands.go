@@ -328,6 +328,18 @@ func printEvent(e map[string]any, asJSON bool, out io.Writer) error {
 	if n, ok := e["dns_name"].(string); ok {
 		extra = fmt.Sprintf("  name=%v  qtype=%v", n, e["qtype"])
 	}
+	switch e["kind"] {
+	case "vmm_file_open":
+		extra = fmt.Sprintf("  path=%v  comm=%v  pid=%v", e["path"], e["comm"], e["pid"])
+		if e["write"] == true {
+			extra += "  write"
+		}
+	case "vmm_syscall":
+		extra = fmt.Sprintf("  syscall=%v  comm=%v  pid=%v", e["syscall"], e["comm"], e["pid"])
+		if d, ok := e["detail"].(string); ok {
+			extra += "  " + d
+		}
+	}
 	if e["kind"] == "guest_tls" {
 		// A hello with no name (an address, or hidden by ECH) still says what it was.
 		extra = fmt.Sprintf("  sni=%v  tls=%v", orDash(e["sni"]), orDash(e["tls_version"]))

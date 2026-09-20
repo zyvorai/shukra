@@ -26,6 +26,12 @@ const (
 	// first segment of a hello seen on the tap, so a name hidden by Encrypted Client Hello, or a hello that
 	// does not fit the copy, is not seen in full, and a protocol that is not TLS over TCP (QUIC) is not seen.
 	KindGuestTLS Kind = "guest_tls"
+	// KindVMMOpen is a file opened by a VMM process (QEMU) or by something it started. A VMM in steady state
+	// opens nothing, so any is worth a look; Path is as the caller gave it.
+	KindVMMOpen Kind = "vmm_file_open"
+	// KindVMMCall is a call a VMM has no business making: ptrace, mount, unshare, setns, a module or a kexec
+	// load. Syscall names it. A VMM that reports more than it is allowed in a second is a call named "flood".
+	KindVMMCall Kind = "vmm_syscall"
 )
 
 const (
@@ -75,6 +81,15 @@ type Event struct {
 	DNSName      string `json:"dns_name,omitempty"`
 	QType        string `json:"qtype,omitempty"`
 	DNSTruncated bool   `json:"dns_truncated,omitempty"`
+	// Syscall, Path, Write, Detail and Count are set on vmm_file_open and vmm_syscall events. Comm is the process
+	// that made the call and PID is that process; TGID is the VMM it is, or descends from. Path is as it was
+	// given, made printable. Write says an open asked to write. Detail reads the call's arguments. Count is how
+	// many calls a flooding VMM made that were not reported.
+	Syscall string `json:"syscall,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Write   bool   `json:"write,omitempty"`
+	Detail  string `json:"detail,omitempty"`
+	Count   uint64 `json:"count,omitempty"`
 	// SNI, ALPN, TLSVersion, JA3, ECH and TLSTruncated are set on guest_tls events. SNI is lower-cased and
 	// made printable. TLSVersion is the highest version the client offered. JA3 is only set when the whole
 	// hello was seen. ECH says the hello carries Encrypted Client Hello, so SNI is the outer name at most.

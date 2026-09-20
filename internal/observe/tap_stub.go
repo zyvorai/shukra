@@ -54,3 +54,9 @@ type noBPF struct{}
 func (noBPF) Error() string { return "this build has no BPF programs" }
 
 var errNoBPF error = noBPF{}
+
+// StartVMM reads no ring in this build.
+func StartVMM(func(event.Event)) {}
+
+// DisableVMM has no program to keep out in this build.
+func DisableVMM() {}

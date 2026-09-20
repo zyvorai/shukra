@@ -142,6 +142,7 @@ func New(hostname string) *State {
 			{Name: "sched", Status: "detached", Detail: "not attached yet"},
 			{Name: "block", Status: "detached", Detail: "not attached yet"},
 			{Name: "net", Status: "detached", Detail: "not attached yet"},
+			{Name: "vmm", Status: "detached", Detail: "not attached yet"},
 			{Name: "tap", Status: "detached", Detail: "not attached yet"},
 			{Name: "drops", Status: "detached", Detail: "not attached yet"},
 		},

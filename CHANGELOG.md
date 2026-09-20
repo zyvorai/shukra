@@ -4,6 +4,14 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### VMM tripwires
+
+- **A new `vmm` program** watches every QEMU process, and what it started (up to three parents down), for the files it opens (`vmm_file_open`) and the calls a VMM never makes (`vmm_syscall`): `ptrace`, `process_vm_writev` and `readv`, `mount`, `unshare`, `setns`, `init_module`, `finit_module`, `kexec_load` and `kexec_file_load`. A steady-state VMM does none of them (ten QEMU processes made none in thirty seconds on the reference host), so any one is a detection, with nothing to configure: `vmm-sensitive-open` (critical), `vmm-syscall` (critical or high by call) and `vmm-flood` (a VMM that reports more than 300 calls a second). See [VMM tripwires](docs/vmm-tripwires.md).
+- **What is sensitive is decided in the daemon, so it can change without a new program.** A built-in list (`/etc/shadow`, sudoers, ssh keys, `/proc/*/mem`, `/proc/kcore`, the docker and containerd sockets, `/etc/shukra` and `/var/lib/shukra`, k3s server files) and a `vmm:` section of the rules file to add `paths`, `ignore` some (a VM image under a directory the list names), narrow `syscalls`, set `severity` or drop the `defaults`. A path is cleaned before it is judged (`/etc/../etc//shadow`), and a relative one is resolved from `/proc` while the process is still there.
+- **It is a tripwire and not a sandbox**, and the guide says where it stops: the path is read when the call starts, a symlink is not followed, a process that has exited leaves a relative path as given, four levels down is not reached, and a VMM that does none of these is not seen.
+- **Cost, measured on the reference host:** about 190 ns per open (the tracepoints fire for every process, so each first finds out whether the caller is a VMM), 0.147% of one core at about 7,700 opens a second, inside the 0.2% the design allowed. It scales with the host's open rate: about 2% of a core at 100,000 a second. `shukrad -vmm-tripwires=false` does not load the program.
+- The kernel program was mutation-checked (ten breakages of the C, each caught by `TestKernelIntegrationVMMTripwires`, which loads the real program and runs in CI and safely on a production host), and section 16 of the rig and the live-guest test cover the daemon and a real QEMU.
+
 ### The daemon's own cost on a busy host
 
 Found by profiling the daemon on a production hypervisor (12 cores, 10 VMs, a k3s and Cilium node): it was using about **55% of a core** and 155 MB, nearly all of it garbage collection. It now uses **5 to 9% of a core** and about 88 MB, with the same output.

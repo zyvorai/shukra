@@ -30,7 +30,7 @@ shukractl isolate payment-prod-03
 | `actions [--all] [--bundle <id> [--out FILE]]` | What responses decided: the proposals waiting for a person, and with `--all` everything held. `--bundle` prints the incident bundle an action was made on (`--out` writes it 0600). See [responses](responses.md) |
 | `approve <id>`, `reject <id>` | Decide a proposal. `approve` isolates the VM (admin key); `reject` does nothing to it |
 | `recorder <vm> [--window 60s]` | Replay the flight recorder |
-| `watch [--json] [--once]` | Stream discrete events, resuming from the last one seen. A `guest_dns` line ends with `name=` and `qtype=`, a `guest_tls` line with `sni=` and `tls=` (`-` when there is none), and `alpn=` and `ech` when the hello has them |
+| `watch [--json] [--once]` | Stream discrete events, resuming from the last one seen. A `vmm_file_open` line ends with `path=`, `comm=` and `pid=` (and `write`), a `vmm_syscall` line with `syscall=`, `comm=`, `pid=` and the call's arguments in words. A `guest_dns` line ends with `name=` and `qtype=`, a `guest_tls` line with `sni=` and `tls=` (`-` when there is none), and `alpn=` and `ech` when the hello has them |
 | `export` | One JSON document: status, VMs, traces, events |
 | `security <vm>` | Watchlist detections for one VM |
 | `isolate <vm>`, `release <vm>` | Drop or restore the VM's tap traffic. Refused without a management allow list; says if it was not enforced |
