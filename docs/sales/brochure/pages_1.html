@@ -1,0 +1,81 @@
+<section class="page cover" data-title="Cover"><div class="body">
+<div class="eyebrow" style="margin-top:.35in">Zyvor &middot; Shukra</div>
+<h1 style="font-size:32pt;line-height:1.06">See inside every VM, <span class="accent">without going inside it.</span></h1>
+<p class="lede" style="max-width:6.3in;margin-top:14px">A brochure for teams that run KVM: how Shukra watches every QEMU workload from the hypervisor with eBPF, what happens step by step when a VM turns slow or its traffic stops, and everything else it does.</p>
+<div class="pill4" style="margin-top:22px">
+  <div><b>OBSERVE</b><span>KVM exits, run-queue delay, disk latency and every TCP connect a guest makes. No agent in the VM.</span></div>
+  <div><b>EXPLAIN</b><span>Ranked host-side causes with the evidence, for now or for 03:12 last night.</span></div>
+  <div><b>PROTECT</b><span>Detection rules, and isolate a compromised VM without touching it.</span></div>
+  <div><b>SAY WHAT IT CANNOT SEE</b><span>Every answer lists its blind spots. A program that is not measuring says so.</span></div>
+</div>
+<div class="callout" style="margin-top:24px"><div class="eyebrow" style="margin-bottom:5px">Recently added</div>
+<div class="chips">
+<span class="chip">Explain a past time</span><span class="chip">Incident bundles</span><span class="chip">Noisy-neighbour map</span>
+<span class="chip">Who took the vCPU's CPU</span><span class="chip">Kernel drops on the VM's tap</span><span class="chip">TCP handshake outcomes</span>
+<span class="chip">DNS names the guest looks up</span><span class="chip">FluxVM guests</span><span class="chip">A share of events for each kind</span>
+<span class="chip">Filterable connection tables</span><span class="chip">Tested on real KVM guests</span>
+</div></div>
+<p class="soft" style="margin-top:30px;font-size:9.6pt">Standalone eBPF for KVM hosts &nbsp;&middot;&nbsp; QEMU, libvirt, kubevirt and FluxVM &nbsp;&middot;&nbsp; x86_64 and arm64 packages</p>
+<p class="soft" style="font-size:9.6pt">Open source under the Apache License 2.0. Copyright 2026 Zyvor.</p>
+<figure style="margin-top:12px;width:100%"><img class="shot" style="height:3.0in;object-fit:cover;object-position:top" src="shots/overview.png" alt=""><figcaption>Illustrative: the Shukra overview, rendered from the console's fixture data. UI captures in this brochure are fixtures, not customer data; diagrams are conceptual.</figcaption></figure>
+</div></section>
+
+<section class="page" data-title="Why Shukra"><div class="body">
+<h1>When teams reach for Shukra</h1>
+<p class="lede">A guest can tell you it is slow. Only the host knows why: whether a neighbour took its CPU, the disk stalled, the host dropped its packets or the guest stopped reading its NIC. Shukra sits on the hypervisor and answers that, without installing anything in the VM.</p>
+<h2>Problems Shukra addresses</h2>
+<ol class="num">
+<li>Guest metrics cannot see the host, so "is it us, the disk or a noisy neighbour?" is a guess.</li>
+<li>Slowness is reported after the fact, and the counters that would explain it have already moved on.</li>
+<li>A compromised VM has to be cut off now, without logging in to it and without cutting off the people managing it.</li>
+<li>Agents inside guests are a fleet to install, patch and trust. Someone else's VM is not yours to change.</li>
+<li>Every tool should say what it cannot see. A missing measurement must never look like a healthy zero.</li>
+</ol>
+<h2>What Shukra is, in one sentence</h2>
+<p>Shukra is eBPF runtime intelligence and security for KVM: a daemon on the hypervisor that attaches kernel traces, joins them to the QEMU process, and gives an operator a console and a CLI that say what they know, how they know it, and what they cannot see.</p>
+<h2>Two programs you run</h2>
+<div class="cards c2">
+<div class="card"><h3>shukrad (on the hypervisor)</h3><p>Privileged. Loads the eBPF programs, scans <code>/proc</code> for QEMU and FluxVM guests, keeps the flight recorder and detection rules, and serves the API and the console on port 30970.</p></div>
+<div class="card"><h3>shukractl (anywhere)</h3><p>An operator CLI that talks to the API only and never loads BPF. Status, doctor, traces, explain, incident, watch, isolate: one screen to trust first, then the detail.</p></div>
+</div>
+<h2>At a glance</h2>
+<div class="cards c3">
+<div class="tile"><div class="n">6</div><div class="l">eBPF programs, each loaded on its own so one missing tracepoint detaches only that program</div></div>
+<div class="tile"><div class="n">16</div><div class="l">kernel attach points across kvm, sched, block, net, tap and drops</div></div>
+<div class="tile"><div class="n">0</div><div class="l">agents, modules or changes inside any guest</div></div>
+<div class="tile"><div class="n">13</div><div class="l">console pages in five groups: overview, investigate, diagnostics, network and security</div></div>
+<div class="tile"><div class="n">25</div><div class="l">HTTP routes: three for operations, 22 under <code>/api/v1</code>, only two of which change state</div></div>
+<div class="tile"><div class="n">15</div><div class="l">shukractl commands, including <code>explain</code>, <code>incident</code>, <code>isolate</code> and <code>doctor</code></div></div>
+</div>
+</div></section>
+
+<section class="page" data-title="How eBPF does it"><div class="body">
+<h1>How eBPF does it</h1>
+<p class="lede">eBPF lets Shukra run small, verified programs inside the Linux kernel at the points where VM exits, scheduling, disk requests and packets already pass. That is how it sees a guest from outside: no kernel module, no agent, no change to the VM.</p>
+<figure class="dia">{{dia:ebpf}}</figure>
+<p class="caption" style="margin-top:0">From source to a kernel hook and back to the daemon. Illustrative.</p>
+<div class="cards c3">
+<div class="card"><h3>What Shukra attaches to</h3><p>Tracepoints for KVM exits, the scheduler, block requests and dropped packets; kprobes on TCP connect; and TCX on each VM's tap, on Linux 6.6 and newer.</p></div>
+<div class="card"><h3>How the data comes out</h3><p>Hot paths stay in maps as counters and histograms. A small ring buffer carries only discrete events, and every source of events is sampled or rate-limited.</p></div>
+<div class="card"><h3>What keeps it safe</h3><p>The verifier refuses anything unsafe, and each program is its own object. A kernel that cannot run one reports it detached, with the reason, and the others keep running.</p></div>
+</div>
+<div class="callout"><b>Built once, run on the kernel in front of it.</b> The programs are compiled with CO-RE against kernel type information (BTF) and loaded by bpf2go, so one object adapts to the running kernel. Without BTF, clang or root, Shukra still discovers VMs, reports every program as detached with the reason, and never invents a counter.</div>
+<h2>Why eBPF, not the alternatives</h2>
+<table>
+<tr><th></th><th>Agent inside each guest</th><th>Kernel module</th><th>Shukra with eBPF</th></tr>
+<tr><td class="k">Sees host-side causes</td><td>no: it only sees the guest's view</td><td>yes</td><td>yes: exits, run-queue delay, preemption, block, drops</td></tr>
+<tr><td class="k">Changes to guests</td><td>one install per VM, kept patched</td><td>none</td><td>none</td></tr>
+<tr><td class="k">Risk to the host</td><td>lives in someone else's VM</td><td>a bug can crash the hypervisor</td><td>the verifier proves each program safe before it runs</td></tr>
+</table>
+</div></section>
+
+<section class="page" data-title="Where the hooks sit"><div class="body">
+<h1>Where Shukra sits on the hypervisor</h1>
+<p class="lede">A VM's life crosses the same layers on every host. Shukra places one program at each layer that matters and reads names and threads from <code>/proc</code>, so the picture of a slow or silent VM runs from the guest's exits to the last function that freed its packet.</p>
+<figure class="dia">{{dia:hypervisor}}</figure>
+<div class="cards c3">
+<div class="card"><h3>Why the KVM and scheduler hooks</h3><p>A VM is slow for host-side reasons first: it exits too often, or its vCPU threads are runnable and waiting for a CPU. Both are visible only from the host.</p></div>
+<div class="card"><h3>Why the tap</h3><p>The guest's own traffic crosses the host side of its tap. Seeing it there gives the guest's addresses and DNS names, with no agent and without reading application data.</p></div>
+<div class="card"><h3>Why the drop tracepoint</h3><p>Most packet loss is decided inside the host kernel. The tracepoint says why, and which function freed the packet, so a firewall rule and a full queue are told apart.</p></div>
+</div>
+</div></section>
