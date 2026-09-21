@@ -105,7 +105,7 @@ jobs:
       - name: Ubuntu cloud image
         # About 600 MB and it rarely changes, so it is cached by URL.
         id: image
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /tmp/noble.img
           key: guest-noble-cloudimg-amd64-v1
