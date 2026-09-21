@@ -60,7 +60,7 @@ PROGRAMS
   net       attached    3 hooks
   vmm       attached    15 hooks
   drops     attached    1 hooks
-  tap       attached    9 taps, enforcement survives a daemon restart   # 9 is however many VM taps are up
+  tap       attached    9 taps via tcx, enforcement survives a daemon restart   # 9 is however many VM taps are up
 ```
 
 `shukractl status` says `programs    7/7 attached` when all are.

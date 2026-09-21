@@ -50,7 +50,7 @@ SHUKRA
   vms         3
   programs    7/7 attached
   detections  1
-  observe: host traces, and guest traffic on the VM taps (2 taps, enforcement survives a daemon restart)
+  observe: host traces, and guest traffic on the VM taps (2 taps via tcx, enforcement survives a daemon restart)
 ```
 
 #### `doctor [--json] [--strict]`
@@ -83,7 +83,7 @@ PROGRAMS
   net       attached    3 hooks
   vmm       attached    15 hooks
   drops     attached    1 hooks
-  tap       attached    2 taps, enforcement survives a daemon restart
+  tap       attached    2 taps via tcx, enforcement survives a daemon restart
 ```
 
 On a build without BPF every line reads `detached` with `CO-RE objects are not linked in this binary`.

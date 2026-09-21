@@ -97,7 +97,7 @@ Every change to a policy is itself a detection, so a webhook hears of it:
 - **A change that fails is put back**, in the record and in the kernel: a list that only got part of the way in does not stay. If some of a VM's taps took the policy and some did not, it stays on the ones that did and the row says `PROBLEM some taps did not take it`.
 - **Enforcing needs a record that survives a restart** (`-data-dir`), because the kernel keeps enforcing without the daemon, and a policy nobody has a record of can never be reverted. It also needs a non-empty list: cutting a VM off from everything is what [isolate](tap.md#isolate) is for.
 - **The kernel keeps enforcing without the daemon.** The policy lives in pinned maps, like isolation. A crash, a restart or a graceful stop leaves an enforcing tap enforcing, and the next start adopts it. A tap that is only auditing is detached by a graceful stop and put back by the next start. `shukrad -detach-all` lifts the kernel side with the daemon down, but it does not touch `policies.json`: the next start puts every recorded policy back. To end one for good, `shukractl policy remove <vm>`.
-- **What the record says is what the kernel is made to do**, every two seconds, after a VM comes back with a new tap and after a restart. One difference is reported (in `policy` and the doctor), not hidden.
+- **What the record says is what the kernel is made to do**, when a link appears and again every two seconds, and after a restart. One difference is reported (in `policy` and the doctor), not hidden.
 - **A tap enforcing a policy nobody recorded is an orphan** (the record was lost, or something else set it). The daemon does not guess about it: it is shown in `policy`, `doctor` warns, and `shukractl policy remove <vm>` puts the tap right whether or not there was a record. A policy file that cannot be read is set aside as `policies.json.corrupt` and the taps it named show up as orphans.
 - **Isolation still wins, and does not disturb the policy.** An isolated VM is dropped as always; releasing it leaves its policy as it was.
 - **It is announced.** Applying, confirming, reverting and removing a policy each raise a detection (`policy-applied`, `policy-confirmed`, `policy-reverted`, `policy-removed`), so a webhook hears of a change to what a VM may do.
@@ -109,7 +109,7 @@ A person with the admin key can still make a wrong policy. The record of who did
 - **It is not a firewall.** It decides where a VM may *start* connections. ICMP is not judged, and a guest that sends TCP segments that are not a SYN, or crafts packets, is not stopped by it: a connection cannot be *established* without a SYN, which is what it judges.
 - **Networks only.** No ports, no names. The baselines it learns from are IPv4 /24 and IPv6 /64 networks, so a proposal is as coarse as that. (Policy by server name, from [TLS server names](tap.md#tls-server-names), is not part of this.)
 - **A UDP stream a guest sends to a peer that has gone quiet for a minute is judged** as a new flow. A peer's every datagram to the guest renews the minute (to within 5 seconds).
-- **A new tap has no policy for up to two seconds.** A VM that comes back with a new tap (a restart, a migration) is put back under its policy on the daemon's next pass, and until then the new tap is open. Enforcement across a daemon restart has no such gap: the maps are pinned.
+- **A new tap is not left open until the next scan.** A netlink notification attaches the program and then writes the VM's saved policy before that tap is reported as covered. The two-second scan is only the backstop, if a notification is missed. While an enforcing VM has a live tap and no program, that is a `tap-uncovered` detection. `-quarantine-uncovered` (off by default) drops that tap, except the management allow list, until the policy is on it. Enforcement across a daemon restart has no such gap: the maps are pinned.
 - **DNS and DHCP need to be on the list.** A resolver the VM uses is a destination like any other, so it has to be listed or lookups stop; the baseline learns it because the flow to it was seen. DHCP discovery is broadcast and is not judged, but a renewal sent straight to the DHCP server is.
 - **A baseline learns what the guest attempted**, including a connection a policy dropped, so a VM that has been enforced for a while will propose networks it was never allowed to reach. Read a proposal made from an enforcing VM against its current list (`+` lines).
 - **A restart forgets which UDP peers wrote to the guest.** That table is not pinned, so an answer to a datagram that arrived before the restart is judged as a new flow until the peer sends again.
@@ -138,7 +138,7 @@ EGRESS POLICY  2 VMs
 
 On a VM you can afford to disturb, in this order:
 
-1. **The kernel has it.** After `apply`, `shukractl policy web` shows each tap as `kernel audit` (or `kernel enforce`), not `kernel off`, and `judged` rises while the VM is in use. If `kernel` differs from the mode on the first line, the row says `PROBLEM` and the daemon puts it right within two seconds.
+1. **The kernel has it.** After `apply`, `shukractl policy web` shows each tap as `kernel audit` (or `kernel enforce`), not `kernel off`, and `judged` rises while the VM is in use. If `kernel` differs from the mode on the first line, the row says `PROBLEM` and the daemon puts it right on the next pass (immediately when netlink reports the link, otherwise within two seconds).
 2. **Audit sees the stray.** From the guest, connect to an address outside the list. `would have been dropped` rises by at least one, `shukractl watch --json` shows a `guest_connect` with `"policy":"audit"`, and `shukractl security web` lists an `egress-policy-audit` detection. The connection itself still works.
 3. **The floor holds.** A connection to the management network works in every mode.
 4. **Enforce drops the stray and only the stray.** Apply with `--confirm 30s` (the shortest timer). The same connection now fails, the event says `"blocked":true,"policy":"enforce"`, `dropped` rises, and `shukractl trace tap --vm web` counts it under `blocked`. A connection to a listed network, a client connecting in, and the management network all still work.
@@ -162,7 +162,7 @@ What it looks like when it is wrong, and what to do.
 | `--from-baseline` says `the baseline has not seen a VM named` (404) | The daemon has seen no guest events from it yet | Wait, or `--allow` |
 | `confirm` says `nothing waits for confirmation` (409) | The policy is audit, is permanent, or was already confirmed | Nothing to do |
 | The policy went back by itself | The timer ran out. There is a `policy-reverted` detection | Apply again with a longer `--confirm`, or `--permanent` |
-| `PROBLEM the kernel has vnet3 in mode X, and the policy says Y` | The kernel and the record disagree, for example a tap that came back with a new name | It is put right within two seconds. If it stays, the daemon's log has `policy: making <tap> match` and why |
+| `PROBLEM the kernel has vnet3 in mode X, and the policy says Y` | The kernel and the record disagree, for example a tap that came back with a new name | It is put right on the next pass: immediately when netlink reports the link, otherwise within two seconds. If it stays, the daemon's log has `policy: making <tap> match` and why |
 | `PROBLEM some taps did not take it` | A VM with several taps got the policy on some | The problem line names which and why. Apply again, or `remove` |
 | `ORPHAN` and a doctor warning | A tap has a policy and there is no record. The record was lost or `policies.json` was set aside as `.corrupt`, or an audit policy was applied with no `-data-dir` and the daemon then crashed | `shukractl policy remove <vm>` puts the tap right. Then apply again if you want one |
 | `judged` stays at 0 | The VM is idle, or the row's `kernel` is `off`, or a different tap of the VM is the busy one | `shukractl policy` lists every tap of the VM |
@@ -179,7 +179,7 @@ What it looks like when it is wrong, and what to do.
 | Networks across all VMs | 16,384 for IPv4 and 16,384 for IPv6 (the kernel's tries). The management allow list is separate and holds 256 of each |
 | Confirmation time | 30 seconds to 24 hours |
 | Timer check | Every 2 seconds |
-| Kernel-versus-record check | Every 2 seconds |
+| Kernel-versus-record check | On a netlink link notification, and every 2 seconds |
 | UDP answers remembered | 65,536 flows (an LRU that is not pinned, so a restart forgets them); an answer is allowed for 60 seconds after the datagram it answers |
 
 ## API

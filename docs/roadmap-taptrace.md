@@ -21,7 +21,6 @@ The tap program is built: guest attribution, isolate, handshake outcomes, inboun
 
 - **Per-VM management allow lists.** Isolation still uses one allow list for every isolated VM (`-isolate-allow`). Each VM can have its own list under an egress policy, but that is a different thing: it says where a VM may start connections, and the management list stays the floor under it.
 - **Egress by port or by name.** An egress policy judges the network a connection goes to (IPv4 /24 and IPv6 /64 when learned from a baseline, anything you give when written by hand). It has no ports and no names, so a policy by server name is not built, and a proposal is as coarse as the baseline it learned from.
-- **A recreated tap is attached from a netlink notification**, and its saved policy is pushed before the daemon reports the tap as covered. The two-second scan remains as a backstop. An enforcing VM whose tap is up without the program raises `tap-uncovered`. `-quarantine-uncovered` (off by default) drops that tap, except the management allow list, until the policy is on it.
 - **A DHCP and DNS story for isolated VMs.** Today they are only reachable if they are on the allow list, and under an egress policy a resolver or a DHCP server has to be on the VM's list.
 
 ## Beyond the tap

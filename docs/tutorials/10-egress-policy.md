@@ -292,7 +292,7 @@ and `shukractl doctor` warns:
 
 `policy remove` works whether or not a record exists. A `policies.json` that cannot be read is set aside as `policies.json.corrupt` under `-data-dir`, and the taps it named appear as orphans.
 
-The other doctor finding is `The kernel is not doing what an egress policy says`: a tap is in a different mode than the record. The daemon puts it right every two seconds, so it only stays if the tap program failed to take the list (see the daemon's log).
+The other doctor finding is `The kernel is not doing what an egress policy says`: a tap is in a different mode than the record. The daemon puts it right on the next pass, immediately when netlink reports the link and otherwise within two seconds, so it only stays if the tap program failed to take the list (see the daemon's log).
 
 ### Lifting it without the daemon
 
@@ -324,7 +324,7 @@ Alert on a policy nobody confirmed. On `/metrics`, `shukra_egress_policy_unconfi
 
 - **It is not a firewall.** It decides where a VM may *start* connections. ICMP, ARP and multicast are not judged, and packets that are not a SYN or a new UDP flow are not stopped by it. A connection cannot be established without a SYN, which is what it judges.
 - **Networks only.** No ports and no names. The proposal is as coarse as the baseline's /24 and /64.
-- **A new tap is open for up to two seconds.** A VM that comes back with a new tap (restart, migration) is put back under its policy on the next pass. Across a daemon restart there is no such gap, because the maps are pinned.
+- **A new tap is not left open until the next scan.** Netlink attaches the program and then writes the saved policy before that tap is reported as covered. The two-second scan is the backstop. An enforcing VM whose tap is up without the program raises `tap-uncovered`. `-quarantine-uncovered` is off by default. Across a daemon restart there is no gap, because the maps are pinned.
 - **DNS and DHCP must be on the list.** A resolver the VM uses is a destination like any other. The baseline learns it because the flow was seen, but a resolver the VM has not used yet is not there.
 - **Up to 1,024 networks per VM**, and 16,384 across all VMs for IPv4 and again for IPv6.
 

@@ -4,6 +4,19 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 
 ## Unreleased
 
+### Guest traffic is TCX on Linux 6.6 and newer
+
+- **There is no classic tc datapath.** The tap program attaches with TCX only. A kernel older than 6.6 keeps the host probes and reports `tap` detached (`TCX needs Linux 6.6 or newer`). That is a failed attach, not a supported mode. `shukractl doctor` says the same thing. See [guest traffic](docs/tap.md) and [v0.1.0](docs/releases/v0.1.0.md).
+- **A new tap is attached from netlink**, then its saved egress policy is written before the daemon reports that tap as covered. The two-second scan remains the backstop. An enforcing VM with a live tap and no program raises `tap-uncovered`. `-quarantine-uncovered` is off by default.
+- **The container command is the listen address.** The image entrypoint is `shukrad`. The default command listens on `127.0.0.1:30970`, so `docker run -p` does not publish the API until that command is replaced, with TLS or with `-allow-insecure-http` behind a TLS proxy. systemd on the hypervisor is still the install. See [Deploy a hypervisor](docs/tutorials/03-deploy.md#container).
+
+### Release hardening
+
+- **The unit listens on loopback.** Plain HTTP on any other address is refused unless `-allow-insecure-http` is set. `-no-auth` off loopback is refused even then. The console login is the API token only.
+- **An audit write that fails after an isolation is visible.** The action is `executed_audit_degraded`, `shukra_audit_persist_failures_total` counts it, and `doctor` fails. Action lines and incident bundles are fsynced, including the parent directory.
+- **Mutating calls record who asked** as a hashed key id (`admin:` or `readonly:` and six hex characters), plus an optional client label, the source address, the request id, the role and the operation. The key itself is not stored.
+- **CI** runs the race detector, `go vet`, `staticcheck`, `govulncheck` at `v1.1.4`, short fuzz targets, coverage as an artifact, `npm audit`, and an arm64 job. Release artifacts can include a CycloneDX SBOM and, when `COSIGN_PRIVATE_KEY` is set, cosign signatures. `scripts/verify-release.sh` checks a downloaded directory. No `v0.1.0` tag has been pushed.
+
 ### Build and tooling
 
 - **Go 1.27.** `go.mod` and the three workflows build with Go 1.27 (from 1.25). No source change was needed; `go vet`, `go test ./...`, the linux builds and the tagged BPF type-check are clean.

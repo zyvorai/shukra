@@ -131,7 +131,7 @@ vmm-syscall         critical  gdb (pid 77) in web's VMM process tree called ptra
 <li><b>Every change is a detection</b> (<code>policy-applied</code>, <code>-confirmed</code>, <code>-reverted</code>, <code>-removed</code>), so a webhook hears of it. A stray connection is a low <code>egress-policy-audit</code> or a medium <code>egress-policy-blocked</code>.</li>
 </ul>
 <figure style="margin:6px 0 4px"><div class="crop" style="height:1.7in"><img style="margin-top:-22.2%" src="shots/policy.png" alt=""></div><figcaption>Illustrative: the Egress policy page, rendered from fixture data. One policy waits to be confirmed; the other is auditing.</figcaption></figure>
-<div class="callout red"><b>It is not a firewall.</b> A resolver or time server the VM uses is a destination like any other: leave it off the list and lookups stop. A new tap has no policy for up to two seconds.</div>
+<div class="callout red"><b>It is not a firewall.</b> A resolver or time server the VM uses is a destination like any other: leave it off the list and lookups stop. A new tap gets its saved policy when the program attaches; the two-second scan is only the backstop.</div>
 </div></section>
 
 <section class="page" data-title="Responses and bundles"><div class="body">

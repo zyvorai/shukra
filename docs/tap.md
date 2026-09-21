@@ -20,7 +20,7 @@ It does five things: it **counts** the guest's traffic, **records** what the gue
 - Linux 6.6 or newer, for TCX. On an older kernel the program cannot attach: the daemon logs `tap program on <interface>: TCX needs Linux 6.6 or newer` (once per interface), `shukractl programs` shows `tap` as `detached`, and `shukractl doctor` reports the kernel (`kernel`, info). Host probes still run. There is no second datapath for older kernels.
 - A VM with a tap interface. The daemon finds a VM's taps two ways and merges them: `ifname=tap0` on the QEMU command line, and the `iff:` line in `/proc/<pid>/fdinfo/<fd>` of each `/dev/net/tun` fd the process holds. The second is how libvirt VMs are found, since libvirt hands QEMU its `vnet0` as a file descriptor (`-netdev tap,fd=37`). Reading another user's fds needs the daemon to have `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`, which the shipped unit grants. If it cannot read them, that VM has no known tap and nothing is attached or isolated for it: a name is never guessed. A VM on user-mode networking has no tap either.
 
-The daemon attaches the program to each VM's tap as the VM appears and takes it off when the VM goes. It shares the hook politely: it returns `TCX_NEXT`, never `TCX_PASS`, so any other program attached to the same tap (Cilium, FluxVM's `fluxvm_egress`, or another tool) still runs after it. `TCX_PASS` would have accepted the packet and skipped them. `shukractl programs` shows `tap  attached  2 taps, enforcement survives a daemon restart` once at least one is on, and `detached` with the reason until then (for example `no VM tap interfaces to attach to yet`, which is normal on a host with no VM that has a tap). If there is no bpf filesystem the detail says `not pinned: enforcement lasts only while the daemon runs`.
+The daemon attaches the program to each VM's tap as the VM appears and takes it off when the VM goes. A netlink link notification does that immediately; the two-second scan is the backstop. The saved egress policy is written before the tap is reported as covered. It shares the hook politely: it returns `TCX_NEXT`, never `TCX_PASS`, so any other program attached to the same tap (Cilium, FluxVM's `fluxvm_egress`, or another tool) still runs after it. `TCX_PASS` would have accepted the packet and skipped them. `shukractl programs` shows `tap  attached  2 taps via tcx, enforcement survives a daemon restart` once at least one is on, and `detached` with the reason until then (for example `no VM tap interfaces to attach to yet`, which is normal on a host with no VM that has a tap, or `TCX needs Linux 6.6 or newer` on an older kernel). If there is no bpf filesystem the detail says `not pinned: enforcement lasts only while the daemon runs`. Guest traffic has no other hook. An older kernel is not a supported guest datapath.
 
 ## FluxVM
 
@@ -237,7 +237,7 @@ Three things a real host showed, all about FluxVM and none about a bug in the ta
 Four commands, in the order that finds the problem soonest:
 
 ```bash
-shukractl programs               # tap  attached  2 taps, enforcement survives a daemon restart
+shukractl programs               # tap  attached  2 taps via tcx, enforcement survives a daemon restart
 shukractl vms                    # each VM you expect shows taps=<interface>, not taps=-
 shukractl trace tap --vm web     # from_guest and to_guest packets rise while the guest is in use
 shukractl watch                  # a connection from the guest appears within a moment

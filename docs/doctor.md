@@ -37,13 +37,14 @@ Each check has an `id`, a `status`, a `title`, an optional `detail` (the specifi
 
 The text form prints everything that is not `ok`, and ends with a count in which `info` counts as needing attention. `--json` prints `{"worst": "...", "checks": [...]}` with every check, and still exits `1` on a `fail`. `worst` is the worst status present. A check can have a different status depending on what it finds, and each `id` appears at most once (`program-<name>` is one id per program).
 
-**Exactly three checks can be a `fail`**, and all three are about who can reach the API or whether your rules are in force:
+**Exactly four checks can be a `fail`.** Three are about who can reach the API or whether your rules are in force. The fourth is an enforcement record that was not saved.
 
 | Check | `fail` when |
 |---|---|
 | [`auth`](#auth) | `-no-auth` is set, or the key is the dev key `shukra` and the API listens on a non-loopback address |
 | [`transport`](#transport) | Plain HTTP on a non-loopback address **and** the key is the dev key or there is no auth |
 | [`rules`](#rules) | The detection file failed to reload, so old rules are still in force |
+| [`audit-persist`](#audit-persist) | Isolate or enforce succeeded and the audit line or the state file was not saved |
 
 Everything else is at most a `warn`: something to fix, but not a reason to stop.
 
@@ -66,6 +67,7 @@ Everything else is at most a `warn`: something to fix, but not a reason to stop.
 | [`vm-connects-failing`](#vm-connects-failing) | warn | A guest's connections mostly fail |
 | [`isolate`](#isolate) | info, warn, ok | Whether isolate works and survives the daemon |
 | [`persistence`](#persistence) | warn, ok | Whether state survives a restart |
+| [`audit-persist`](#audit-persist) | fail | An isolate or enforce that the audit did not save |
 | [`alerts`](#alerts) | info, ok | Where detections go |
 | [`rules`](#rules) | fail, info, ok | The detection file |
 | [`baselines`](#baselines) | warn, info, ok | Learned baselines, only when on |
@@ -219,6 +221,14 @@ A build with no enforcer at all reports `info` (`Isolate is not available in thi
 | `ok` | State is kept in the data directory | |
 
 Without a data directory the daemon also refuses to enforce an egress policy.
+
+#### `audit-persist`
+
+| Status | Fires when | Fix |
+|---|---|---|
+| `fail` | An isolate or an enforcing policy took effect, and the audit line or the state file was not saved. The VM is contained. The record of who did it, or the record that would re-apply it, is missing. The counter is `shukra_audit_persist_failures_total` | Free space on the data directory. The check stays until the daemon restarts, and only after the disk accepts writes. An action left `executed_audit_degraded` was enforced |
+
+The check is absent when nothing has failed.
 
 #### `alerts`
 

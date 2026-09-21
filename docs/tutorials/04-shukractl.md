@@ -48,7 +48,7 @@ SHUKRA
   vms         10
   programs    7/7 attached
   detections  3
-  observe: host traces, and guest traffic on the VM taps (10 taps, enforcement survives a daemon restart)
+  observe: host traces, and guest traffic on the VM taps (10 taps via tcx, enforcement survives a daemon restart)
 ```
 
 `--json` is the form to pipe. Human boards are for a TTY. `status --wait` retries for up to two minutes, which is how the deploy script waits for a restarting daemon.

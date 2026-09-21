@@ -27,6 +27,7 @@ curl -s -H "Authorization: Bearer $SHUKRA_API_KEY" "$SHUKRA_URL/api/v1/status"
 - Keys are compared in constant time, and both are always compared so the time taken does not say which one matched. A key never appears in any response, in `/api/v1/doctor`, or in `systemctl show`.
 - The API is plain HTTP unless the daemon runs with `-tls-cert` and `-tls-key` (`SIGHUP` reloads the certificate). On a non-loopback address the daemon warns at start, and [`shukractl doctor`](doctor.md) flags it.
 - `X-Shukra-Actor: <name>` on a `POST` is an optional client label. It is not authentication. The record names the key that matched (`admin:` or `readonly:` plus six hex characters of SHA-256 of the key), the label, the source address, a request id (`X-Request-Id`, or one the daemon generates), the role and the operation. `shukractl` sends `shukractl`. A missing or rejected label is omitted. The response carries `X-Request-Id`.
+- Every response sets `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and a content security policy (`style-src` allows `'unsafe-inline'` for the console). `Strict-Transport-Security` (`max-age=31536000; includeSubDomains`) is set only when the connection to the daemon is TLS.
 - Request bodies are read up to 64 KiB, or 1 MiB for the policy routes.
 
 ### Data
@@ -118,7 +119,7 @@ Neither needs a key, so a load balancer or a systemd watchdog can use them. Neit
   "programsAttached": 7,
   "programsTotal": 7,
   "detections": 1,
-  "summary": "observe: host traces, and guest traffic on the VM taps (2 taps, enforcement survives a daemon restart)"
+  "summary": "observe: host traces, and guest traffic on the VM taps (2 taps via tcx, enforcement survives a daemon restart)"
 }
 ```
 
@@ -167,7 +168,7 @@ Neither needs a key, so a load balancer or a systemd watchdog can use them. Neit
     { "name": "net", "status": "attached", "detail": "3 hooks" },
     { "name": "vmm", "status": "attached", "detail": "15 hooks" },
     { "name": "drops", "status": "attached", "detail": "1 hooks" },
-    { "name": "tap", "status": "attached", "detail": "2 taps, enforcement survives a daemon restart" }
+    { "name": "tap", "status": "attached", "detail": "2 taps via tcx, enforcement survives a daemon restart" }
   ]
 }
 ```
@@ -641,7 +642,7 @@ Admin key. Body `{"vm": "<name>"}`.
   "applied": true,
   "taps": ["vnet5"],
   "reason": "Traffic to and from vnet5 is dropped, except ARP, IPv6 neighbour discovery and 10.0.0.0/24. It stays enforced if shukrad stops or crashes. Lift it with `shukractl release`, or with the daemon down, `shukrad -detach-all`.",
-  "audit": { "ts": "2026-09-20T14:58:40Z", "actor": "shukractl", "action": "isolate", "vm": "batch-07", "result": "applied" }
+  "audit": { "ts": "2026-09-20T14:58:40Z", "actor": "key=admin:f72c1a role=admin op=isolate label=shukractl remote=127.0.0.1:9 req=abc", "action": "isolate", "vm": "batch-07", "result": "applied" }
 }
 ```
 
@@ -655,7 +656,9 @@ Admin key. Body `{"vm": "<name>"}`.
 | `refused` | Not attempted: no management allow list (`-isolate-allow`), the tap program is not loaded, no VM by that name in the scan, or the VM has no tap (user-mode networking) |
 | `recorded_only` | The build has no enforcer; the request was recorded and nothing else happened |
 
-Every request is recorded, whether or not it took effect. A missing `vm` or a body that is not JSON is `400 vm is required`.
+`audit.actor` is the key id (`admin:` or `readonly:` and six hex characters), the role, the operation, the `X-Shukra-Actor` label when one was sent, the source address and the request id. It is not a person's name. The response header `X-Request-Id` is the same id.
+
+Every request is recorded, whether or not it took effect. A missing `vm` or a body that is not JSON is `400 vm is required`. If the kernel applied the change and the audit line or the state file could not be saved, `applied` stays true and the record is marked degraded. `shukractl doctor` then fails `audit-persist`. See [responses](responses.md).
 
 ## Learned baselines
 
@@ -902,7 +905,9 @@ A row that is not measured has no series, so an absent series means "not measure
 | `shukra_baseline_items` | gauge | `vm`, `kind` (`destination`, `dns-suffix`, `inbound-peer`) | baselines are on |
 | `shukra_baseline_new_total`, `shukra_baseline_suppressed_total` | counter | `vm` | baselines are on. First sightings reported, and held back over the daily limit |
 | `shukra_actions_pending` | gauge | | responses are configured. Proposals waiting for a person |
-| `shukra_actions` | gauge | `status` (`pending`, `executed`, `released`, `refused`, `rejected`, `expired`, `dry_run`) | responses are configured. Held in memory, by status |
+| `shukra_actions` | gauge | `status` (`pending`, `executed`, `executed_audit_degraded`, `released`, `refused`, `rejected`, `expired`, `dry_run`) | responses are configured. Held in memory, by status |
+| `shukra_audit_persist_failures_total` | counter | | an isolate or enforce took effect and the audit line or state file was not saved |
+| `shukra_tap_attach_seconds` | histogram | `vm` | a tap went from uncovered to covered. Recorded once per transition |
 | `shukra_egress_policy_mode` | gauge | `vm`, `tap` | the VM has a policy. 0 off, 1 audit, 2 enforce, as the kernel has it |
 | `shukra_egress_policy_unconfirmed` | gauge | `vm` | the VM has a policy. 1 while an enforcing policy waits to be confirmed |
 | `shukra_egress_checked_total`, `shukra_egress_audit_packets_total`, `shukra_egress_audit_bytes_total`, `shukra_egress_dropped_packets_total`, `shukra_egress_dropped_bytes_total` | counter | `vm`, `tap` | the VM has a policy |
