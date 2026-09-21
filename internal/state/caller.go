@@ -12,7 +12,10 @@ type Caller struct {
 	Remote    string
 	RequestID string
 	Op        string
-	Name      string
+	// Cause names the response action that asked for an isolation, as
+	// "<response>:<id>" or just the id. It is set only on that path.
+	Cause string
+	Name  string
 }
 
 // Principal is what an audit record shows as who decided: the key id, and the
@@ -78,6 +81,8 @@ func ParseActor(s string) Caller {
 			c.RequestID = v
 		case "op":
 			c.Op = v
+		case "cause":
+			c.Cause = v
 		}
 	}
 	return c
@@ -87,6 +92,9 @@ func ParseActor(s string) Caller {
 // not the raw header.
 func StampAudit(a *Audit, c Caller) {
 	a.Actor = c.Principal()
+	if c.Cause != "" {
+		a.Actor += " (" + c.Cause + ")"
+	}
 	a.KeyID = c.KeyID
 	a.Role = c.Role
 	a.Label = c.Label

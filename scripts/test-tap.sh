@@ -677,7 +677,7 @@ check "it holds the incident bundle it was made on" "api $U/api/v1/actions/$AID/
 check "a read-only-style request without the key is refused, and nothing was decided" "[ \"\$(curl -s -o /dev/null -w %{http_code} -X POST $U/api/v1/actions/$AID/approve)\" = 401 ] && [ \"\$(code4 10.99.0.3)\" = 200 ]"
 api -X POST -H "X-Shukra-Actor: rig" $U/api/v1/actions/$AID/approve >/dev/null; sleep 2
 check "approved: the VM is cut off" "[ \"\$(code4 10.99.0.3)\" = 000 ]"
-check "the isolate record says who approved which action" "api $U/api/v1/isolations | J \"any('approved by rig' in i['audit']['actor'] and '$AID' in i['audit']['actor'] for i in d['isolations'])\" | grep -q True"
+check "the isolate record says who approved which action" "api $U/api/v1/isolations | J \"any(i['audit'].get('label')=='rig' and str(i['audit'].get('keyId','')).startswith('admin:') and '$AID' in i['audit']['actor'] for i in d['isolations'])\" | grep -q True"
 check "a decided proposal cannot be decided again" "[ \"\$(curl -s -o /dev/null -w %{http_code} -X POST -H \"$A\" $U/api/v1/actions/$AID/approve)\" = 409 ]"
 api -X POST -d '{"vm":"taptest"}' $U/api/v1/release >/dev/null; sleep 2
 check "released by a person: reachable again" "[ \"\$(code4 10.99.0.3)\" = 200 ]"

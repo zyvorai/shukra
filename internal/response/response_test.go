@@ -177,6 +177,21 @@ func TestAProposalWaitsForAPersonAndNothingIsIsolatedUntilTheyApprove(t *testing
 	}
 }
 
+func TestApprovalWithAKeyStillNamesTheAction(t *testing.T) {
+	w := newWorld(t, proposeCfg)
+	w.detect("web", "c2", "high")
+	id := w.eng.List(false)[0].ID
+	actor := state.EncodeActor(state.Caller{KeyID: "admin:f72c1a", Role: "admin", Label: "rig", Op: "approve", Remote: "127.0.0.1:9", RequestID: "abc"})
+	a, err := w.eng.Approve(id, actor)
+	if err != nil || a.Status != "executed" || a.DecidedBy != "admin:f72c1a (rig)" || a.KeyID != "admin:f72c1a" || a.Label != "rig" {
+		t.Fatalf("%+v %v", a, err)
+	}
+	isos := w.st.Isolations()
+	if len(isos) != 1 || isos[0].Audit.Label != "rig" || isos[0].Audit.KeyID != "admin:f72c1a" || !strings.Contains(isos[0].Audit.Actor, a.ID) {
+		t.Fatalf("the isolation record must name the key and the action: %+v", isos)
+	}
+}
+
 func TestRejectingLeavesTheVMAloneAndAnApprovedOrRejectedOneCannotBeDecidedAgain(t *testing.T) {
 	w := newWorld(t, proposeCfg)
 	w.detect("web", "c2", "high")

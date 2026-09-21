@@ -413,7 +413,11 @@ func (e *Engine) Approve(id, actor string) (state.Action, error) {
 	}
 	who := fmt.Sprintf("approved by %s (%s, %s)", actor, a.Response, a.ID)
 	if state.ParseActor(actor).KeyID != "" {
-		who = actor
+		cause := a.ID
+		if a.Response != "" && !strings.ContainsAny(a.Response, " \t=") {
+			cause = a.Response + ":" + a.ID
+		}
+		who = actor + " cause=" + cause
 	}
 	e.execute(a, r, who, false)
 	e.mu.Lock()
