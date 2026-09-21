@@ -15,7 +15,7 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 - **The unit listens on loopback.** Plain HTTP on any other address is refused unless `-allow-insecure-http` is set. `-no-auth` off loopback is refused even then. The console login is the API token only.
 - **An audit write that fails after an isolation is visible.** The action is `executed_audit_degraded`, `shukra_audit_persist_failures_total` counts it, and `doctor` fails. Action lines and incident bundles are fsynced, including the parent directory.
 - **Mutating calls record who asked** as a hashed key id (`admin:` or `readonly:` and six hex characters), plus an optional client label, the source address, the request id, the role and the operation. The key itself is not stored.
-- **CI** runs the race detector, `go vet`, `staticcheck`, `govulncheck` at `v1.1.4`, short fuzz targets, coverage as an artifact, `npm audit`, and an arm64 job. Release artifacts can include a CycloneDX SBOM and, when `COSIGN_PRIVATE_KEY` is set, cosign signatures. `scripts/verify-release.sh` checks a downloaded directory. No `v0.1.0` tag has been pushed.
+- **CI** runs the race detector, `go vet`, `staticcheck`, `govulncheck` at `v1.8.0`, short fuzz targets, coverage as an artifact, `npm audit`, and an arm64 job. Release artifacts can include a CycloneDX SBOM and, when `COSIGN_PRIVATE_KEY` is set, cosign signatures. `scripts/verify-release.sh` checks a downloaded directory. No `v0.1.0` tag has been pushed.
 
 ### Build and tooling
 

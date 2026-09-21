@@ -126,7 +126,7 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`. For each of `amd64` (on
 
 `deploy/install.sh` is the one install routine shared by the source deploy (`scripts/deploy-remote.sh`), the tarball and the `.deb`; `scripts/test-install.sh` tests it. Do not push the `v0.1.0` tag until the notes in [v0.1.0](releases/v0.1.0.md) match the commit you are tagging. [the CHANGELOG](../CHANGELOG.md) lists what has merged to `main`, newest first.
 
-CI (`.github/workflows/ci.yml`) runs the tests, a race-detector pass, `go vet`, `staticcheck`, a pinned `govulncheck`, short fuzz targets, `npm audit`, and an arm64 job that runs the Go and console tests without loading BPF. Coverage is uploaded as an artifact and is not a merge gate. Guest traffic is TCX on Linux 6.6+; the tap rig on the current runner is that test. Older kernels are not a matrix and not a supported guest datapath.
+CI (`.github/workflows/ci.yml`) runs the tests, a race-detector pass, `go vet`, `staticcheck`, `govulncheck` at `v1.8.0`, short fuzz targets, `npm audit`, and an arm64 job that runs the Go and console tests without loading BPF. Coverage is uploaded as an artifact and is not a merge gate. Guest traffic is TCX on Linux 6.6+; the tap rig on the current runner is that test. Older kernels are not a matrix and not a supported guest datapath.
 
 ## Repository layout
 
