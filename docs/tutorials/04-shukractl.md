@@ -140,7 +140,7 @@ shukractl watch
 shukractl watch --json --once
 ```
 
-`watch` streams discrete events. `--once` prints what is buffered and returns. Host link, address, route and neighbor changes are there too (`netlink_*`, `host-netlink`, no VM): see [Netlink](../netlink.md). They are not on a VM's recorder; they are on `_host`.
+`watch` streams discrete events. `--once` prints what is buffered and returns. Host link, address, route and neighbor changes are there too (`netlink_*`, `host-netlink`). A VM tap names that VM; a host interface does not, and lands on the `_host` recorder. A deleted tap, a tap that went down, a removed default route or a failed neighbor is also a detection. See [Netlink](../netlink.md).
 
 ## Security and isolation
 

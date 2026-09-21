@@ -2,7 +2,7 @@
 
 A VM "can't reach" something. Is the destination refusing it, is something on the host dropping it, is the guest not reading its NIC, or is it Shukra's own isolation or egress policy? This walkthrough asks the host four questions in order, using the guest's own tap as the witness, and does not touch the guest.
 
-A sudden loss can also be the host's own network changing under the VM: a bridge, an address, a route or a neighbor. `shukractl watch` shows those as `netlink_*` events. See [Netlink](../netlink.md).
+A sudden loss can also be the host's own network changing under the VM: a bridge, an address, a route or a neighbor. `shukractl watch` shows those as `netlink_*` events. A VM tap that went down or was deleted, a removed default route, or a failed neighbor is a detection as well (`tap-link-down`, `default-route-removed`, `neighbor-failed`). See [Netlink](../netlink.md).
 
 It needs the `tap` program (Linux 6.6+) and, for the third step, the `drops` program (5.17+). `shukractl programs` says which are attached.
 

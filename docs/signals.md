@@ -49,7 +49,7 @@ Counters are maps and never cost an event. Discrete events come from the rings, 
 | `guest_dns` | `tap` | `guest-tap` | 200 a second per tap, on its own budget; a name and type once a minute per tap |
 | `guest_tls` | `tap` | `guest-tap` | 100 a second per tap, on its own budget; a retransmitted hello is not another |
 | `vm_start`, `vm_stop` | The daemon, from the scan (no program) | `qemu-process` | A VM missing for two scans in a row is stopped. The first scan is silent |
-| `netlink_link`, `netlink_address`, `netlink_route`, `netlink_neighbor`, `netlink_error` | The daemon's Netlink socket (no program) | `host-netlink` | Kernel messages only. They share the host-network class with `tcp_connect`. Omitted under `-netlink-events=false`. See [Netlink](netlink.md) |
+| `netlink_link`, `netlink_address`, `netlink_route`, `netlink_neighbor`, `netlink_error` | The daemon's Netlink socket (no program) | `host-netlink` | Kernel messages only. They share the host-network class with `tcp_connect`. A VM tap is joined to that VM; a host interface is not. Omitted under `-netlink-events=false`. See [Netlink](netlink.md) |
 | `detection` | The daemon | The event that caused it | Suppression, and the last 2,048 |
 
 A `guest_connect` or `guest_flow` also carries `policy` (`audit` or `enforce`) when the VM's egress policy judged it to be outside its list, and `blocked: true` when it was dropped.

@@ -125,6 +125,9 @@ Some detections come from Shukra itself, and their names are what a `responses:`
 | `egress-policy-audit`, `egress-policy-blocked` | A VM under an egress policy started a connection outside its list | low, medium: [tutorial 10](10-egress-policy.md) |
 | `policy-applied`, `policy-confirmed`, `policy-reverted`, `policy-removed` | An egress policy changed | low or medium, low, medium, low |
 | `action-proposed`, `action-executed`, `action-refused`, `action-rejected`, `action-expired`, `action-released`, `action-dry-run` | A response decided something | by outcome |
+| `tap-link-deleted`, `tap-link-down`, `tap-master-changed` | A VM tap was deleted, went down, or moved to another master | high: [Netlink](../netlink.md) |
+| `tap-mtu-changed`, `tap-address-removed`, `neighbor-failed` | A VM tap's MTU changed, an address left a VM tap, or neighbor resolution failed | medium |
+| `default-route-removed`, `netlink-overrun` | A default route was deleted, or the Netlink socket lost messages | high |
 
 A response can answer any of them except the `action-*` announcements, which no response ever answers.
 

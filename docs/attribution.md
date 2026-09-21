@@ -7,7 +7,7 @@ Every event names a VM or says it cannot, and it says which place it was seen. T
 | On the host, at the VMM process | `net`, `sched`, `block`, `kvm` | `qemu-process`, or `unattributed` | `false` | What the VMM process did |
 | On the host, at the VMM process tree | `vmm` | `qemu-process` | `false` | What the VMM, or something it started, opened or called |
 | On the host side of a VM's tap | `tap`, `drops` | `guest-tap` | `true` | What the guest sent or was sent |
-| On the host, at the routing socket | none (Netlink in the daemon) | `host-netlink` | `false` | A link, address, route or neighbor changed. No VM |
+| On the host, at the routing socket | none (Netlink in the daemon) | `host-netlink` | `false` | A link, address, route or neighbor changed. A VM tap names that VM; a host interface does not |
 
 `guest_attributed` is `true` only for an event seen on a VM's tap **and** naming a VM in the current scan. It is derived in one place (`event.Normalize`) from the attribution and a VM name, and derived again for everything read back from disk, so a stored `guest_attributed: true` is never trusted on its own. A tap no VM owns is `unattributed`, not a guessed name.
 
@@ -25,7 +25,7 @@ KVM exit, scheduler (including vCPU preemption, and who took the CPU), and block
 
 ## Host control-plane events
 
-`netlink_link`, `netlink_address`, `netlink_route`, `netlink_neighbor` and `netlink_error` come from the daemon's routing Netlink socket, not from a program and not from a process. They are `attribution: "host-netlink"` and `guest_attributed: false`, and they name no VM. A deleted route is a fact about the host. It is not evidence that a guest or QEMU deleted it. See [Netlink control-plane events](netlink.md).
+`netlink_link`, `netlink_address`, `netlink_route`, `netlink_neighbor` and `netlink_error` come from the daemon's routing Netlink socket, not from a program and not from a process. They are `attribution: "host-netlink"` and `guest_attributed: false`. A change on an interface the scan names as a VM tap is stored against that VM. Anything else names no VM. A deleted route on a bridge is a fact about the host. It is not evidence that a guest or QEMU deleted it. A small set of those facts is also a detection (`tap-link-down`, `default-route-removed`, and the rest in [Netlink](netlink.md)); the detection keeps the same attribution.
 
 ## Guest events
 

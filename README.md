@@ -62,7 +62,7 @@ Observe. Protect. Explain.
 | What is this VM connecting to, who connects to it, and what names does it look up or ask for? | `guest_connect`, `guest_flow`, `guest_inbound`, `guest_dns`, `guest_tls` events (`shukractl watch`, the Host connections page) | [Guest traffic](docs/tap.md) |
 | Did the connection get an answer? | `trace tap`: accepted, refused, never answered or blocked, with the handshake time | [Lost traffic](docs/tutorials/08-lost-traffic.md) |
 | Is something dropping this VM's traffic, or is it Shukra? | `trace drops` and `doctor` | [Where packets die](docs/drops.md) |
-| Did the host's own network change under the VM? | `netlink_link`, `netlink_address`, `netlink_route`, `netlink_neighbor` on `shukractl watch` | [Netlink](docs/netlink.md) |
+| Did the host's own network change under the VM? | `netlink_*` on `shukractl watch`; `tap-link-down`, `default-route-removed` and the other Netlink detections | [Netlink](docs/netlink.md) |
 | Is a guest not reading its NIC? | `doctor` (`vm-nic-not-consumed`) and `explain` (`guest_not_reading_nic`) | [Doctor](docs/doctor.md) |
 | Where may this VM connect to? | `shukractl policy` | [Egress policy](docs/egress-policy.md) |
 | Is a VMM doing something a VMM never does? | Nothing to run: `vmm-sensitive-open` and `vmm-syscall` detections | [VMM tripwires](docs/vmm-tripwires.md) |
@@ -129,7 +129,7 @@ Identity comes from the host: the QEMU command line (`-name` / `guest=`, `-uuid`
 
 **Where packets die.** The `drops` program counts what the kernel dropped on each VM tap, by the kernel's own reason, and subtracts Shukra's own isolation drops, so a `tc` filter, Cilium or a guest not reading its NIC is named and Shukra is not blamed for what it did not do. See [Where packets die](docs/drops.md) and [Find out why traffic is lost](docs/tutorials/08-lost-traffic.md).
 
-**Host network changes.** The daemon records link, address, route and neighbor changes from the kernel (`netlink_link`, `netlink_address`, `netlink_route`, `netlink_neighbor`), attributed `host-netlink` and not to a VM. A bridge or route that disappeared is in `shukractl watch`. `-netlink-events=false` stops the events; a link change still refreshes tap discovery. See [Netlink control-plane events](docs/netlink.md).
+**Host network changes.** The daemon records link, address, route and neighbor changes from the kernel (`netlink_link`, `netlink_address`, `netlink_route`, `netlink_neighbor`), attributed `host-netlink`. A change on a VM's own tap names that VM; it does not claim the guest made it. A deleted VM tap, a tap that went down, a removed default route or a failed neighbor is a detection (`tap-link-deleted`, `tap-link-down`, `default-route-removed`, `neighbor-failed`, and the rest in the guide). `-netlink-events=false` stops the events and those detections; a link change still refreshes tap discovery. See [Netlink control-plane events](docs/netlink.md).
 
 **Egress policy.** `shukractl policy` turns a VM's learned baseline into a list of networks it may *start* connections to. Learn a proposal, put the VM under it in **audit** mode (nothing is dropped; what would be is counted and reported), then **enforce** it with a timer that reverts it unless a person confirms. The management network can never be cut off, the kernel keeps enforcing without the daemon, and nothing changes for a VM until a policy is applied. See [Egress policy](docs/egress-policy.md).
 

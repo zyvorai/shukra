@@ -26,7 +26,7 @@ Each sink has its own queue of 256 and its own goroutine, so a stuck webhook can
 | `-syslog` | One JSON line to the local syslog daemon, facility `daemon`, tag `shukra`. `critical` is crit, `high` err, `medium` warning, `low` notice |
 | `-alert-file` | One JSON line appended to the file, mode `0600`. It rolls to `.1` at 16 MiB |
 
-What arrives is every detection, not only your rules': the built-in unexpected-exec check, [VMM tripwires](11-vmm-tripwires.md) (`vmm-sensitive-open` and the others), baseline first sightings, [egress policy](10-egress-policy.md) strays and every `policy-applied`, `policy-confirmed`, `policy-reverted` and `policy-removed`, and a response's `action-proposed` and the rest ([responses](../responses.md)). Route on `rule`.
+What arrives is every detection, not only your rules': the built-in unexpected-exec check, [VMM tripwires](11-vmm-tripwires.md) (`vmm-sensitive-open` and the others), baseline first sightings, [egress policy](10-egress-policy.md) strays and every `policy-applied`, `policy-confirmed`, `policy-reverted` and `policy-removed`, [Netlink](../netlink.md) findings such as `tap-link-down` and `default-route-removed`, and a response's `action-proposed` and the rest ([responses](../responses.md)). Route on `rule`.
 
 The payload is the event shape from the API. `rule` is the rule name, so a receiver can route on it without parsing `message`. `guest_attributed` is `true` only for a detection on traffic seen on a VM tap, and `attribution` says which.
 

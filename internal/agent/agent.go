@@ -52,10 +52,15 @@ type Agent struct {
 	Quarantine bool
 	seen       map[string]time.Time
 	covered    map[string]bool
+	netlinkMu  sync.Mutex
+	netlinks   map[int32]netlinkLinkState
 }
 
 func New(st *state.State, procRoot, watchPath, host string) (*Agent, error) {
-	a := &Agent{State: st, ProcRoot: procRoot, Host: host, watchPath: watchPath, vms: map[int]*trackedVM{}, firstScan: true}
+	a := &Agent{
+		State: st, ProcRoot: procRoot, Host: host, watchPath: watchPath,
+		vms: map[int]*trackedVM{}, firstScan: true, netlinks: map[int32]netlinkLinkState{},
+	}
 	a.cfg.Store(detect.DefaultConfig())
 	if err := a.Reload(); err != nil {
 		return nil, err
@@ -203,6 +208,10 @@ func (a *Agent) Ingest(e event.Event) {
 		e.TS = time.Now().UTC()
 	}
 	cfg := a.cfg.Load()
+	if e.Netlink != nil {
+		a.ingestNetlink(e, cfg)
+		return
+	}
 	if e.Kind == event.KindVMMOpen || e.Kind == event.KindVMMCall {
 		a.ingestVMM(e, cfg)
 		return

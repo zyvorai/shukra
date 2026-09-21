@@ -14,7 +14,7 @@ This is not a BPF program. It is a Netlink socket in the daemon. Link notificati
 | `netlink_neighbor` | `RTM_NEWNEIGH`, `RTM_DELNEIGH` | peer address, link-layer address, NUD state |
 | `netlink_error` | receive overrun or a Netlink error | signed kernel error code (`ENOBUFS` is `-105`) |
 
-Every event has `attribution: "host-netlink"` and `guest_attributed: false`. It names no VM. It is a host control-plane observation, not evidence that a guest or QEMU changed the object. The detail is under `netlink` in the JSON. `shukractl watch` prints `action=`, `object=`, and whichever of `interface`, `address`, `destination`, `gateway`, `state` and `oper_state` the notification carried:
+Every event has `attribution: "host-netlink"` and `guest_attributed: false`. It is a host control-plane observation, not evidence that a guest or QEMU changed the object. When the interface is a tap the current scan assigns to a VM, the event names that VM and is stored on that VM's flight recorder. A host interface (a bridge, a bond, a dummy) names no VM and goes to the `_host` recorder. Naming the VM does not mean the guest made the change: `guest_attributed` stays false either way. The detail is under `netlink` in the JSON. `shukractl watch` prints `action=`, `object=`, and whichever of `interface`, `address`, `destination`, `gateway`, `state` and `oper_state` the notification carried:
 
 ```text
 2026-09-21T14:33:01Z  netlink_address  host-netlink  vm=  action=new  object=address  interface=br0  address=192.0.2.77
@@ -42,7 +42,24 @@ Example:
 }
 ```
 
-They share the event list's host-network class with `tcp_connect` and `tcp_retransmit` (512 of the 2048 slots once the list is full). A burst of route updates can push older host connects out of that share; it cannot push out a guest event, a detection or a tripwire. They are also copied onto the `_host` flight recorder. `shukractl recorder <vm>` does not show them.
+They share the event list's host-network class with `tcp_connect` and `tcp_retransmit` (512 of the 2048 slots once the list is full). A burst of route updates can push older host connects out of that share; it cannot push out a guest event, a detection or a tripwire.
+
+## What becomes a detection
+
+The raw event is always stored. A detection is raised only for a change that can explain a loss of connectivity, and it keeps `attribution: "host-netlink"`. There is nothing to configure. Repeats of the same finding are suppressed with the other detections.
+
+| Rule | Severity | Raised when |
+| --- | --- | --- |
+| `tap-link-deleted` | high | A VM's tap was deleted |
+| `tap-link-down` | high | A VM's tap went `down` or `lower-layer-down` |
+| `tap-master-changed` | high | A VM's tap moved to a different master, after Shukra had already seen it |
+| `tap-mtu-changed` | medium | A VM's tap MTU changed, after Shukra had already seen a non-zero MTU |
+| `tap-address-removed` | medium | An address was removed from a VM's tap |
+| `default-route-removed` | high | The kernel deleted an IPv4 `0.0.0.0/0` or IPv6 `::/0` route, on any interface |
+| `neighbor-failed` | medium | Neighbor resolution failed, on any interface |
+| `netlink-overrun` | high | The socket lost messages or the kernel returned an error (`netlink-error`) |
+
+A link, address or MTU change on an interface no VM owns is recorded and is not a detection. The first time Shukra sees a tap it does not call that an MTU or master change. `-netlink-events=false` stops both the events and these detections. The tap refresh still runs.
 
 ## What the socket accepts
 
