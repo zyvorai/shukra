@@ -59,7 +59,7 @@ The raw event is always stored. A detection is raised only for a change that can
 | `neighbor-failed` | medium | Neighbor resolution failed, on any interface |
 | `netlink-overrun` | high | The socket lost messages or the kernel returned an error (`netlink-error`) |
 
-A link, address or MTU change on an interface no VM owns is recorded and is not a detection. The first time Shukra sees a tap it does not call that an MTU or master change. `-netlink-events=false` stops both the events and these detections. The tap refresh still runs.
+A link, address or MTU change on an interface no VM owns is recorded and is not a detection. The first time Shukra sees a tap it does not call that an MTU or master change. `-netlink-events=false` stops both the events and these detections. The tap refresh still runs. `default-route-removed`, `neighbor-failed` and `netlink-overrun` name no VM, so a [response](responses.md) will not answer them. The tap findings name the VM, and a response can.
 
 ## What the socket accepts
 

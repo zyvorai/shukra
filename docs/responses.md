@@ -40,8 +40,9 @@ The first response in the file that matches a detection answers it, so put the n
 | `vmm-sensitive-open`, `vmm-syscall`, `vmm-flood` | [VMM tripwires](vmm-tripwires.md) | critical or high, as there |
 | `egress-policy-audit`, `egress-policy-blocked` | [Egress policy](egress-policy.md) | low, medium |
 | `policy-applied`, `policy-confirmed`, `policy-reverted`, `policy-removed` | Egress policy changes | low or medium |
+| `tap-link-deleted`, `tap-link-down`, `tap-master-changed`, `tap-mtu-changed`, `tap-address-removed` | [Netlink](netlink.md), on a VM tap | high, high, high, medium, medium |
 
-The rest are yours: the `name` of a `destinations`, `ports`, `dns`, `tls` or `thresholds` rule. The `action-*` announcements are never answered.
+`default-route-removed`, `neighbor-failed` and `netlink-overrun` name no VM, so a response never answers them. The rest are yours: the `name` of a `destinations`, `ports`, `dns`, `tls` or `thresholds` rule. The `action-*` announcements are never answered.
 
 ## The flow
 

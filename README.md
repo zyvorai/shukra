@@ -307,7 +307,7 @@ The whole surface, with fields, is in the [API reference](docs/api.md). Give Pro
 | `-dns-events` | `true` | Record the names a guest looks up. `false`: the program does not read DNS at all |
 | `-tls-events` | `true` | Record the server names in a TLS ClientHello. `false`: the program does not read a TCP payload at all |
 | `-vmm-tripwires` | `true` | Load the `vmm` program. `false`: it is not loaded |
-| `-netlink-events` | `true` | Record host link, address, route and neighbor changes. `false`: those events are not recorded; a link change still refreshes tap discovery |
+| `-netlink-events` | `true` | Record host link, address, route and neighbor changes, and the detections made from them. `false`: those events and detections are not recorded; a link change still refreshes tap discovery |
 | `-tls-cert`, `-tls-key` | none | Serve HTTPS (PEM). `SIGHUP` reloads the certificate. Required to listen off loopback unless `-allow-insecure-http` is set |
 | `-allow-insecure-http` | `false` | Permit plain HTTP on a non-loopback address. The bearer key crosses the network in the clear |
 | `-webhook-url`, `-syslog`, `-alert-file` | none | Alert sinks (webhook secret: `SHUKRA_WEBHOOK_SECRET`) |
