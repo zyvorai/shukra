@@ -64,7 +64,7 @@ func TestExportShape(t *testing.T) {
 	st := New("node-07")
 	st.SetVMs([]identity.VM{{Name: "payment-prod-03", PID: 1}})
 	doc := st.Export()
-	if doc.Status.Product != "shukra" || len(doc.VMs) != 1 || doc.Events == nil && len(doc.KVM) < 0 {
+	if doc.Status.Product != "shukra" || len(doc.VMs) != 1 || doc.Events == nil {
 		t.Fatalf("%+v", doc)
 	}
 	if doc.Status.Summary == "" {

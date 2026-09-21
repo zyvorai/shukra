@@ -14,7 +14,10 @@ Type=simple
 # file below overrides it.
 Environment=SHUKRA_EXTRA_ARGS=
 EnvironmentFile=-/etc/shukra/env
-ExecStart=@BIN_DIR@/shukrad -listen 0.0.0.0:30970 -web @WEB_DIR@ -watchlist /etc/shukra/detections.yaml -data-dir /var/lib/shukra $SHUKRA_EXTRA_ARGS
+# Loopback by default. A remote bind is explicit, and plain HTTP on one is
+# refused unless -allow-insecure-http is also set. Put TLS in front of this
+# address, or set both flags in SHUKRA_EXTRA_ARGS.
+ExecStart=@BIN_DIR@/shukrad -listen 127.0.0.1:30970 -web @WEB_DIR@ -watchlist /etc/shukra/detections.yaml -data-dir /var/lib/shukra $SHUKRA_EXTRA_ARGS
 ExecReload=/bin/kill -HUP $MAINPID
 StateDirectory=shukra
 StateDirectoryMode=0700

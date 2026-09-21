@@ -40,10 +40,12 @@ func main() {
 	tlsCert := flag.String("tls-cert", "", "serve HTTPS with this certificate (PEM). Needs -tls-key. SIGHUP reloads it")
 	tlsKey := flag.String("tls-key", "", "private key for -tls-cert (PEM)")
 	isolateAllow := flag.String("isolate-allow", "", "comma-separated CIDRs an isolated VM can still reach (your management and monitoring networks). Without it isolate is refused")
+	quarantine := flag.Bool("quarantine-uncovered", false, "drop a new tap, except the management allow list, until an enforcing VM's saved policy is on it. Off by default so a missed notification cannot blackhole a VM")
 	dnsEvents := flag.Bool("dns-events", true, "record the names a guest looks up (guest_dns events). Names identify what a VM does: with false the program does not read DNS at all")
 	tlsEvents := flag.Bool("tls-events", true, "record the server names a guest asks for in a TLS ClientHello (guest_tls events). Names identify what a VM does: with false the program does not read a TCP payload at all")
 	vmmTripwires := flag.Bool("vmm-tripwires", true, "watch QEMU processes, and what they start, for the files they open and the calls they make that a VMM never does (vmm_file_open and vmm_syscall events, and detections). The program runs on every open on the host, and costs about 200 ns of each, plus a hook on every process creation and exit; with false it is not loaded")
 	noAuth := flag.Bool("no-auth", false, "serve the API without a bearer key")
+	allowInsecure := flag.Bool("allow-insecure-http", false, "allow plain HTTP on a non-loopback address. The bearer key crosses the network in the clear")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	detachAll := flag.Bool("detach-all", false, "remove every pinned tap program and its isolation, then exit. Works while the daemon is stopped")
 	flag.Parse()
@@ -75,6 +77,9 @@ func main() {
 		log.Printf("WARNING: SHUKRA_API_KEY unset; using the well-known dev token %q. Set SHUKRA_API_KEY before exposing %s.", key, *listen)
 	}
 	if *noAuth {
+		if !isLoopback(*listen) {
+			log.Fatalf("-no-auth on %s is refused: anyone who can reach it could read everything and call isolate", *listen)
+		}
 		log.Printf("WARNING: -no-auth: the API on %s is open to anyone who can reach it", *listen)
 	}
 	readOnlyKey := os.Getenv("SHUKRA_READONLY_KEY")
@@ -87,8 +92,10 @@ func main() {
 		if certs, err = api.NewCertStore(*tlsCert, *tlsKey); err != nil {
 			log.Fatalf("tls: %v", err)
 		}
-	} else if !isLoopback(*listen) {
-		log.Printf("WARNING: serving plain HTTP on %s: the bearer key crosses the network in the clear. Use -tls-cert and -tls-key, or listen on 127.0.0.1", *listen)
+	} else if err := refuseInsecureListen(*listen, *allowInsecure, *noAuth); err != nil {
+		log.Fatal(err)
+	} else if *allowInsecure && !isLoopback(*listen) {
+		log.Printf("WARNING: -allow-insecure-http: serving plain HTTP on %s. The bearer key crosses the network in the clear.", *listen)
 	}
 	host, _ := os.Hostname()
 	st := state.New(host)
@@ -203,6 +210,8 @@ func main() {
 	egress := policy.New(st, observe.NewEgressKernel(enforcer), policyStore)
 	egress.Restore(pastPolicies)
 	st.SetPolicy(egress)
+	ag.AfterTaps = egress.Reconcile
+	ag.Quarantine = *quarantine
 	go egress.Run(stopEngine)
 	var sinkNames []string
 	for _, k := range sinks {
@@ -246,6 +255,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go observe.WatchLinks(ctx, func() { ag.Refresh() })
 	go func() {
 		t := time.NewTicker(2 * time.Second)
 		defer t.Stop()
@@ -294,7 +304,7 @@ func main() {
 		mux.Handle("/", spa(*web))
 	}
 
-	srv := &http.Server{Addr: *listen, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: *listen, Handler: api.SecureHeaders(mux), ReadHeaderTimeout: 5 * time.Second}
 	scheme := "http"
 	if certs != nil {
 		srv.TLSConfig = certs.Config()
@@ -355,6 +365,23 @@ func parseAllow(list string) ([]netip.Prefix, error) {
 		out = append(out, netip.PrefixFrom(a, a.BitLen()))
 	}
 	return out, nil
+}
+
+// refuseInsecureListen stops a daemon that would send a bearer key, or no key at
+// all, across a network that is not this host. Loopback plain HTTP is allowed.
+// TLS on any address is allowed. -allow-insecure-http permits plain HTTP off
+// loopback, but never -no-auth off loopback.
+func refuseInsecureListen(listen string, allowInsecure, noAuth bool) error {
+	if isLoopback(listen) {
+		return nil
+	}
+	if noAuth {
+		return fmt.Errorf("-no-auth on %s is refused: anyone who can reach it could read everything and call isolate", listen)
+	}
+	if allowInsecure {
+		return nil
+	}
+	return fmt.Errorf("refusing plain HTTP on %s: the bearer key would cross the network in the clear. Listen on 127.0.0.1, pass -tls-cert and -tls-key, or pass -allow-insecure-http", listen)
 }
 
 // isLoopback reports whether addr only accepts connections from this host.

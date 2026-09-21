@@ -50,8 +50,17 @@ func OpenActions(dir string) (*Actions, []state.Action, error) {
 // Close closes the log.
 func (a *Actions) Close() error { return a.log.Close() }
 
-// Append implements response.Store.
-func (a *Actions) Append(x state.Action) error { return a.log.Append(x) }
+// Append implements response.Store. An isolation that took effect is synced.
+func (a *Actions) Append(x state.Action) error {
+	if err := a.log.Append(x); err != nil {
+		return err
+	}
+	switch x.Status {
+	case "executed", "executed_audit_degraded", "released":
+		return a.log.Sync()
+	}
+	return nil
+}
 
 func (a *Actions) bundlePath(id string) (string, bool) {
 	if !validID.MatchString(id) { // an id comes from a URL: it must not name a path
@@ -66,7 +75,7 @@ func (a *Actions) SaveBundle(id string, b []byte) error {
 	if !ok {
 		return errors.New("not an action id")
 	}
-	if err := os.WriteFile(p, b, 0o600); err != nil {
+	if err := WriteFileAtomic(p, b); err != nil {
 		return err
 	}
 	a.prune()

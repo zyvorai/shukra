@@ -84,6 +84,12 @@ type Policy struct {
 	Source  string    `json:"source"`
 	By      string    `json:"by,omitempty"`
 	Applied time.Time `json:"applied"`
+	KeyID   string    `json:"keyId,omitempty"`
+	Role    string    `json:"role,omitempty"`
+	Label   string    `json:"label,omitempty"`
+	Remote  string    `json:"remote,omitempty"`
+	Request string    `json:"requestId,omitempty"`
+	Op      string    `json:"op,omitempty"`
 	Revert  *Revert   `json:"revert,omitempty"`
 }
 
@@ -333,7 +339,9 @@ func (e *Engine) applyLocked(vmName string, mode Mode, req state.PolicyRequest, 
 	}
 
 	now := e.now().UTC()
-	next := &Policy{VM: vmName, Mode: mode, Allow: allow, Source: source, By: actor, Applied: now}
+	who := state.ParseActor(actor)
+	next := &Policy{VM: vmName, Mode: mode, Allow: allow, Source: source, By: who.Principal(), Applied: now,
+		KeyID: who.KeyID, Role: who.Role, Label: who.Label, Remote: who.Remote, Request: who.RequestID, Op: who.Op}
 	if mode == Enforce && confirm > 0 {
 		r := &Revert{Until: now.Add(confirm), Mode: Off}
 		switch {
@@ -371,7 +379,7 @@ func (e *Engine) applyLocked(vmName string, mode Mode, req state.PolicyRequest, 
 	if mode == Enforce {
 		verb, sev = "is now enforcing", "medium"
 	}
-	msg := fmt.Sprintf("%s %s an egress policy of %d networks (set by %s, from %s)", vmName, verb, len(allow), actor, source)
+	msg := fmt.Sprintf("%s %s an egress policy of %d networks (set by %s, from %s)", vmName, verb, len(allow), who.Principal(), source)
 	if next.Revert != nil {
 		msg += fmt.Sprintf("; it goes back to %s at %s unless confirmed (shukractl policy confirm %s)", describe(next.Revert.Mode, len(next.Revert.Allow)), next.Revert.Until.Format(time.RFC3339), vmName)
 	}
@@ -411,6 +419,8 @@ func (e *Engine) Confirm(vmName, actor string) (state.PolicyRow, error) {
 	}
 	held := *p.Revert
 	p.Revert = nil
+	who := state.ParseActor(actor)
+	p.By, p.KeyID, p.Role, p.Label, p.Remote, p.Request, p.Op = who.Principal(), who.KeyID, who.Role, who.Label, who.Remote, who.RequestID, who.Op
 	if err := e.saveLocked(); err != nil {
 		p.Revert = &held
 		e.mu.Unlock()
@@ -419,7 +429,7 @@ func (e *Engine) Confirm(vmName, actor string) (state.PolicyRow, error) {
 	_, vm, present := e.find(vmName)
 	row := e.rowLocked(p, present)
 	e.mu.Unlock()
-	e.announce([]announcement{{vm, "policy-confirmed", "low", fmt.Sprintf("%s's %s egress policy was confirmed by %s: it stays", vmName, p.Mode, actor)}})
+	e.announce([]announcement{{vm, "policy-confirmed", "low", fmt.Sprintf("%s's %s egress policy was confirmed by %s: it stays", vmName, p.Mode, who.Principal())}})
 	return row, nil
 }
 
@@ -451,7 +461,7 @@ func (e *Engine) Remove(vmName, actor string) (state.PolicyRow, error) {
 	if len(failed) > 0 {
 		row.Problem = "some taps did not release it: " + strings.Join(failed, "; ")
 	}
-	e.announce([]announcement{{vm, "policy-removed", "low", fmt.Sprintf("%s's egress policy was removed by %s", vmName, actor)}})
+	e.announce([]announcement{{vm, "policy-removed", "low", fmt.Sprintf("%s's egress policy was removed by %s", vmName, state.ParseActor(actor).Principal())}})
 	return row, nil
 }
 
@@ -617,7 +627,8 @@ func (e *Engine) Get(vmName string) (state.PolicyRow, bool) {
 }
 
 func (e *Engine) rowLocked(p *Policy, present bool) state.PolicyRow {
-	row := state.PolicyRow{VM: p.VM, Mode: string(p.Mode), Allow: append([]string{}, p.Allow...), Source: p.Source, By: p.By, Applied: p.Applied, Present: present, Taps: []state.PolicyTap{}}
+	row := state.PolicyRow{VM: p.VM, Mode: string(p.Mode), Allow: append([]string{}, p.Allow...), Source: p.Source, By: p.By, Applied: p.Applied, Present: present, Taps: []state.PolicyTap{},
+		KeyID: p.KeyID, Role: p.Role, Label: p.Label, Remote: p.Remote, RequestID: p.Request, Op: p.Op}
 	if p.Revert != nil {
 		row.Revert = &state.PolicyRevert{Until: p.Revert.Until, To: describe(p.Revert.Mode, len(p.Revert.Allow))}
 	}

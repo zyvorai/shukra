@@ -41,6 +41,12 @@ func writeMetrics(w io.Writer, st *state.State) {
 	}
 	counter("shukra_events_total", "Discrete events stored since the daemon started.")
 	fmt.Fprintf(w, "shukra_events_total %d\n", st.Seq())
+	fails, _ := st.AuditFailures()
+	counter("shukra_audit_persist_failures_total", "Audit writes that failed since the daemon started. An isolation can succeed while this increases.")
+	fmt.Fprintf(w, "shukra_audit_persist_failures_total %d\n", fails)
+	if attaches := st.TapAttaches(); len(attaches) > 0 {
+		writeAttachHistogram(w, attaches)
+	}
 	gauge("shukra_detections", "Detections currently held in memory.")
 	fmt.Fprintf(w, "shukra_detections %d\n", s.Detections)
 
@@ -74,7 +80,7 @@ func writeMetrics(w io.Writer, st *state.State) {
 		gauge("shukra_actions_pending", "Proposed isolations waiting for a person to approve or reject them.")
 		fmt.Fprintf(w, "shukra_actions_pending %d\n", counts["pending"])
 		gauge("shukra_actions", "What responses decided, held in memory, by status.")
-		for _, s := range []string{"pending", "executed", "released", "refused", "rejected", "expired", "dry_run"} {
+		for _, s := range []string{"pending", "executed", "executed_audit_degraded", "released", "refused", "rejected", "expired", "dry_run"} {
 			fmt.Fprintf(w, "shukra_actions{status=%q} %d\n", s, counts[s])
 		}
 	}
@@ -354,5 +360,42 @@ func writeHistograms(w io.Writer, name, help string, series []histSeries) {
 			}
 		}
 		fmt.Fprintf(w, "%s_bucket{%s,le=\"+Inf\"} %d\n%s_count{%s} %d\n", name, s.labels, total, name, s.labels, total)
+	}
+}
+
+// Attach latency is a userspace duration, so the buckets are seconds rather than
+// the kernel's log2 nanosecond histogram.
+var attachBuckets = []float64{0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5}
+
+func writeAttachHistogram(w io.Writer, obs []state.TapAttachObs) {
+	byVM := map[string][]float64{}
+	var order []string
+	for _, o := range obs {
+		if _, ok := byVM[o.VM]; !ok {
+			order = append(order, o.VM)
+		}
+		byVM[o.VM] = append(byVM[o.VM], o.Seconds)
+	}
+	sort.Strings(order)
+	fmt.Fprintf(w, "# HELP shukra_tap_attach_seconds Seconds from first sight of a tap to the program and its saved policy.\n# TYPE shukra_tap_attach_seconds histogram\n")
+	for _, vm := range order {
+		samples := byVM[vm]
+		lbl := `vm="` + labelEscaper.Replace(vm) + `"`
+		var sum float64
+		for _, s := range samples {
+			sum += s
+		}
+		for _, le := range attachBuckets {
+			var n int
+			for _, s := range samples {
+				if s <= le {
+					n++
+				}
+			}
+			fmt.Fprintf(w, "shukra_tap_attach_seconds_bucket{%s,le=\"%s\"} %d\n", lbl, strconv.FormatFloat(le, 'g', -1, 64), n)
+		}
+		fmt.Fprintf(w, "shukra_tap_attach_seconds_bucket{%s,le=\"+Inf\"} %d\n", lbl, len(samples))
+		fmt.Fprintf(w, "shukra_tap_attach_seconds_sum{%s} %s\n", lbl, strconv.FormatFloat(sum, 'g', -1, 64))
+		fmt.Fprintf(w, "shukra_tap_attach_seconds_count{%s} %d\n", lbl, len(samples))
 	}
 }

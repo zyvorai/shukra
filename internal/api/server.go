@@ -243,13 +243,10 @@ func routes(st *state.State) *http.ServeMux {
 			http.Error(w, "no baseline is kept for that VM", http.StatusNotFound)
 			return
 		}
-		actor := r.Header.Get("X-Shukra-Actor")
-		if actor == "" {
-			actor = "api"
-		}
-		// Forgetting restarts a VM's learning period, which is a way to hide a change: so it is recorded.
+		actor := actorOf(r, "baseline-forget")
+		who := state.ParseActor(actor)
 		st.AddEvent(event.Event{Kind: event.KindDetection, Rule: "baseline-forgotten", Severity: "low", VM: event.VM{Name: body.VM},
-			Message: body.VM + "'s learned baseline was forgotten by " + actor + ": it is learning again from now"})
+			Message: body.VM + "'s learned baseline was forgotten by " + who.Principal() + ": it is learning again from now"})
 		writeJSON(w, http.StatusOK, map[string]any{"vm": body.VM, "forgotten": true})
 	})
 	// Egress policy: which networks a VM may start connections to, learned, audited, then enforced.
@@ -296,10 +293,7 @@ func routes(st *state.State) *http.ServeMux {
 				http.Error(w, "no egress policy engine in this build", http.StatusConflict)
 				return
 			}
-			actor := r.Header.Get("X-Shukra-Actor")
-			if actor == "" {
-				actor = "api"
-			}
+			actor := actorOf(r, strings.TrimPrefix(r.URL.Path, "/api/v1/policy/"))
 			row, err := do(v, body.VM, actor, body)
 			if err != nil {
 				policyError(w, err)
@@ -334,10 +328,11 @@ func routes(st *state.State) *http.ServeMux {
 				http.Error(w, "no responses are configured: the rules file has no responses section", http.StatusConflict)
 				return
 			}
-			actor := r.Header.Get("X-Shukra-Actor")
-			if actor == "" {
-				actor = "api"
+			op := "reject"
+			if approve {
+				op = "approve"
 			}
+			actor := actorOf(r, op)
 			var a state.Action
 			var err error
 			if approve {
@@ -386,7 +381,7 @@ func routes(st *state.State) *http.ServeMux {
 		}
 		writeJSON(w, http.StatusOK, out)
 	})
-	act := func(do func(vm, actor string) state.Isolation) http.HandlerFunc {
+	act := func(op string, do func(vm, actor string) state.Isolation) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			var body struct {
 				VM string `json:"vm"`
@@ -395,15 +390,11 @@ func routes(st *state.State) *http.ServeMux {
 				http.Error(w, "vm is required", http.StatusBadRequest)
 				return
 			}
-			actor := r.Header.Get("X-Shukra-Actor")
-			if actor == "" {
-				actor = "api"
-			}
-			writeJSON(w, http.StatusOK, do(body.VM, actor))
+			writeJSON(w, http.StatusOK, do(body.VM, actorOf(r, op)))
 		}
 	}
-	mux.HandleFunc("POST /api/v1/isolate", act(st.Isolate))
-	mux.HandleFunc("POST /api/v1/release", act(st.Release))
+	mux.HandleFunc("POST /api/v1/isolate", act("isolate", st.Isolate))
+	mux.HandleFunc("POST /api/v1/release", act("release", st.Release))
 	mux.HandleFunc("GET /api/v1/trace/drops", func(w http.ResponseWriter, r *http.Request) {
 		rows, taps := st.Drops(r.URL.Query().Get("vm"))
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -565,7 +556,13 @@ func auth(k Keys, next http.Handler) http.Handler {
 			_, _ = w.Write([]byte(`{"error":"this key is read-only"}`))
 			return
 		}
-		next.ServeHTTP(w, r)
+		role, key := "readonly", k.ReadOnly
+		if admin {
+			role, key = "admin", k.Admin
+		}
+		p := principal{KeyID: keyID(role, key), Role: role, Label: clientLabel(r), Remote: r.RemoteAddr, RequestID: requestID(r)}
+		w.Header().Set("X-Request-Id", p.RequestID)
+		next.ServeHTTP(w, withPrincipal(r, p))
 	})
 }
 

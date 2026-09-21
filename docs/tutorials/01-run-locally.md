@@ -107,7 +107,7 @@ VMS
   none — no qemu-system or FluxVM VMM process in the proc scan
 ```
 
-The same token signs you into the console at `http://127.0.0.1:30970`. Enter any user name; the token is the password. The console keeps it in memory only, so a reload asks again.
+The same token signs you into the console at `http://127.0.0.1:30970`. There is no username. The console keeps the token in memory only, so a reload asks again.
 
 ## Console without a daemon
 

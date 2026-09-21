@@ -20,6 +20,8 @@ type Enforcer interface {
 	// Durable says whether enforcement outlives the daemon: true when the tap
 	// program's links and maps are pinned, false when it runs unpinned.
 	Durable() bool
+	// Hook is "tcx" or "tc", the attach that is actually carrying guest traffic.
+	Hook() string
 	// Isolate and Release return the taps they changed, and an error naming any they could not.
 	Isolate(taps []string) ([]string, error)
 	Release(taps []string) ([]string, error)
@@ -126,7 +128,7 @@ func (s *State) Durable() bool {
 	return e != nil && e.Durable()
 }
 
-// Enforcement says how isolation is enforced: "tcx" when it can be, and
+// Enforcement says how isolation is enforced: "tcx" or "tc" when it can be, and
 // "not_attached" otherwise with the reason.
 func (s *State) Enforcement() (mode string, allow []string, reason string) {
 	s.mu.RLock()
@@ -139,7 +141,14 @@ func (s *State) Enforcement() (mode string, allow []string, reason string) {
 	if !ok {
 		return "not_attached", e.AllowList(), why
 	}
-	return "tcx", e.AllowList(), ""
+	return hookOf(e), e.AllowList(), ""
+}
+
+func hookOf(e Enforcer) string {
+	if h := e.Hook(); h != "" {
+		return h
+	}
+	return "tcx"
 }
 
 // Isolate asks for the VM's taps to be isolated and records the outcome.
@@ -151,8 +160,9 @@ func (s *State) Release(vm, actor string) Isolation { return s.act("release", vm
 func (s *State) act(action, vmName, actor string) Isolation {
 	rec := Isolation{
 		VM: vmName, Enforcement: "not_attached",
-		Audit: Audit{TS: time.Now().UTC(), Actor: actor, Action: action, VM: vmName, Result: "recorded_only"},
+		Audit: Audit{TS: time.Now().UTC(), Action: action, VM: vmName, Result: "recorded_only", Op: action},
 	}
+	StampAudit(&rec.Audit, ParseActor(actor))
 	s.mu.RLock()
 	enf := s.enforcer
 	var vm identity.VM
@@ -191,7 +201,7 @@ func (s *State) act(action, vmName, actor string) Isolation {
 			}
 			switch {
 			case err == nil && len(done) == len(vm.Taps):
-				rec.Applied, rec.Enforcement, rec.Audit.Result = true, "tcx", "applied"
+				rec.Applied, rec.Enforcement, rec.Audit.Result = true, hookOf(enf), "applied"
 				if action == "isolate" {
 					rec.Reason = "Traffic to and from " + strings.Join(done, ", ") + " is dropped, except ARP, IPv6 neighbour discovery and " + strings.Join(enf.AllowList(), ", ") + "."
 					if enf.Durable() {
@@ -203,12 +213,12 @@ func (s *State) act(action, vmName, actor string) Isolation {
 					rec.Reason = "Isolation lifted on " + strings.Join(done, ", ") + "."
 				}
 			case len(done) == 0:
-				rec.Enforcement, rec.Audit.Result = "tcx", "failed"
+				rec.Enforcement, rec.Audit.Result = hookOf(enf), "failed"
 				rec.Reason = fmt.Sprintf("nothing was %s: %v", verb, err)
 			default:
 				// Some taps changed and some did not. Say so, and keep what took effect: a
 				// half-isolated VM is safer left contained than silently reopened.
-				rec.Enforcement, rec.Audit.Result = "tcx", "partial"
+				rec.Enforcement, rec.Audit.Result = hookOf(enf), "partial"
 				rec.Reason = fmt.Sprintf("%s %d of %d taps (%s): %v", verb, len(done), len(vm.Taps), strings.Join(done, ", "), err)
 			}
 		}

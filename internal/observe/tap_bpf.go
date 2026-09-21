@@ -50,13 +50,21 @@ func TapProgram() (status, detail string) {
 	case !loaded:
 		return "detached", "not loaded"
 	case n == 0:
+		if msg := bpfgen.TapLastError(); strings.Contains(msg, "host-only") {
+			return "detached", msg
+		}
 		return "detached", "no VM tap interfaces to attach to yet"
 	default:
 		durable := "enforcement survives a daemon restart"
 		if !bpfgen.TapPinned() {
 			durable = "not pinned: enforcement lasts only while the daemon runs"
 		}
-		return "attached", fmt.Sprintf("%d taps, %s", n, durable)
+		hook, prio, others := bpfgen.TapAttachInfo()
+		via := "via tcx"
+		if hook == "tc" {
+			via = fmt.Sprintf("via tc priority %d, %d other filters on the device", prio, others)
+		}
+		return "attached", fmt.Sprintf("%d taps %s, %s", n, via, durable)
 	}
 }
 
@@ -262,6 +270,15 @@ func (e *Enforcer) Isolated(tap string) bool { return bpfgen.TapIsolated(tap) }
 // Durable reports whether isolation survives the daemon, which needs a bpf filesystem to pin on.
 func (e *Enforcer) Durable() bool { return bpfgen.TapPinned() }
 
+// Hook is tcx when that attach worked, and tc when the clsact fallback is in use.
+func (e *Enforcer) Hook() string {
+	hook, _, _ := bpfgen.TapAttachInfo()
+	if hook == "" {
+		return "tcx"
+	}
+	return hook
+}
+
 func (e *Enforcer) set(taps []string, on bool) ([]string, error) {
 	var done []string
 	var failed []string
@@ -332,3 +349,10 @@ func (*EgressKernel) Stats() []EgressCounters {
 	sort.Slice(out, func(i, j int) bool { return out[i].Tap < out[j].Tap })
 	return out
 }
+
+// AttachedTaps names the interfaces that currently carry the tap program.
+func AttachedTaps() []string { return bpfgen.TapAttached() }
+
+// QuarantineTap drops a tap's traffic except the management allow list until the
+// saved egress policy is written. The policy write clears it.
+func QuarantineTap(name string) error { return bpfgen.SetTapQuarantine(name, true) }

@@ -37,11 +37,17 @@ type Program struct {
 
 // Audit is the isolate record. Applied is always false in this build.
 type Audit struct {
-	TS     time.Time `json:"ts"`
-	Actor  string    `json:"actor"`
-	Action string    `json:"action"`
-	VM     string    `json:"vm"`
-	Result string    `json:"result"`
+	TS        time.Time `json:"ts"`
+	Actor     string    `json:"actor"`
+	Action    string    `json:"action"`
+	VM        string    `json:"vm"`
+	Result    string    `json:"result"`
+	KeyID     string    `json:"keyId,omitempty"`
+	Role      string    `json:"role,omitempty"`
+	Label     string    `json:"label,omitempty"`
+	Remote    string    `json:"remote,omitempty"`
+	RequestID string    `json:"requestId,omitempty"`
+	Op        string    `json:"op,omitempty"`
 }
 
 // Isolation is the response to an isolate request.
@@ -120,11 +126,61 @@ type State struct {
 	dropSource    func() []DropStat
 	shukraBase    map[string]uint64 // per tap: what Shukra had already dropped when this daemon first looked
 	cpuVendor     string
+	auditFails    int
+	auditFailID   string
+	tapAttaches   []TapAttachObs
 	persist       Persister
 	hooks         []func(event.Event)
 	suppressed    uint64
 	sinkStats     func() []SinkStat
 	changed       chan struct{}
+}
+
+// NoteAuditFailure counts a response or isolation record that could not be saved.
+// id is the action whose record failed, when there is one.
+func (s *State) NoteAuditFailure(id string) {
+	s.mu.Lock()
+	s.auditFails++
+	if id != "" {
+		s.auditFailID = id
+	}
+	s.mu.Unlock()
+}
+
+// TapAttachObs is one measurement of how long a tap took to go from first
+// sight to program plus saved policy.
+type TapAttachObs struct {
+	VM      string
+	Seconds float64
+}
+
+// NoteTapAttach records that latency. The series is capped so a scrape cannot grow without bound.
+func (s *State) NoteTapAttach(vm string, d time.Duration) {
+	if d < 0 {
+		d = 0
+	}
+	s.mu.Lock()
+	s.tapAttaches = append(s.tapAttaches, TapAttachObs{VM: vm, Seconds: d.Seconds()})
+	if len(s.tapAttaches) > 256 {
+		s.tapAttaches = s.tapAttaches[len(s.tapAttaches)-256:]
+	}
+	s.mu.Unlock()
+}
+
+// TapAttaches is a copy of the latencies recorded since start.
+func (s *State) TapAttaches() []TapAttachObs {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]TapAttachObs, len(s.tapAttaches))
+	copy(out, s.tapAttaches)
+	return out
+}
+
+// AuditFailures is how many audit writes have failed since the daemon started, and the last action id.
+func (s *State) AuditFailures() (n int, lastID string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.auditFails, s.auditFailID
 }
 
 // MaxEvents bounds the in-memory event and detection lists.

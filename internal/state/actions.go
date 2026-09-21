@@ -38,6 +38,12 @@ type Action struct {
 	Guardrail string    `json:"guardrail,omitempty"`
 	ReleaseAt time.Time `json:"releaseAt,omitempty"`
 	Released  time.Time `json:"released,omitempty"`
+	KeyID     string    `json:"keyId,omitempty"`
+	Role      string    `json:"role,omitempty"`
+	Label     string    `json:"label,omitempty"`
+	Remote    string    `json:"remote,omitempty"`
+	RequestID string    `json:"requestId,omitempty"`
+	Op        string    `json:"op,omitempty"`
 }
 
 // ActionsView is what the API needs of the response engine. The engine implements it.

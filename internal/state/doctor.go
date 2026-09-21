@@ -119,6 +119,11 @@ func (s *State) Doctor() []Check {
 	default:
 		add("transport", "ok", "The API is only reachable from this host", "", "")
 	}
+	if n, id := s.AuditFailures(); n > 0 {
+		add("audit-persist", "fail", "An enforcement record was not saved",
+			fmt.Sprintf("%d audit write(s) failed since start. The last action was %s. Isolation may have succeeded while its durable record did not.", n, id),
+			"Free space on the data directory and restart only after the disk accepts writes. An action left executed_audit_degraded was enforced.")
+	}
 	if !c.ReadOnlyKey {
 		add("readonly-key", "info", "No read-only key", "A scrape or dashboard has to use the admin key, which can also isolate a VM.",
 			"Set SHUKRA_READONLY_KEY and give that to Prometheus.")
@@ -131,7 +136,7 @@ func (s *State) Doctor() []Check {
 		case maj < 5 || (maj == 5 && min < 8):
 			add("kernel", "warn", "The kernel is older than 5.8", rel+": no CAP_BPF, so the service runs with full root capabilities.", "Upgrade the kernel if you can.")
 		case maj < 6 || (maj == 6 && min < 6):
-			add("kernel", "info", "The kernel is older than 6.6", rel+": no TCX, so the tap program cannot attach and guest traffic and isolate are unavailable.", "Upgrade to 6.6 or newer for guest attribution.")
+			add("kernel", "info", "The kernel is older than 6.6", rel+": no TCX. Guest traffic uses a clsact filter at priority 50 when that qdisc can be shared.", "Upgrade to 6.6 or newer if you want TCX. Other filters on the tap still run when Shukra passes a packet.")
 		default:
 			add("kernel", "ok", "The kernel supports every program", rel, "")
 		}
@@ -151,8 +156,12 @@ func (s *State) Doctor() []Check {
 		switch {
 		case p.Status == "attached" && strings.Contains(p.Detail, "/") && strings.Contains(p.Detail, "hooks"):
 			add("program-"+p.Name, "warn", p.Name+" is only partly attached", p.Detail, "Missing hooks are usually a tracepoint this kernel or CPU does not have.")
+		case p.Name == "tap" && p.Status == "attached" && strings.Contains(p.Detail, "via tc "):
+			add("program-tap", "info", "Guest traffic is a clsact filter", p.Detail, "Shukra uses priority 50 and removes only its own filters. A pass lets the next filter run; a drop does not.")
 		case p.Status == "attached":
 			// nothing to say
+		case p.Name == "tap" && strings.Contains(p.Detail, "host-only"):
+			add("program-tap", "warn", "Guest traffic is host-only", p.Detail, "Neither TCX nor a clsact filter could be attached. Host probes still run.")
 		case p.Name == "tap" && strings.Contains(p.Detail, "no VM tap"):
 			add("program-tap", "info", "The tap program has no VM tap to attach to yet", p.Detail, "")
 		default:

@@ -15,6 +15,14 @@ func pfx(t *testing.T, s string) netip.Prefix {
 	return p
 }
 
+func TestEgressStatMirrorIsTheCounterLayout(t *testing.T) {
+	var s egressStatC
+	s.Checked = 1
+	if s.Checked != 1 || s.DropBytes != 0 {
+		t.Fatal(s)
+	}
+}
+
 func TestAnIPv4NetworkIsTheInterfaceThenTheNetwork(t *testing.T) {
 	k4, k6 := egressKeys(7, []netip.Prefix{pfx(t, "203.0.113.0/24"), pfx(t, "198.51.100.7/32"), pfx(t, "0.0.0.0/0")})
 	want := []egress4Key{

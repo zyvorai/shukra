@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"sync"
 )
 
@@ -84,6 +85,16 @@ func (l *Log) Append(v any) error {
 	return err
 }
 
+// Sync flushes the log to stable storage. Close also syncs.
+func (l *Log) Sync() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f == nil {
+		return os.ErrClosed
+	}
+	return l.f.Sync()
+}
+
 func (l *Log) rotate() error {
 	_ = l.f.Close()
 	renameErr := os.Rename(l.path, l.path+".1")
@@ -154,6 +165,11 @@ func WriteJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
+	return WriteFileAtomic(path, b)
+}
+
+// WriteFileAtomic replaces path with b. It syncs the file and the parent directory.
+func WriteFileAtomic(path string, b []byte) error {
 	tmp := path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
@@ -170,7 +186,23 @@ func WriteJSON(path string, v any) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(path))
+}
+
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	err = d.Sync()
+	cerr := d.Close()
+	if err != nil {
+		return err
+	}
+	return cerr
 }
 
 // ReadJSON decodes path into T. A missing file is the zero value, not an error.

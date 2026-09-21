@@ -1116,7 +1116,7 @@ func TestOnlyTheAdminKeyDecidesAndTheActorIsPassedOn(t *testing.T) {
 		t.Fatal("a refused request reached the engine")
 	}
 	rec := post(h, "/api/v1/actions/a-1/approve", "admin", "")
-	if rec.Code != 200 || v.verb != "approve" || v.actor != "tester" || !strings.Contains(rec.Body.String(), `"executed"`) {
+	if rec.Code != 200 || v.verb != "approve" || !strings.Contains(v.actor, "admin:") || !strings.Contains(v.actor, "label=tester") || !strings.Contains(rec.Body.String(), `"executed"`) {
 		t.Fatalf("%d %s %+v", rec.Code, rec.Body.String(), v)
 	}
 	rec = post(h, "/api/v1/actions/a-1/reject", "admin", "")
@@ -1203,7 +1203,7 @@ func TestADecisionWithoutAnActorHeaderIsRecordedAsTheAPI(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer k")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != 200 || v.actor != "api" {
+	if rec.Code != 200 || !strings.HasPrefix(v.actor, "key=admin:") {
 		t.Fatalf("who decided must never be empty: %d %q", rec.Code, v.actor)
 	}
 }
@@ -1310,7 +1310,7 @@ func TestOnlyTheAdminKeyChangesAPolicyAndTheRequestAndActorReachTheEngine(t *tes
 		t.Fatal("a refused request reached the engine")
 	}
 	rec := post(h, "/api/v1/policy/apply", "admin", `{"vm":"web","mode":"enforce","allow":["203.0.113.0/24","10.0.0.1"],"fromBaseline":true,"confirm":"5m","permanent":false}`)
-	if rec.Code != 200 || f.verb != "apply" || f.vm != "web" || f.actor != "tester" || !strings.Contains(rec.Body.String(), `"policy"`) {
+	if rec.Code != 200 || f.verb != "apply" || f.vm != "web" || !strings.Contains(f.actor, "admin:") || !strings.Contains(f.actor, "label=tester") || !strings.Contains(rec.Body.String(), `"policy"`) {
 		t.Fatalf("%d %s %+v", rec.Code, rec.Body.String(), f)
 	}
 	if f.req.Mode != "enforce" || !reflect.DeepEqual(f.req.Allow, []string{"203.0.113.0/24", "10.0.0.1"}) || !f.req.FromBaseline || f.req.Confirm != "5m" || f.req.Permanent {
@@ -1325,7 +1325,7 @@ func TestOnlyTheAdminKeyChangesAPolicyAndTheRequestAndActorReachTheEngine(t *tes
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/policy/remove", strings.NewReader(`{"vm":"db"}`))
 	req.Header.Set("Authorization", "Bearer admin")
 	h.ServeHTTP(httptest.NewRecorder(), req)
-	if f.actor != "api" {
+	if !strings.HasPrefix(f.actor, "key=admin:") || strings.Contains(f.actor, "label=") {
 		t.Fatalf("who acted must never be empty: %q", f.actor)
 	}
 }

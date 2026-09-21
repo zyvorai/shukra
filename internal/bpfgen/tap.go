@@ -58,22 +58,45 @@ type lpm6Key struct {
 }
 
 type tapLinks struct {
-	ifindex  uint32
-	in, out  link.Link
-	isolated bool
-	egress   uint8 // the egress policy's mode, as last set or read back from the kernel
+	ifindex   uint32
+	in, out   link.Link
+	isolated  bool
+	egress    uint8 // the egress policy's mode, as last set or read back from the kernel
+	hook      string
+	madeQdisc bool
+	// quarantine is a temporary drop-all, used only until the saved enforcing
+	// policy is written. SetTapEgress clears it so the real policy is not also a drop.
+	quarantine bool
 }
 
 func (t *tapLinks) close() {
-	_ = t.in.Close()
-	_ = t.out.Close()
+	if t == nil || t.hook == "tc" {
+		return
+	}
+	if t.in != nil {
+		_ = t.in.Close()
+	}
+	if t.out != nil {
+		_ = t.out.Close()
+	}
 }
 
 // unpin removes the pins, which is what actually detaches a pinned link once the
-// process's own handles are closed.
+// process's own handles are closed. A clsact filter has no pin: this deletes it.
 func (t *tapLinks) unpin() {
-	_ = t.in.Unpin()
-	_ = t.out.Unpin()
+	if t == nil {
+		return
+	}
+	if t.hook == "tc" {
+		detachTC(t.ifindex, t.madeQdisc)
+		return
+	}
+	if t.in != nil {
+		_ = t.in.Unpin()
+	}
+	if t.out != nil {
+		_ = t.out.Unpin()
+	}
 }
 
 // The tap program is not attached once at start like the others: it goes on each
@@ -86,6 +109,9 @@ var tapMgr struct {
 	coll    *ebpf.Collection
 	taps    map[string]*tapLinks
 	pinned  bool // maps and links are pinned, so they survive this process
+	hook    string
+	others  int
+	lastErr string
 }
 
 // preparePins makes the pin directory, and reports whether it is on a bpf
@@ -238,7 +264,10 @@ func SyncTaps(names []string) (map[string]error, error) {
 			continue // not created yet
 		}
 		if err := attachTapLocked(name, uint32(iface.Index)); err != nil {
+			tapMgr.lastErr = err.Error()
 			errs[name] = err
+		} else {
+			tapMgr.lastErr = ""
 		}
 	}
 	return errs, nil
@@ -281,7 +310,8 @@ func adoptLocked(name string, ifindex uint32) bool {
 	}
 	var pol tapPolicyC
 	found := tapMgr.coll.Maps["tap_policy"].Lookup(ifindex, &pol) == nil
-	tapMgr.taps[name] = &tapLinks{ifindex: ifindex, in: in, out: out, isolated: found && pol.Isolated != 0, egress: pol.Egress}
+	tapMgr.taps[name] = &tapLinks{ifindex: ifindex, in: in, out: out, isolated: found && pol.Isolated != 0, egress: pol.Egress, hook: "tcx"}
+	tapMgr.hook = "tcx"
 	return true
 }
 
@@ -289,6 +319,25 @@ func attachTapLocked(name string, ifindex uint32) error {
 	if adoptLocked(name, ifindex) {
 		return nil
 	}
+	if os.Getenv("SHUKRA_FORCE_TC") != "1" {
+		err := attachTCXLocked(name, ifindex)
+		if err == nil {
+			tapMgr.hook = "tcx"
+			return nil
+		}
+		if !errors.Is(err, link.ErrNotSupported) && !strings.Contains(err.Error(), "TCX needs Linux 6.6") {
+			return err
+		}
+	}
+	if err := attachTCLocked(name, ifindex); err != nil {
+		tapMgr.hook = ""
+		return fmt.Errorf("host-only: TCX and clsact are unavailable: %w", err)
+	}
+	tapMgr.hook = "tc"
+	return nil
+}
+
+func attachTCXLocked(name string, ifindex uint32) error {
 	in, err := link.AttachTCX(link.TCXOptions{
 		Interface: int(ifindex), Program: tapMgr.coll.Programs["shukra_tap_from_guest"], Attach: ebpf.AttachTCXIngress,
 	})
@@ -305,7 +354,9 @@ func attachTapLocked(name string, ifindex uint32) error {
 		in.Close()
 		return err
 	}
-	t := &tapLinks{ifindex: ifindex, in: in, out: out}
+	t := &tapLinks{ifindex: ifindex, in: in, out: out, hook: "tcx"}
+	tapMgr.hook = "tcx"
+	tapMgr.lastErr = ""
 	if tapMgr.pinned && !strings.ContainsRune(name, '/') {
 		if err := in.Pin(linkPin(name, "in")); err != nil {
 			t.close()
@@ -363,6 +414,7 @@ func dropOrphansLocked(want map[string]bool) {
 			clearEgressLocked(ifindex)
 		}
 	}
+	dropOrphanTC(want)
 }
 
 // ShutdownTaps is the daemon's graceful exit. A tap that is not isolated and has no
@@ -421,6 +473,31 @@ func SetTapIsolated(name string, on bool) error {
 		return err
 	}
 	t.isolated = on
+	if !on {
+		t.quarantine = false
+	}
+	return nil
+}
+
+// SetTapQuarantine drops everything on a tap except the management allow list
+// until SetTapEgress writes the saved policy. It is a no-op when the tap does
+// not carry the program yet.
+func SetTapQuarantine(name string, on bool) error {
+	tapMgr.mu.Lock()
+	defer tapMgr.mu.Unlock()
+	t := tapMgr.taps[name]
+	if t == nil {
+		return fmt.Errorf("tap %s does not carry the program", name)
+	}
+	t.quarantine = on
+	t.isolated = on
+	pol := tapPolicyC{Egress: t.egress}
+	if on {
+		pol.Isolated = 1
+	}
+	if err := tapMgr.coll.Maps["tap_policy"].Put(t.ifindex, pol); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -614,6 +691,10 @@ func SetTapEgress(name string, mode uint8, prefixes []netip.Prefix) error {
 		}
 	}
 	pol := tapPolicyC{Egress: mode}
+	if t.quarantine {
+		t.quarantine = false
+		t.isolated = false
+	}
 	if t.isolated {
 		pol.Isolated = 1
 	}

@@ -81,7 +81,7 @@ Read this before you trust it with anything.
   - process names (`comm`) of what a VMM starts and of a process that opens a file.
 
   Answers, the rest of a TLS connection, and everything else are not read. A name says what a VM is doing and a fingerprint says what software it runs, so they are treated as sensitive: see [Security](SECURITY.md). Shukra can say *which VM and which address*, not *which process inside the guest*. The guest's own CPU steal counter is not read; the host's view of the same thing, vCPU preemption and who caused it, is measured.
-- **Isolation is real, and conditional.** `shukractl isolate` really drops the VM's tap traffic, but only with an explicit management allow list (`-isolate-allow`), only on Linux 6.6 or newer, and `applied` is `true` only after the kernel took the change. Without an allow list it is refused. Enforcement survives a daemon crash, restart or stop when `/sys/fs/bpf` is a bpf filesystem.
+- **Isolation is real, and conditional.** `shukractl isolate` really drops the VM's tap traffic, but only with an explicit management allow list (`-isolate-allow`). Linux 6.6 and newer use TCX. Older kernels use a clsact filter at priority 50 that passes with `TC_ACT_PIPE`, so the next filter still runs. `applied` is `true` only after the kernel took the change. Without an allow list it is refused. Enforcement survives a daemon crash, restart or stop when `/sys/fs/bpf` is a bpf filesystem.
 - **Nothing acts unless you turn it on.** Responses, egress policy and baselines are off until you configure or apply them. A response can only isolate a VM, and by default it only proposes. An egress policy judges what a guest *starts*, not what it answers, and is not a firewall. A baseline says a thing is *new*, never that it is bad.
 - **The VMM tripwire is a tripwire, not a sandbox.** It reads a path when the call starts, does not follow symlinks, and does not see a VMM that does none of the things it watches for. See [what it does not see](docs/vmm-tripwires.md#what-it-does-not-see).
 - **Advice is for a person.** Idleness is halt time, a lower bound, and only named on Intel hosts. `advise` never resizes anything.
@@ -89,7 +89,7 @@ Read this before you trust it with anything.
 - **A program that is not measuring reports detached, with the reason.** A build without root, clang, or `/sys/kernel/btf/vmlinux` still serves discovered VMs. It never invents a counter, and a VM with no measurement has no series, not a zero.
 - **Percentiles can read up to 2x high**, because they come from log2 buckets. See [What each program measures](docs/signals.md) for every caveat.
 - **Past verdicts are coarse.** `explain --at` and `incident` read snapshots taken every 5 minutes, say how coarse the answer is, and say so when nothing is stored.
-- **Tap: what is not built yet** is listed in [Tap: what is left](docs/roadmap-taptrace.md): kernels older than 6.6, VLAN tags and IPv6 extension headers, ICMP events, memory pressure, and which process inside the guest.
+- **Tap: what is not built yet** is listed in [Tap: what is left](docs/roadmap-taptrace.md): VLAN tags and IPv6 extension headers, ICMP events, memory pressure, and which process inside the guest.
 
 PacketWolf and Zeus OS are the intended consumers of this JSON. They are not in this repository.
 
@@ -103,7 +103,7 @@ Seven programs. Hot paths stay in maps. The ring buffer is only for discrete eve
 | `sched` | wakeup, switch, exec, exit | On-CPU time, run-queue delay (histogram, per thread), **vCPU preemption** (how long a vCPU was runnable but off a host CPU, and who had it), exec and exit events for QEMU children |
 | `block` | `block_rq_issue`, `block_rq_complete` | Latency histogram, requests, bytes and the slowest request, per direction |
 | `net` | `tcp_v4_connect`, `tcp_v6_connect`, sampled `tcp_retransmit_skb` | Exact connect counts (IPv4 and IPv6) and 1-in-64 retransmit samples: **the QEMU process's** sockets |
-| `tap` | TCX ingress and egress on each VM tap (Linux 6.6+) | The guest's own traffic: per-tap counters; an event per TCP connect, per new UDP flow and per connection made *to* the guest; the name in each DNS query over UDP/53; the server name in each TLS ClientHello; what became of each TCP handshake (accepted, refused, never answered, blocked) and how long it took; isolation; and each VM's egress policy |
+| `tap` | TCX on Linux 6.6+, or a clsact filter at priority 50 on older kernels | The guest's own traffic: per-tap counters; an event per TCP connect, per new UDP flow and per connection made *to* the guest; the name in each DNS query over UDP/53; the server name in each TLS ClientHello; what became of each TCP handshake (accepted, refused, never answered, blocked) and how long it took; isolation; and each VM's egress policy |
 | `drops` | `skb:kfree_skb` on each VM tap (Linux 5.17+) | What the kernel dropped on the tap and why, by the kernel's own reason and the function that freed it, with Shukra's own isolation drops subtracted, so another program dropping a VM's traffic (Cilium, a dataplane, a `tc` filter) or a guest not reading its NIC is named |
 | `vmm` | `openat`, `openat2`, `open`, `ptrace`, `process_vm_writev`, `process_vm_readv`, `mount`, `unshare`, `setns`, `init_module`, `finit_module`, `kexec_load`, `kexec_file_load` syscall tracepoints, plus `sched_process_fork` and `sched_process_exit` to follow descendants | For a QEMU process, and anything it started at any depth: the file it opened and the sensitive call it made, as events. A steady-state VMM does none |
 
@@ -145,7 +145,7 @@ Identity comes from the host: the QEMU command line (`-name` / `guest=`, `-uuid`
 | The console | Node 22 to build it |
 | `kvm`, `sched`, `block`, `net`, `vmm` | Linux with kernel BTF (`/sys/kernel/btf/vmlinux`), and `CAP_BPF` (5.8+) |
 | `drops` | Linux 5.17+ (a drop reason on `kfree_skb`) |
-| `tap`, guest traffic, egress policy and isolation | Linux 6.6+ (TCX), and `CAP_NET_ADMIN` |
+| `tap`, guest traffic, egress policy and isolation | Linux 6.6+ (TCX) or clsact on older kernels, and `CAP_NET_ADMIN` |
 | libvirt VMs' taps | `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH` |
 | Building the programs | Linux with `clang` and `bpftool` |
 
@@ -174,7 +174,7 @@ Shukra is a systemd unit on the hypervisor, not a Helm chart. eBPF has to run wh
 ./scripts/deploy-remote.sh 10.0.1.5 sus
 ```
 
-That rsyncs the tree, builds the console and the CO-RE objects on the host, installs `shukrad` and `shukractl` to `/usr/local/bin`, starts `shukra.service` on `0.0.0.0:30970`, waits for it to answer, and prints `status`, `programs`, `vms` and `doctor`. Set a real key on any host that is not a lab (`SHUKRA_API_KEY=$(openssl rand -hex 16)`). For a host without a compiler, `make dist` builds a tarball and a `.deb`, and `--prebuilt` deploys one. Keys and extra daemon flags go in `/etc/shukra/env` (`SHUKRA_API_KEY`, `SHUKRA_READONLY_KEY`, `SHUKRA_WEBHOOK_SECRET`, `SHUKRA_EXTRA_ARGS`). The unit reads its rules from `/etc/shukra/detections.yaml` and keeps state in `/var/lib/shukra`. Full walkthrough: [Deploy a hypervisor](docs/tutorials/03-deploy.md).
+That rsyncs the tree, builds the console and the CO-RE objects on the host, installs `shukrad` and `shukractl` to `/usr/local/bin`, and starts `shukra.service` on `127.0.0.1:30970`. The script checks the daemon on that address. A packaged install generates a random `SHUKRA_API_KEY` when the host has none; a binary you start yourself with the variable unset uses the dev token `shukra`. For a host without a compiler, `make dist` builds a tarball and a `.deb`, and `--prebuilt` deploys one. Keys and extra daemon flags go in `/etc/shukra/env` (`SHUKRA_API_KEY`, `SHUKRA_READONLY_KEY`, `SHUKRA_WEBHOOK_SECRET`, `SHUKRA_EXTRA_ARGS`). The unit reads its rules from `/etc/shukra/detections.yaml` and keeps state in `/var/lib/shukra`. Remote access needs TLS in front of loopback, or an explicit `-listen` plus `-tls-cert`/`-tls-key` or `-allow-insecure-http`. Full walkthrough: [Deploy a hypervisor](docs/tutorials/03-deploy.md).
 
 ## Operator loop
 
@@ -299,10 +299,12 @@ The whole surface, with fields, is in the [API reference](docs/api.md). Give Pro
 | `-watchlist` | none | The rules file above |
 | `-data-dir` | none | Keep detections, isolations, the recorder, policies, baselines and snapshots across restarts (below) |
 | `-isolate-allow` | none | Comma-separated CIDRs an isolated VM can still reach. Without it, isolate, an enforcing policy and the action of any response are refused (a `dry_run` response is still recorded) |
+| `-quarantine-uncovered` | `false` | Until an enforcing VM's saved policy is on a new tap, drop that tap except the management allow list. Off by default |
 | `-dns-events` | `true` | Record the names a guest looks up. `false`: the program does not read DNS at all |
 | `-tls-events` | `true` | Record the server names in a TLS ClientHello. `false`: the program does not read a TCP payload at all |
 | `-vmm-tripwires` | `true` | Load the `vmm` program. `false`: it is not loaded |
-| `-tls-cert`, `-tls-key` | none | Serve HTTPS (PEM). `SIGHUP` reloads the certificate |
+| `-tls-cert`, `-tls-key` | none | Serve HTTPS (PEM). `SIGHUP` reloads the certificate. Required to listen off loopback unless `-allow-insecure-http` is set |
+| `-allow-insecure-http` | `false` | Permit plain HTTP on a non-loopback address. The bearer key crosses the network in the clear |
 | `-webhook-url`, `-syslog`, `-alert-file` | none | Alert sinks (webhook secret: `SHUKRA_WEBHOOK_SECRET`) |
 | `-no-auth` | `false` | Serve the API without a key. `doctor` fails it |
 | `-proc` | `/proc` | procfs root |
@@ -421,9 +423,9 @@ Default `go build` does not link CO-RE objects, so CI and macOS stay green. The 
 
 | Workflow | Runs | What it proves |
 |---|---|---|
-| `CI` | every push and pull request | Go and console tests; the tagged build; the programs loaded into the runner's kernel (including the VMM tripwire program); the tap program's egress policy packet by packet; the tap rig (guest traffic, isolation, drops, every handshake outcome with exact counts, DNS and TLS names, egress policy, VMM tripwires); the installer |
+| `CI` | every push and pull request | Go and console tests; race detector; vet; staticcheck; govulncheck; short fuzz; npm audit; coverage artifact; the tagged build; the programs loaded into the runner's kernel; the tap rig; the installer; the same Go and console tests on arm64 |
 | `Live guest (fluxvm)` | weekly, by hand, and on changes to the tap code, the VMM tripwire code, identity code or the test | Two real KVM guests booted by fluxvm on a runner with `/dev/kvm`: the taps are attached as hot-plugs, guest events are attributed, one guest reaches the other, packet counts equal the kernel's, DNS and TLS names arrive as asked, an egress policy in audit mode marks exactly what is outside its list, a real QEMU is on the kernel's watched list, raises no tripwire detection while it runs, and raises a critical `vmm-sensitive-open` when asked over QMP to open `/etc/shadow`, and the taps come off when the VMs are deleted. It fails, rather than skips, on a runner with no KVM |
-| `Release` | a `v*` tag | The tarball and `.deb` for each architecture |
+| `Release` | a `v*` tag | The tarball, `.deb`, container image and checksums for each architecture, a CycloneDX SBOM, and cosign signatures when `COSIGN_PRIVATE_KEY` is set |
 
 ### Fixture mode
 

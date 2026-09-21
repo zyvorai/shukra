@@ -92,7 +92,7 @@ Attached means the tracepoint or kprobe is live. It does not mean a guest has be
 > | `go build -tags shukrabpf` fails with undefined `LoadKvm` (or another `Load...`) | The loaders were never generated. Run `make generate` again and read what it printed |
 > | A program is `detached` with `operation not permitted` | Run as root, or with the capabilities above. `tap` needs `CAP_NET_ADMIN` |
 > | A program is `detached` with a verifier error | The kernel refused the object. `shukractl doctor` and the daemon's log carry the error. The other programs still run. Report the kernel version and the text |
-> | `tap` says `TCX needs Linux 6.6 or newer` | The kernel is older. Everything else works without it, and `doctor` says what you lose |
+> | `tap` says `host-only` | Neither TCX nor a clsact filter could be attached. Everything else still runs, and `doctor` says so |
 > | `drops` is `detached` on Linux older than 5.17 | Expected: it needs the drop reason |
 > | `tap` is `detached` with `no VM tap interfaces to attach to yet` | Expected until a VM with a tap runs |
 

@@ -100,7 +100,7 @@ The management allow list stays reachable while a VM is isolated, exactly as for
 
 ## What is recorded
 
-Every decision is an **action** with an id (`a-1`, `a-2`, ...): the response, the detection that set it off, when, who decided (`approved by shukractl (contain-miners, a-3)` or `auto:contain-miners:a-3`), what the isolate request answered, and the release time. "Who" is the client that made the request, from its `X-Shukra-Actor` header: `shukractl` for the CLI, `api` for the console and any caller that sends none. The API key is one key, not a login, so the record does not name a person. They are appended to `actions.jsonl` under `-data-dir`, and each action keeps the incident bundle it was made on in `incidents/<id>.json` (mode 0600, the newest 200). The isolation itself is in the isolate audit trail under the same actor, so `GET /api/v1/isolations` says which action caused it.
+Every decision is an **action** with an id (`a-1`, `a-2`, ...): the response, the detection that set it off, when, who decided (`approved by admin:f72c1a (shukractl)` or `auto:contain-miners:a-3`), what the isolate request answered, and the release time. "Who" is the key id of the bearer key that authenticated, plus the optional `X-Shukra-Actor` label. It is not a person's name. The same record keeps the role, source address, request id and operation. They are appended to `actions.jsonl` under `-data-dir`, and each action keeps the incident bundle it was made on in `incidents/<id>.json` (mode 0600, the newest 200). The isolation itself is in the isolate audit trail under the same principal, so `GET /api/v1/isolations` says which action caused it.
 
 Each step is also announced as a detection so nobody has to poll. They go to every sink like any other detection:
 

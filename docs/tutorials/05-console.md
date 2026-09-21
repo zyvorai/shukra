@@ -4,9 +4,9 @@ The console is the same API as `shukractl`, drawn for a person who is not going 
 
 ## Sign in
 
-Open `http://<hypervisor>:30970`. Enter any user name and the API token as the password: the token (`SHUKRA_API_KEY`, or `shukra` when that variable was unset) is the credential and the user name is not checked. The console keeps the token in memory for that page load only, so a reload, or the log-out button, asks for it again, and nothing secret is left in the browser's storage. Light and dark follow `shukra-theme`.
+Open `http://127.0.0.1:30970` on the hypervisor (the unit does not listen on other addresses). Enter the API token. That token (`SHUKRA_API_KEY` from `/etc/shukra/env` on a packaged install, or `shukra` only when you started the binary yourself with the variable unset) is the only credential. There is no username. The console keeps the token in memory for that page load only, so a reload, or the log-out button, asks for it again, and nothing secret is left in the browser's storage. Light and dark follow `shukra-theme`.
 
-A wrong token does not open a fixture. It says `Wrong username or password.`, or `Could not reach shukrad. Check the URL and try again.` when the daemon does not answer. Fixture data exists only when you start Vite with `VITE_FIXTURE=1`.
+A wrong token does not open a fixture. It says `The API token was rejected.`, or `Could not reach shukrad. Check the URL and try again.` when the daemon does not answer. Fixture data exists only when you start Vite with `VITE_FIXTURE=1`.
 
 You should land on **Overview**: the number of VMs, `7/7` programs attached on a Linux host with BPF (`0/7` on a laptop build), the detection count, and the mode `observe`. It refreshes every five seconds and pauses while the tab is hidden.
 
@@ -97,7 +97,7 @@ npm --prefix web run build
 > | You see | Do this |
 > |---|---|
 > | A blank page, or the API's JSON, at `/` | The daemon has no console: `-web` points at a directory with no `index.html`. `make web` |
-> | `Wrong username or password.` | The password is the API token, not the user name. On a deployed host: `sudo grep SHUKRA_API_KEY /etc/shukra/env` |
+> | `The API token was rejected.` | The password field is the API token. On a deployed host: `sudo grep SHUKRA_API_KEY /etc/shukra/env` |
 > | `Could not reach shukrad.` | Wrong host or port, a firewall on `30970`, or `https://` against a daemon serving plain HTTP (or the reverse) |
 > | Signed out after every reload | Expected: the token is kept in memory only |
 > | `The daemon rejected the API token.` after signing in | The key changed under you. The daemon was restarted with another `SHUKRA_API_KEY` |

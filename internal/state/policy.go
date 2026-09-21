@@ -51,12 +51,18 @@ type PolicyRevert struct {
 
 // PolicyRow is one VM's egress policy and what it has done.
 type PolicyRow struct {
-	VM      string    `json:"vm"`
-	Mode    string    `json:"mode"`
-	Allow   []string  `json:"allow"`
-	Source  string    `json:"source"` // baseline or manual
-	By      string    `json:"by,omitempty"`
-	Applied time.Time `json:"applied"`
+	VM        string    `json:"vm"`
+	Mode      string    `json:"mode"`
+	Allow     []string  `json:"allow"`
+	Source    string    `json:"source"` // baseline or manual
+	By        string    `json:"by,omitempty"`
+	Applied   time.Time `json:"applied"`
+	KeyID     string    `json:"keyId,omitempty"`
+	Role      string    `json:"role,omitempty"`
+	Label     string    `json:"label,omitempty"`
+	Remote    string    `json:"remote,omitempty"`
+	RequestID string    `json:"requestId,omitempty"`
+	Op        string    `json:"op,omitempty"`
 	// Present says the VM is in the current scan. A policy for a VM that is not running is kept.
 	Present bool          `json:"present"`
 	Revert  *PolicyRevert `json:"revert,omitempty"`

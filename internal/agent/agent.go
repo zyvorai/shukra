@@ -43,6 +43,15 @@ type Agent struct {
 	basePersisted bool
 	// eval is touched only by Refresh, which runs on one goroutine at a time.
 	eval detect.Evaluator
+	// AfterTaps runs after the tap program is attached and before programs are
+	// reported, so a saved policy is on the tap before anything says it is covered.
+	AfterTaps func()
+	// Quarantine drops an enforcing VM's new tap, except the management allow
+	// list, until that saved policy is written. Default is off: a missed
+	// notification must not blackhole a VM that was not enforcing.
+	Quarantine bool
+	seen       map[string]time.Time
+	covered    map[string]bool
 }
 
 func New(st *state.State, procRoot, watchPath, host string) (*Agent, error) {
@@ -123,7 +132,17 @@ func (a *Agent) Refresh() {
 	for _, vm := range vms {
 		taps = append(taps, vm.Taps...)
 	}
+	now := time.Now()
+	a.noteSeen(now, vms)
 	observe.SyncTaps(taps)
+	if a.Quarantine {
+		a.holdUncovered(vms)
+	}
+	if a.AfterTaps != nil {
+		a.AfterTaps()
+	}
+	a.reportUncovered(now, vms)
+	a.recordAttach(now, vms)
 	if acted := a.State.ReapplyIsolations(); len(acted) > 0 {
 		log.Printf("isolation re-applied for %s", strings.Join(acted, ", "))
 	}

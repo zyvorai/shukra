@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,7 +56,8 @@ type Engine struct {
 	last    map[string]time.Time // vm|response -> when it was last acted on
 	hourly  []time.Time          // when automatic isolations were carried out
 	bundles map[string][]byte
-	order   []string // bundle ids, oldest first
+	unsaved map[string]bool // bundle save failed; an enforced action is audit-degraded
+	order   []string        // bundle ids, oldest first
 	queue   chan event.Event
 	dropped uint64
 }
@@ -134,7 +136,7 @@ func (e *Engine) Restore(list []state.Action) {
 		if n, err := strconv.Atoi(strings.TrimPrefix(id, "a-")); err == nil && n > e.next {
 			e.next = n
 		}
-		if a.Status == "executed" && a.Mode == "enforce" && !a.DryRun && e.now().Sub(a.Decided) < time.Hour {
+		if enforcedStatus(a.Status) && a.Mode == "enforce" && !a.DryRun && e.now().Sub(a.Decided) < time.Hour {
 			e.hourly = append(e.hourly, a.Decided)
 		}
 		if a.Status != "" {
@@ -156,8 +158,35 @@ func (e *Engine) find(id string) *state.Action {
 }
 
 func (e *Engine) record(a *state.Action) {
-	if e.store != nil {
-		_ = e.store.Append(*a)
+	if err := e.append(a); err != nil {
+		e.failAudit(a, err)
+	}
+}
+
+func (e *Engine) append(a *state.Action) error {
+	if e.store == nil {
+		return nil
+	}
+	return e.store.Append(*a)
+}
+
+// failAudit logs a durability failure, counts it, and marks an isolation that
+// already happened as executed_audit_degraded. A second append records that
+// status when the disk accepts it.
+func (e *Engine) failAudit(a *state.Action, err error) {
+	log.Printf("response: action %s was not saved: %v", a.ID, err)
+	if e.st != nil {
+		e.st.NoteAuditFailure(a.ID)
+	}
+	if a.Status != "executed" {
+		return
+	}
+	a.Status = "executed_audit_degraded"
+	if err2 := e.append(a); err2 != nil {
+		log.Printf("response: action %s degraded status was not saved: %v", a.ID, err2)
+		if e.st != nil {
+			e.st.NoteAuditFailure(a.ID)
+		}
 	}
 }
 
@@ -270,7 +299,7 @@ func (e *Engine) Handle(d event.Event) {
 		e.announce("dry-run", "low", a, fmt.Sprintf("%s: response %q would have isolated %s for %s (dry run: nothing changed)", a.ID, a.Response, vm, d.Rule))
 		return
 	}
-	if mode, _, why := e.st.Enforcement(); mode != "tcx" {
+	if mode, _, why := e.st.Enforcement(); mode != "tcx" && mode != "tc" {
 		refuse("isolate_unavailable", "isolate is not enabled: "+why)
 		return
 	}
@@ -305,6 +334,9 @@ func (e *Engine) execute(a *state.Action, r detect.Response, actor string, auto 
 		a.Status, a.Guardrail, a.Result = "refused", "isolate_refused", iso.Reason
 	} else {
 		a.Status, a.Result = "executed", "isolated: "+iso.Reason
+		if e.unsaved[a.ID] {
+			a.Status = "executed_audit_degraded"
+		}
 		if auto {
 			e.hourly = append(e.hourly, now)
 		}
@@ -314,8 +346,8 @@ func (e *Engine) execute(a *state.Action, r detect.Response, actor string, auto 
 	}
 	e.mu.Unlock()
 	e.record(a)
-	if a.Status == "executed" {
-		msg := fmt.Sprintf("%s: response %q isolated %s for %s (%s)", a.ID, a.Response, a.VM, a.Rule, actor)
+	if enforcedStatus(a.Status) {
+		msg := fmt.Sprintf("%s: response %q isolated %s for %s (%s)", a.ID, a.Response, a.VM, a.Rule, a.DecidedBy)
 		if !a.ReleaseAt.IsZero() {
 			msg += fmt.Sprintf("; it releases itself at %s", a.ReleaseAt.Format(time.RFC3339))
 		}
@@ -361,7 +393,7 @@ func (e *Engine) Approve(id, actor string) (state.Action, error) {
 		r = detect.Response{Name: a.Response} // the response was removed from the rules since: the person still decided
 	}
 	prot := e.protected(a.VM)
-	a.DecidedBy = actor
+	state.StampAction(a, state.ParseActor(actor))
 	e.mu.Unlock()
 	switch {
 	case prot:
@@ -379,11 +411,15 @@ func (e *Engine) Approve(id, actor string) (state.Action, error) {
 		e.record(&out)
 		return out, errors.New(out.Result)
 	}
-	e.execute(a, r, fmt.Sprintf("approved by %s (%s, %s)", actor, a.Response, a.ID), false)
+	who := fmt.Sprintf("approved by %s (%s, %s)", actor, a.Response, a.ID)
+	if state.ParseActor(actor).KeyID != "" {
+		who = actor
+	}
+	e.execute(a, r, who, false)
 	e.mu.Lock()
 	out := *a
 	e.mu.Unlock()
-	if out.Status != "executed" {
+	if !enforcedStatus(out.Status) {
 		return out, errors.New(out.Result)
 	}
 	return out, nil
@@ -402,11 +438,13 @@ func (e *Engine) Reject(id, actor string) (state.Action, error) {
 		e.mu.Unlock()
 		return out, state.ErrActionNotPending
 	}
-	a.Status, a.Decided, a.DecidedBy, a.Result = "rejected", e.now().UTC(), actor, "rejected by "+actor
+	a.Status, a.Decided = "rejected", e.now().UTC()
+	state.StampAction(a, state.ParseActor(actor))
+	a.Result = "rejected by " + a.DecidedBy
 	out := *a
 	e.mu.Unlock()
 	e.record(&out)
-	e.announce("rejected", "low", &out, fmt.Sprintf("%s: %s rejected isolating %s", out.ID, actor, out.VM))
+	e.announce("rejected", "low", &out, fmt.Sprintf("%s: %s rejected isolating %s", out.ID, out.DecidedBy, out.VM))
 	return out, nil
 }
 
@@ -421,7 +459,7 @@ func (e *Engine) Tick(now time.Time) {
 		case a.Status == "pending" && now.After(a.Expires):
 			a.Status, a.Decided, a.Result = "expired", now.UTC(), "the proposal lapsed before anyone decided"
 			expired = append(expired, a)
-		case a.Status == "executed" && !a.ReleaseAt.IsZero() && !now.Before(a.ReleaseAt):
+		case enforcedStatus(a.Status) && !a.ReleaseAt.IsZero() && !now.Before(a.ReleaseAt):
 			due = append(due, a)
 		}
 	}
@@ -460,7 +498,18 @@ func (e *Engine) captureBundle(a *state.Action) {
 	}
 	e.mu.Unlock()
 	if e.store != nil {
-		_ = e.store.SaveBundle(a.ID, b)
+		if err := e.store.SaveBundle(a.ID, b); err != nil {
+			log.Printf("response: incident bundle %s was not saved: %v", a.ID, err)
+			if e.st != nil {
+				e.st.NoteAuditFailure(a.ID)
+			}
+			e.mu.Lock()
+			if e.unsaved == nil {
+				e.unsaved = map[string]bool{}
+			}
+			e.unsaved[a.ID] = true
+			e.mu.Unlock()
+		}
 	}
 }
 
@@ -521,5 +570,9 @@ func (e *Engine) Modes() (propose, enforce, dryRun int) {
 
 // Statuses is every status an action can have, in the order they are listed.
 func Statuses() []string {
-	return []string{"pending", "executed", "released", "refused", "rejected", "expired", "dry_run"}
+	return []string{"pending", "executed", "executed_audit_degraded", "released", "refused", "rejected", "expired", "dry_run"}
+}
+
+func enforcedStatus(s string) bool {
+	return s == "executed" || s == "executed_audit_degraded"
 }

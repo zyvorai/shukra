@@ -27,7 +27,7 @@ The CLI finds the daemon and the key in this order:
 
 The read-only key (`SHUKRA_READONLY_KEY` on the daemon) is enough for every command except the ones marked **admin** below. Those get `403 this key is read-only` with a read-only key.
 
-Every request carries `X-Shukra-Actor: shukractl`, which the daemon records as who isolated a VM, decided an action, forgot a baseline or changed a policy. A request times out after 15 seconds (`watch`'s stream has no timeout), and at most 4 MiB of a response is read.
+Every request carries `X-Shukra-Actor: shukractl`. That header is an optional client label, not a user. The daemon records the key that authenticated, as `admin:` or `readonly:` plus the first six hex characters of SHA-256 of the key, with the label in parentheses when it is a short token (`admin:f72c1a (shukractl)`). The source address, request id, role and operation are on the same record. A request times out after 15 seconds (`watch`'s stream has no timeout), and at most 4 MiB of a response is read.
 
 Flags take their value as the next word: `--window 5m`, not `--window=5m`. A command that names a VM takes it as the first word after the command.
 

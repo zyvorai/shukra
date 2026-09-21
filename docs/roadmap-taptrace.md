@@ -6,7 +6,6 @@ The tap program is built: guest attribution, isolate, handshake outcomes, inboun
 
 - **Pinned links without a bpf filesystem.** Enforcement outlives the daemon only where `/sys/fs/bpf` is a bpf filesystem. Without one it is unpinned and says so (`durable: false`).
 - **Coexisting with other TCX programs.** The tap program continues the chain, but it attaches at the default position, so a tool that must run before it needs to attach with an explicit anchor. Nothing is ordered yet.
-- **Kernels older than 6.6.** TCX is required. A netlink `clsact` fallback would cover 5.x kernels.
 - **Taps in a namespace Shukra cannot map.** FluxVM's default per-VM netns is traced on the host veth; see [FluxVM](tap.md#fluxvm). What remains is a tap that is not in the host namespace and that no record maps to a host interface. Entering that namespace needs `CAP_SYS_ADMIN`, which the unit does not have, so this is a decision and not just work. `shukractl doctor` names the VM (`vm-tap-other-netns`).
 - **VLAN tags and IPv6 extension headers** are not parsed past the outer headers.
 
@@ -22,7 +21,7 @@ The tap program is built: guest attribution, isolate, handshake outcomes, inboun
 
 - **Per-VM management allow lists.** Isolation still uses one allow list for every isolated VM (`-isolate-allow`). Each VM can have its own list under an egress policy, but that is a different thing: it says where a VM may start connections, and the management list stays the floor under it.
 - **Egress by port or by name.** An egress policy judges the network a connection goes to (IPv4 /24 and IPv6 /64 when learned from a baseline, anything you give when written by hand). It has no ports and no names, so a policy by server name is not built, and a proposal is as coarse as the baseline it learned from.
-- **A tap has no policy for up to two seconds after a VM comes back with a new tap**, until the next pass of the policy engine. Enforcement across a daemon restart has no such gap.
+- **A recreated tap is attached from a netlink notification**, and its saved policy is pushed before the daemon reports the tap as covered. The two-second scan remains as a backstop. An enforcing VM whose tap is up without the program raises `tap-uncovered`. `-quarantine-uncovered` (off by default) drops that tap, except the management allow list, until the policy is on it.
 - **A DHCP and DNS story for isolated VMs.** Today they are only reachable if they are on the allow list, and under an egress policy a resolver or a DHCP server has to be on the VM's list.
 
 ## Beyond the tap

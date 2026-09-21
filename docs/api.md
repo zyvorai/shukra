@@ -26,7 +26,7 @@ curl -s -H "Authorization: Bearer $SHUKRA_API_KEY" "$SHUKRA_URL/api/v1/status"
 - `SHUKRA_READONLY_KEY` adds a second key that can call every `GET`, `/metrics` and the event stream, and cannot change anything. Give that one to Prometheus and dashboards. It must differ from the admin key: the daemon refuses to start if the two are equal.
 - Keys are compared in constant time, and both are always compared so the time taken does not say which one matched. A key never appears in any response, in `/api/v1/doctor`, or in `systemctl show`.
 - The API is plain HTTP unless the daemon runs with `-tls-cert` and `-tls-key` (`SIGHUP` reloads the certificate). On a non-loopback address the daemon warns at start, and [`shukractl doctor`](doctor.md) flags it.
-- `X-Shukra-Actor: <name>` on a `POST` says who is asking. It is recorded in the isolation audit trail (`audit.actor`), as `by` on a policy, as `decidedBy` on an action, and in the message of a `baseline-forgotten` detection. `shukractl` sends `shukractl`. A missing header is recorded as `api`.
+- `X-Shukra-Actor: <name>` on a `POST` is an optional client label. It is not authentication. The record names the key that matched (`admin:` or `readonly:` plus six hex characters of SHA-256 of the key), the label, the source address, a request id (`X-Request-Id`, or one the daemon generates), the role and the operation. `shukractl` sends `shukractl`. A missing or rejected label is omitted. The response carries `X-Request-Id`.
 - Request bodies are read up to 64 KiB, or 1 MiB for the policy routes.
 
 ### Data
@@ -831,14 +831,14 @@ What responses decided to do when a detection fired. Off unless the rules file h
 | `rule`, `severity`, `message` | The detection that set it off |
 | `created`, `expires` | When it was made, and when a proposal lapses if nobody decides |
 | `status` | `pending`, `executed`, `released`, `refused`, `rejected`, `expired` or `dry_run` |
-| `decided`, `decidedBy` | When it was decided and by whom: the `X-Shukra-Actor` that approved or rejected it, or `auto:<response>:<id>` for an automatic one |
+| `decided`, `decidedBy` | When it was decided and by whom: `admin:<6 hex> (<label>)` for a person, or `auto:<response>:<id>` for an automatic one. `keyId`, `role`, `label`, `remote`, `requestId` and `op` are on the same object when the call came from the API |
 | `result` | What the isolate request answered, or why it was not made |
 | `guardrail` | Which guardrail refused it (`never_isolate`, `isolate_unavailable`, `max_per_hour`, `isolate_refused`) |
 | `releaseAt`, `released` | When an isolation releases itself, and when it did |
 
 ### `POST /api/v1/actions/<id>/approve` and `.../reject`
 
-Admin key. No body. Approving isolates the VM, after the guardrails are checked again. Rejecting does nothing to the VM. The `X-Shukra-Actor` is recorded as `decidedBy`.
+Admin key. No body. Approving isolates the VM, after the guardrails are checked again. Rejecting does nothing to the VM. `decidedBy` is the key id, not the `X-Shukra-Actor` header alone.
 
 ```json
 { "action": { "id": "a-3", "status": "executed", "result": "isolated: Traffic to and from vnet4 is dropped ...", ... } }

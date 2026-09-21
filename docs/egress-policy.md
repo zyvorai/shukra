@@ -102,7 +102,7 @@ Every change to a policy is itself a detection, so a webhook hears of it:
 - **Isolation still wins, and does not disturb the policy.** An isolated VM is dropped as always; releasing it leaves its policy as it was.
 - **It is announced.** Applying, confirming, reverting and removing a policy each raise a detection (`policy-applied`, `policy-confirmed`, `policy-reverted`, `policy-removed`), so a webhook hears of a change to what a VM may do.
 
-A person with the admin key can still make a wrong policy. The record of who did says `shukractl` when the CLI did it and `api` when something else did (a caller may send `X-Shukra-Actor`), not a person's name: the API key is one key, not a login.
+A person with the admin key can still make a wrong policy. The record of who did is the key id (`admin:` and six hex characters) plus the `X-Shukra-Actor` label when the client sent one (`shukractl` for the CLI). It is not a person's name: the API key is one key, not a login.
 
 ## What it does not do
 
@@ -191,7 +191,7 @@ What it looks like when it is wrong, and what to do.
 | `POST /api/v1/policy/apply` | Admin key. `{"vm", "mode", "allow"?, "fromBaseline"?, "confirm"?, "permanent"?}`. `mode` is `off`, `audit` or `enforce`; `confirm` is a Go duration such as `"10m"` |
 | `POST /api/v1/policy/confirm`, `.../remove` | Admin key. `{"vm"}` |
 
-A failure is `400` for a request that is wrong, `404` for a VM or policy that is not there and `409` for one that is refused (with the reason), each with the reason as text. A policy that could not be saved, or that no tap of the VM took, is a `500` with the reason, and nothing has changed. A change is recorded as done by the `X-Shukra-Actor` header, or `api` if there is none.
+A failure is `400` for a request that is wrong, `404` for a VM or policy that is not there and `409` for one that is refused (with the reason), each with the reason as text. A policy that could not be saved, or that no tap of the VM took, is a `500` with the reason, and nothing has changed. A change is recorded as the key id of the admin key, with the `X-Shukra-Actor` label when one was sent.
 
 ## Files
 

@@ -100,7 +100,7 @@ What crosses the network.
 | `warn` | Plain HTTP on a non-loopback address: the bearer key crosses the network in the clear | `-tls-cert` and `-tls-key` (`SHUKRA_EXTRA_ARGS` in `/etc/shukra/env`), or listen on `127.0.0.1` |
 | `fail` | The same, and the key is the dev key or `-no-auth` is set | The same, and fix `auth` |
 
-The shipped unit listens on `0.0.0.0:30970` over plain HTTP, so a fresh deploy shows this as a `warn` until you add TLS or put something in front of it. TLS termination in a proxy in front of a loopback listener is fine: the daemon sees a loopback address.
+The shipped unit listens on `127.0.0.1:30970` over plain HTTP, so a fresh deploy does not show this warning. It appears when you pass `-listen` for a non-loopback address together with `-allow-insecure-http` and no TLS. The daemon refuses to start in that shape without `-allow-insecure-http`. TLS termination in a proxy in front of a loopback listener is fine: the daemon sees a loopback address.
 
 #### `readonly-key`
 
@@ -119,7 +119,7 @@ Read from `/proc/sys/kernel/osrelease`. Nothing is reported if it cannot be read
 | Status | Fires when | Fix |
 |---|---|---|
 | `warn` | Older than 5.8: no `CAP_BPF`, so the service runs with full root capabilities | Upgrade if you can |
-| `info` | 5.8 up to 6.6: no TCX, so the tap program cannot attach, and guest traffic and isolate are unavailable | 6.6 or newer for guest attribution |
+| `info` | 5.8 up to 6.6: no TCX. Guest traffic uses a clsact filter at priority 50 when that qdisc can be shared | 6.6 or newer if you want TCX. A pass still lets the next filter run |
 | `ok` | 6.6 or newer | |
 
 #### `scan`

@@ -36,6 +36,7 @@ func (f *fakeEnf) Isolated(tap string) bool {
 	return f.isolated[tap]
 }
 func (f *fakeEnf) Durable() bool { return true }
+func (f *fakeEnf) Hook() string  { return "tcx" }
 func (f *fakeEnf) Isolate(taps []string) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -81,6 +82,18 @@ func (m *memStore) LoadBundle(id string) ([]byte, bool) {
 	defer m.mu.Unlock()
 	b, ok := m.bundles[id]
 	return b, ok
+}
+
+type failStore struct {
+	memStore
+	failAppend bool
+}
+
+func (f *failStore) Append(a state.Action) error {
+	if f.failAppend {
+		return errors.New("disk full")
+	}
+	return f.memStore.Append(a)
 }
 
 type world struct {
@@ -480,5 +493,30 @@ func TestTheQueueNeverBlocksTheEventPathAndDropsAreCounted(t *testing.T) {
 	<-done
 	if len(w.eng.List(true)) != 1 {
 		t.Fatalf("all of them are one VM and one proposal: %d", len(w.eng.List(true)))
+	}
+}
+
+func TestAnEnforcedIsolationIsMarkedDegradedWhenTheAuditWriteFails(t *testing.T) {
+	w := newWorld(t, enforceCfg)
+	w.eng.store = &failStore{failAppend: true}
+	w.detect("web", "c2", "high")
+	if w.status("a-1") != "executed_audit_degraded" {
+		t.Fatalf("status %s, want executed_audit_degraded", w.status("a-1"))
+	}
+	if len(w.enf.calls) != 1 {
+		t.Fatalf("the isolation must still happen: %v", w.enf.calls)
+	}
+	n, id := w.st.AuditFailures()
+	if n == 0 || id != "a-1" {
+		t.Fatalf("failures %d last %s", n, id)
+	}
+	var got state.Check
+	for _, c := range w.st.Doctor() {
+		if c.ID == "audit-persist" {
+			got = c
+		}
+	}
+	if got.Status != "fail" || !strings.Contains(got.Detail, "a-1") {
+		t.Fatalf("%+v", got)
 	}
 }

@@ -1,6 +1,6 @@
 # Operator CLI
 
-`shukractl` is the only thing you should need on a laptop once a hypervisor is running `shukrad`. It does not load BPF. It sends `Authorization: Bearer` and `X-Shukra-Actor: shukractl`.
+`shukractl` is the only thing you should need on a laptop once a hypervisor is running `shukrad`. It does not load BPF. It sends `Authorization: Bearer` and `X-Shukra-Actor: shukractl`. The header is a client label. The audit record names the key that authenticated (`admin:` plus six hex characters), with that label beside it.
 
 ## Point it at the daemon
 

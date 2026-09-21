@@ -93,6 +93,7 @@ func (e enforcerStub) Available() (bool, string) {
 func (enforcerStub) AllowList() []string                  { return []string{"10.0.0.0/24"} }
 func (enforcerStub) Isolated(string) bool                 { return false }
 func (enforcerStub) Durable() bool                        { return true }
+func (enforcerStub) Hook() string                         { return "tcx" }
 func (enforcerStub) Isolate(t []string) ([]string, error) { return t, nil }
 func (enforcerStub) Release(t []string) ([]string, error) { return t, nil }
 

@@ -21,9 +21,9 @@ What it does:
 5. Installs `configs/detections.example.yaml` as `/etc/shukra/detections.yaml` only if there is none. Your edited rules are kept, and the current sample is always written beside them as `detections.example.yaml`.
 6. Writes the API key to `/etc/shukra/env` (root only, `0600`) for the service, and `~/.shukra/env` and `~/.shukra/api-key` for the SSH user. The key is not in the unit file, because `systemctl show` prints a unit's `Environment=` to every local user.
 7. Installs `shukra.service` from `deploy/shukra.service` (with `-data-dir /var/lib/shukra` and `ExecReload`), enables it, and restarts it. Detections, isolation requests and the flight recorder now survive that restart, and the daemon stores a coarse snapshot every 5 minutes so that a past time can be explained (`snapshots.jsonl`, about a day at ten VMs; see [after the fact](09-after-the-fact.md)).
-8. Waits for the daemon to answer (`shukractl status --wait`, since it takes a couple of seconds to load its programs), then runs `status`, `programs`, `vms`, `trace list`, `doctor` and `GET /api/v1/status`. `doctor` is informational here: a fresh deploy on a lab host will list the dev key and plain HTTP, and the script says so without failing.
+8. Waits for the daemon to answer (`shukractl status --wait`, since it takes a couple of seconds to load its programs), then runs `status`, `programs`, `vms`, `trace list`, `doctor` and `GET /api/v1/status`. `doctor` is informational here: a fresh deploy on a lab host may list the dev key if you started the binary yourself without `SHUKRA_API_KEY`, and the script says so without failing. The installed unit does not use the dev key: `deploy/install.sh` writes a random one when the host has none.
 
-The unit listens on `0.0.0.0:30970`. The token defaults to `shukra` unless you export `SHUKRA_API_KEY` before deploying. Set a real token on any host that is not a lab:
+The unit listens on `127.0.0.1:30970`. A binary you start by hand with `SHUKRA_API_KEY` unset uses the dev token `shukra` and says so. A packaged install and `deploy-remote.sh` generate a random key instead, and keep the key already on the host unless you export `SHUKRA_API_KEY`. Set one explicitly when you want a known value:
 
 ```bash
 SHUKRA_API_KEY="$(openssl rand -hex 16)" ./scripts/deploy-remote.sh 10.0.1.5 sus
@@ -34,11 +34,11 @@ Passwordless `sudo` is required for install, the unit file, and `systemctl`.
 You should see the script's numbered progress, then the same board you get from the CLI, ending with:
 
 ```text
-SHUKRA_URL=http://10.0.1.5:30970
+SHUKRA_URL=http://127.0.0.1:30970
 Shukra ready
 ```
 
-The line before it is the JSON from `GET /api/v1/status`. If the script stops earlier, the last `[shukra-deploy]` line says where, and the box at the end of this page says what to do.
+That URL is on the hypervisor, not your laptop. The API is not reachable from the network until you put TLS in front of it or explicitly open plain HTTP (below).
 
 ## What the service is allowed to do
 
@@ -54,16 +54,61 @@ The unit runs as root but with only six capabilities, each there for a reason th
 
 ## Encrypt the API
 
-The unit listens on plain HTTP, so the bearer key crosses the network in the clear. Turn on TLS by adding arguments to `/etc/shukra/env`:
+The unit listens on `127.0.0.1:30970` over plain HTTP. That is safe for `shukractl` on the hypervisor. It is not reachable from another machine.
+
+To open it remotely, terminate TLS on the hypervisor and proxy to loopback. Do not put the bearer key on the network in the clear. The daemon refuses to start if `-listen` is not a loopback address, TLS is unset, and `-allow-insecure-http` is unset. `-no-auth` on a non-loopback address is refused even with that flag.
+
+Caddy:
+
+```text
+shukra.example.com {
+    reverse_proxy 127.0.0.1:30970
+}
+```
+
+NGINX:
+
+```text
+server {
+    listen 443 ssl;
+    server_name shukra.example.com;
+    ssl_certificate     /etc/shukra/tls.crt;
+    ssl_certificate_key /etc/shukra/tls.key;
+    location / {
+        proxy_pass http://127.0.0.1:30970;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_buffering off;
+    }
+}
+```
+
+HAProxy:
+
+```text
+frontend shukra
+    bind :443 ssl crt /etc/shukra/tls.pem
+    default_backend shukrad
+backend shukrad
+    server local 127.0.0.1:30970
+```
+
+The event stream is a long-lived response, so the proxy must not buffer it (`proxy_buffering off` in NGINX; HAProxy does not buffer by default).
+
+The daemon can also serve TLS itself. There must be **one** `SHUKRA_EXTRA_ARGS=` line in `/etc/shukra/env`. The service reads it as a list of assignments and the last one wins, so a second `tee -a` for another flag would silently drop the first.
 
 ```bash
-echo 'SHUKRA_EXTRA_ARGS=-tls-cert /etc/shukra/tls.crt -tls-key /etc/shukra/tls.key' | sudo tee -a /etc/shukra/env
+echo 'SHUKRA_EXTRA_ARGS=-listen 0.0.0.0:30970 -tls-cert /etc/shukra/tls.crt -tls-key /etc/shukra/tls.key' | sudo tee -a /etc/shukra/env
 sudo systemctl restart shukra
 ```
 
-There must be **one** `SHUKRA_EXTRA_ARGS=` line in that file. The service reads it as a list of assignments and the last one wins, so a second `tee -a` for another flag would silently drop the first. If the line is already there, edit it and put every flag on it (the next section has an example).
+`systemctl reload shukra` re-reads the certificate as well as the detection rules, so a renewed certificate needs no restart. A bad file on reload is logged and the working certificate stays in use. The floor is TLS 1.2. Point the CLI at a private CA with `SHUKRA_CA_FILE=/path/ca.pem` and `SHUKRA_URL=https://shukra.example.com`. `shukractl doctor` warns when it sees plain HTTP on a non-loopback address, which only happens if you passed `-allow-insecure-http`.
 
-`systemctl reload shukra` re-reads the certificate as well as the detection rules, so a renewed certificate needs no restart. A bad file on reload is logged and the working certificate stays in use. The floor is TLS 1.2. Point the CLI at a private CA with `SHUKRA_CA_FILE=/path/ca.pem` and `SHUKRA_URL=https://...`. The daemon warns at start when it serves plain HTTP on a non-loopback address.
+A lab that must keep the old plain-HTTP bind sets both flags, and accepts that the key is visible on the network:
+
+```text
+SHUKRA_EXTRA_ARGS=-listen 0.0.0.0:30970 -allow-insecure-http
+```
 
 ## Other daemon options
 
@@ -82,7 +127,8 @@ The ones a fresh deploy usually needs:
 | `-vmm-tripwires=false` | Do not load the program that watches QEMU processes for the files they open and the calls they make ([tutorial 11](11-vmm-tripwires.md)). It runs on every open on the host, about 200 ns each, plus a hook on every process creation and exit |
 | `-tls-events=false` | Do not record the server names in guests' TLS hellos. The tap program then reads no TCP payload at all |
 | `-webhook-url`, `-syslog`, `-alert-file` | Where detections go. See [alert sinks](07-alert-sinks.md) |
-| `-listen 127.0.0.1:30970` | Bind only locally |
+| `-listen 0.0.0.0:30970` | Bind an address other than loopback. Plain HTTP then also needs `-allow-insecure-http`, or `-tls-cert` and `-tls-key` |
+| `-allow-insecure-http` | Permit plain HTTP on a non-loopback address. The bearer key crosses the network in the clear |
 
 `shukractl doctor` names what is missing, with a fix for each: [doctor](../doctor.md).
 
@@ -108,11 +154,20 @@ sudo dpkg -i shukra_1.2.3_amd64.deb
 sudo grep SHUKRA_API_KEY /etc/shukra/env      # a random key was generated on first install
 ```
 
-It installs `/usr/bin/shukrad` and `/usr/bin/shukractl`, the unit, and the sample rules, and starts the service. Upgrading keeps your rules and key, `dpkg -r` keeps `/etc/shukra`, and `dpkg -P` removes it and `/var/lib/shukra`. The unit listens on `0.0.0.0:30970` like the source deploy. To bind only locally, put `SHUKRA_EXTRA_ARGS=-listen 127.0.0.1:30970` in `/etc/shukra/env`; a later `-listen` wins. No `.rpm` is built yet.
+It installs `/usr/bin/shukrad` and `/usr/bin/shukractl`, the unit, and the sample rules, and starts the service. Upgrading keeps your rules and key, `dpkg -r` keeps `/etc/shukra`, and `dpkg -P` removes it and `/var/lib/shukra`. The unit listens on `127.0.0.1:30970`. To reach it from another machine, terminate TLS in a proxy (above) or set `-listen` together with `-tls-cert`/`-tls-key` or `-allow-insecure-http` in the one `SHUKRA_EXTRA_ARGS` line. No `.rpm` is built yet.
 
 Pushing a tag such as `v1.2.3` runs `.github/workflows/release.yml`, which builds both packages for amd64 and arm64 and attaches them, with checksums, to a GitHub release. That workflow has not run yet, so treat its first run as a test.
 
 `shukrad -version` and `shukractl version` print the stamped version. A source deploy builds on the host and reports the git describe, or `0.1.0` when the host has no `.git`.
+
+## Upgrading a host that listened on every interface
+
+A unit from before this default bound `0.0.0.0:30970` over plain HTTP. Replacing the unit binds `127.0.0.1:30970` and does not keep the old address. `curl` from a laptop to the hypervisor's public address stops working until you do one of these:
+
+- Put Caddy, NGINX or HAProxy TLS in front of `127.0.0.1:30970` (above). This is the supported remote setup.
+- Or, only for a lab, set `SHUKRA_EXTRA_ARGS=-listen 0.0.0.0:30970 -allow-insecure-http` in `/etc/shukra/env` and restart. Both flags are required. The daemon will not start with only `-listen 0.0.0.0:30970`.
+
+`/etc/shukra` and `/var/lib/shukra` are kept across the package upgrade. Roll back by installing the previous `.deb` (`dpkg -i`) and restarting. That restores the old unit if it shipped inside that package. The key and data directory stay.
 
 ## Upgrading a host deployed by an older script
 
@@ -135,11 +190,11 @@ The first deploy with this script moves the API key out of the unit file into `/
 
 `shukractl vms` lists `qemu-system-*` processes and FluxVM VMMs (`cloud-hypervisor`, `firecracker`, `fluxvm-hypervisor`, and QEMU guests FluxVM launched). `runtime=libvirt` or `runtime=kubevirt` is a label from the QEMU command line, not a guest agent. `runtime=fluxvm` means the name, UUID and tap came from FluxVM's `vms.json`. `taps=` is the interface Shukra will attach to: `ifname=` or a libvirt tun fd for a plain QEMU guest, and for FluxVM the host veth `vh<8hex>` when the guest's tap is in a per-VM netns, or `tap_name` when it is already on the host. A VM with `taps=-` is on user-mode networking or its interface could not be mapped, and `shukractl doctor` says which, so its guest traffic is not seen and it cannot be isolated. The mapping is in [FluxVM](../tap.md#fluxvm).
 
-From your laptop, if the port is reachable:
+From your laptop, only after TLS or an explicit insecure bind:
 
 ```bash
 curl -sf -H "Authorization: Bearer $SHUKRA_API_KEY" \
-  http://10.0.1.5:30970/api/v1/status
+  https://shukra.example.com/api/v1/status
 ```
 
 `programsAttached` should match what the CLI printed. `guest` attribution is not a field you should expect to flip to true.
@@ -159,9 +214,10 @@ If you develop Shukra, this is also how a BPF change is verified: deploy to a re
 > | `programs will report detached` in the log | The host has no `clang` or no BTF. The control plane installed and every program is `detached` |
 > | `shukractl status --wait` times out | `sudo journalctl -u shukra -n 50`. A bad `SHUKRA_EXTRA_ARGS` flag or an unreadable certificate stops the daemon at start |
 > | `systemctl is-active shukra` prints `failed` | Same journal. A second `SHUKRA_EXTRA_ARGS=` line in `/etc/shukra/env` replaces the first: keep one |
-> | `curl` from your laptop cannot connect | The unit binds `0.0.0.0:30970`; a firewall or a `-listen 127.0.0.1:30970` in `SHUKRA_EXTRA_ARGS` is in the way |
-> | `401` from `curl` | The key is the one in `/etc/shukra/env`: `sudo grep SHUKRA_API_KEY /etc/shukra/env` |
+> | `curl` from your laptop cannot connect | The unit binds `127.0.0.1:30970`. Use SSH to the host, or put TLS in front of loopback. A firewall is only relevant after you have opened a non-loopback listen |
+> | the daemon exits at start with `refusing plain HTTP` | `-listen` is not loopback and there is no TLS. Add `-tls-cert` and `-tls-key`, or `-allow-insecure-http` if you accept a cleartext key |
+> | `401` from `curl` | The key is the one in `/etc/shukra/env`: `sudo grep SHUKRA_API_KEY /etc/shukra/env`. A fresh install generated a random key. The dev token `shukra` is only what a binary uses when `SHUKRA_API_KEY` is unset |
+> | `doctor` lists the dev key | You started `shukrad` without `SHUKRA_API_KEY`. A packaged install does not do that. Set `SHUKRA_API_KEY` in `/etc/shukra/env` |
 > | Every program is `detached` | Read the detail beside it. A missing BPF build says `CO-RE objects are not linked in this binary` |
-> | `doctor` lists the dev key and plain HTTP | Expected on a fresh lab deploy, and the script says so. Fix them before you turn on `-isolate-allow` |
 
 Next: [use the CLI](04-shukractl.md) against that URL.

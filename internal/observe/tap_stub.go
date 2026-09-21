@@ -45,6 +45,7 @@ func (*Enforcer) Available() (bool, string) {
 }
 func (*Enforcer) AllowList() []string                { return nil }
 func (*Enforcer) Durable() bool                      { return false }
+func (*Enforcer) Hook() string                       { return "" }
 func (*Enforcer) Isolated(string) bool               { return false }
 func (*Enforcer) Isolate([]string) ([]string, error) { return nil, errNoBPF }
 func (*Enforcer) Release([]string) ([]string, error) { return nil, errNoBPF }
@@ -70,6 +71,12 @@ func (*EgressKernel) CanEnforce() (bool, string) {
 func (*EgressKernel) Set(string, uint8, []netip.Prefix) error { return errNoBPF }
 func (*EgressKernel) Mode(string) uint8                       { return 0 }
 func (*EgressKernel) Stats() []EgressCounters                 { return nil }
+
+// AttachedTaps is empty in this build.
+func AttachedTaps() []string { return nil }
+
+// QuarantineTap cannot drop traffic in this build.
+func QuarantineTap(string) error { return errNoBPF }
 
 // StartVMM reads no ring in this build.
 func StartVMM(func(event.Event)) {}

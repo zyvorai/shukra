@@ -28,6 +28,7 @@ func (f *fakeEnforcer) Available() (bool, string) { return f.ok, f.why }
 func (f *fakeEnforcer) AllowList() []string       { return f.allow }
 func (f *fakeEnforcer) Isolated(t string) bool    { return f.isolated[t] }
 func (f *fakeEnforcer) Durable() bool             { return f.durable }
+func (f *fakeEnforcer) Hook() string              { return "tcx" }
 func (f *fakeEnforcer) set(op string, taps []string, on bool) ([]string, error) {
 	var done, failed []string
 	for _, t := range taps {

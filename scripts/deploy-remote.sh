@@ -148,9 +148,8 @@ echo "---- shukractl doctor (what needs attention; informational) ----"
 shukractl doctor || true
 curl -sf -H "Authorization: Bearer \$API_KEY" "\$SHUKRA_URL/api/v1/status"
 echo
-HOST_IP="\$(hostname -I | awk '{print \$1}')"
-echo "SHUKRA_URL=http://\${HOST_IP}:30970"
-echo "Shukra ready"
+echo "SHUKRA_URL=http://127.0.0.1:30970"
+echo "Shukra ready (loopback only; put TLS in front to reach it remotely)"
 EOF
 )
 
@@ -252,4 +251,4 @@ if $DRY_RUN; then
 fi
 
 ssh_host 'bash -s' <<<"$remote_script"
-log "done — open http://<host>:30970"
+log "done — on the host, http://127.0.0.1:30970"

@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { probe, setToken } from '../api';
 
 export default function Login({ onLogin, initialError = '' }: { onLogin: () => void; initialError?: string }) {
-  const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(initialError);
   const [busy, setBusy] = useState(false);
@@ -19,7 +18,7 @@ export default function Login({ onLogin, initialError = '' }: { onLogin: () => v
       return;
     }
     setToken('');
-    setError(result === 'unauthorized' ? 'Wrong username or password.' : 'Could not reach shukrad. Check the URL and try again.');
+    setError(result === 'unauthorized' ? 'The API token was rejected.' : 'Could not reach shukrad. Check the URL and try again.');
   }
 
   return (
@@ -37,10 +36,6 @@ export default function Login({ onLogin, initialError = '' }: { onLogin: () => v
         <p className="eyebrow">Sign in</p>
         <h1>Shukra</h1>
         {error && <p className="login-error">{error}</p>}
-        <label className="tokenbox">
-          Username
-          <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
-        </label>
         <label className="tokenbox">
           API token
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
