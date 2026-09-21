@@ -39,7 +39,7 @@ func TestEmptyListsAreNeverNull(t *testing.T) {
 		"/api/v1/detections", "/api/v1/detections?vm=vm-a", "/api/v1/events", "/api/v1/events?vm=vm-a",
 		"/api/v1/recorder?vm=vm-a", "/api/v1/export", "/api/v1/actions", "/api/v1/advice", "/api/v1/baseline",
 		"/api/v1/policy", "/api/v1/policy?vm=vm-a", "/api/v1/trace/kvm", "/api/v1/trace/sched", "/api/v1/trace/sched?threads=1",
-		"/api/v1/trace/block", "/api/v1/trace/net", "/api/v1/trace/tap", "/api/v1/trace/drops", "/api/v1/trace/contention",
+		"/api/v1/trace/block", "/api/v1/trace/memory", "/api/v1/trace/net", "/api/v1/trace/tap", "/api/v1/trace/drops", "/api/v1/trace/contention",
 		"/api/v1/explain?vm=vm-a", "/api/v1/incident?vm=vm-a",
 	}
 	for _, withVM := range []bool{false, true} {

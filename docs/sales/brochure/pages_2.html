@@ -1,11 +1,12 @@
-<section class="page" data-title="The seven programs"><div class="body">
-<h1>The seven eBPF programs</h1>
-<p class="lede">Seven programs, 31 attach points (4 + 4 + 2 + 3 + 2 + 1 + 15). Each is a separate object with its own hooks. A host that cannot run one loses only that program, and says why.</p>
+<section class="page" data-title="The eight programs"><div class="body">
+<h1>The eight eBPF programs</h1>
+<p class="lede">Eight programs, 35 attach points (4 + 4 + 3 + 3 + 3 + 2 + 1 + 15). Each is a separate object with its own hooks. A host that cannot run one loses only that program, and says why.</p>
 <table>
 <tr><th>Program</th><th>Hooks</th><th>What it records</th><th>Needs</th></tr>
 <tr><td class="k">kvm</td><td><code>kvm_exit</code>, <code>kvm_entry</code>, <code>kvm_mmio</code>, <code>kvm_pio</code></td><td>exit counts by reason, exit handling time as a histogram (halts excluded) and time per reason</td><td>BTF, Linux 5.8+</td></tr>
 <tr><td class="k">sched</td><td>wakeup, switch, exec, exit</td><td>on-CPU time, run-queue delay per thread, <b>vCPU preemption</b> (runnable but off a host CPU, and who had it), exec and exit of QEMU children</td><td>BTF, Linux 5.8+</td></tr>
-<tr><td class="k">block</td><td><code>block_rq_issue</code>, <code>block_rq_complete</code></td><td>latency histogram, requests, bytes and the slowest request, per direction</td><td>BTF, Linux 5.8+</td></tr>
+<tr><td class="k">block</td><td><code>block_rq_insert</code>, <code>block_rq_issue</code>, <code>block_rq_complete</code></td><td>service time and queue time, requests, bytes, errors and the slowest request, per direction</td><td>BTF, Linux 5.8+</td></tr>
+<tr><td class="k">mem</td><td>direct reclaim begin and end, <code>oom/mark_victim</code></td><td>direct-reclaim stalls and OOM kills of the VMM process, not the guest's own memory</td><td>BTF, Linux 5.8+</td></tr>
 <tr><td class="k">net</td><td><code>tcp_v4_connect</code>, <code>tcp_v6_connect</code>, sampled <code>tcp_retransmit_skb</code></td><td>exact connect counts (IPv4 and IPv6) and 1-in-64 retransmit samples: <b>the QEMU process's</b> sockets</td><td>BTF, Linux 5.8+</td></tr>
 <tr><td class="k">tap</td><td>TCX ingress and egress on each VM tap</td><td>the guest's own traffic: per-tap counters; an event per TCP connect, new UDP flow and connection made <i>to</i> the guest; the name in each DNS query and TLS ClientHello; each handshake's outcome; isolation and egress policy</td><td>Linux 6.6+, <code>CAP_NET_ADMIN</code></td></tr>
 <tr><td class="k">vmm</td><td>13 syscall tracepoints (three opens, ten calls a VMM never makes), plus process fork and exit</td><td>for a QEMU process and what it started: each file it opens and each sensitive call it makes (<code>ptrace</code>, <code>mount</code>, <code>setns</code>, module loads). A steady-state VMM does none</td><td>BTF, Linux 5.8+</td></tr>

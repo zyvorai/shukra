@@ -24,6 +24,7 @@ func programs() []Program {
 				{Name: "sched", Status: "detached", Detail: detail},
 				{Name: "block", Status: "detached", Detail: detail},
 				{Name: "net", Status: "detached", Detail: detail},
+				{Name: "mem", Status: "detached", Detail: detail},
 				{Name: "vmm", Status: "detached", Detail: detail},
 				{Name: "drops", Status: "detached", Detail: detail},
 			}
@@ -42,7 +43,7 @@ func programs() []Program {
 		suffix := fmt.Sprintf("lost=%d", n)
 		for i := range out {
 			switch out[i].Name {
-			case "sched", "block", "net":
+			case "sched", "block", "net", "mem":
 				if out[i].Detail == "" {
 					out[i].Detail = suffix
 				} else {

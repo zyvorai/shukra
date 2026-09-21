@@ -8,13 +8,13 @@ Open `http://127.0.0.1:30970` on the hypervisor (the unit does not listen on oth
 
 A wrong token does not open a fixture. It says `The API token was rejected.`, or `Could not reach shukrad. Check the URL and try again.` when the daemon does not answer. Fixture data exists only when you start Vite with `VITE_FIXTURE=1`.
 
-You should land on **Overview**: the number of VMs, `7/7` programs attached on a Linux host with BPF (`0/7` on a laptop build), the detection count, and the mode `observe`. It refreshes every five seconds and pauses while the tab is hidden.
+You should land on **Overview**: the number of VMs, `8/8` programs attached on a Linux host with BPF (`0/8` on a laptop build), the detection count, and the mode `observe`. It refreshes every five seconds and pauses while the tab is hidden.
 
 The page itself (`/` and its scripts) is served without a key. Every number on it comes from the API with your token, so the console shows nothing the CLI could not.
 
 ## Pages
 
-There are sixteen: Overview, and four menus in the top bar. **Investigate** has VMs, Flight recorder and Explain. **Diagnostics** has KVM, Scheduler, Contention, Right-size, Block and Programs. **Network** has Host connections and Drops. **Security** has Detections, Actions, Egress policy and Isolate.
+There are seventeen: Overview, and four menus in the top bar. **Investigate** has VMs, Flight recorder and Explain. **Diagnostics** has KVM, Scheduler, Contention, Right-size, Block, Memory and Programs. **Network** has Host connections and Drops. **Security** has Detections, Actions, Egress policy and Isolate.
 
 | Page | Use it to |
 |---|---|
@@ -26,8 +26,9 @@ There are sixteen: Overview, and four menus in the top bar. **Investigate** has 
 | Scheduler | On-CPU time, run-queue delay, **vCPU preemption** (how long the vCPUs were runnable but off a host CPU, and who had it), and a per-thread table to tell a slow vCPU from a slow iothread |
 | Contention | Which VM took whose CPU: pairs of victim and culprit, each VM's preemption split into other VMs, its own threads and host tasks, and what each culprit VM was doing meanwhile |
 | Right-size | Each VM's vCPUs, how much of the window they were halted and busy and preempted, and the advice (over-provisioned, starved, fine) with its evidence and how sure it is, most urgent first |
-| Block | Requests, bytes, worst case, p50 and p99, from a log2 histogram (percentiles are computed in userspace) |
-| Programs | Attached or detached, and the hook detail, for all seven programs: `kvm`, `sched`, `block`, `net`, `vmm`, `drops` and `tap` |
+| Block | Service time and queue time, requests, bytes, errors, worst case, p50 and p99. Percentiles are computed in userspace |
+| Memory | Direct reclaim stalls and OOM kills of the VMM process. Not the guest's own memory |
+| Programs | Attached or detached, and the hook detail, for all eight programs: `kvm`, `sched`, `block`, `mem`, `net`, `vmm`, `drops` and `tap` |
 | Host connections | The QEMU process's TCP connects and sampled retransmits, and, when the tap program is attached, the guest's own connections, connections made to it, UDP flows, the names it looked up, and a per-tap table of what became of every connection |
 | Drops | What the kernel dropped on each VM tap, by reason, and how much of it was Shukra. Says "not measuring" where the drops program is off, and not a zero |
 | Detections | Every detection: watchlist, port, DNS and TLS names, exec, thresholds, baseline first sightings, egress-policy strays and changes, VMM tripwires, and what responses announced. Read-only: each row is the severity, the destination if it has one, and the message |

@@ -195,9 +195,9 @@ func traceCmd(args []string, out io.Writer) error {
 	}
 	kind := args[0]
 	switch kind {
-	case "kvm", "sched", "block", "net", "tap", "drops", "contention":
+	case "kvm", "sched", "block", "net", "tap", "drops", "contention", "memory":
 	default:
-		return fmt.Errorf("trace kvm|sched|block|net|tap|drops|contention")
+		return fmt.Errorf("trace kvm|sched|block|net|tap|drops|memory|contention")
 	}
 	vm := flagValue(args[1:], "--vm", "")
 	q := url.Values{}
@@ -476,7 +476,8 @@ func formatTraceList(w io.Writer, m map[string]any) {
 	fmt.Fprintln(w, "TRACE")
 	fmt.Fprintln(w, "  kvm     kvm_exit kvm_entry kvm_mmio kvm_pio counters, not per-exit events")
 	fmt.Fprintln(w, "  sched   sched_switch sched_wakeup exec: on-CPU time, run-queue delay, vCPU preemption")
-	fmt.Fprintln(w, "  block   block_rq_issue/complete log2 histogram. p50/p99 in userspace")
+	fmt.Fprintln(w, "  block   block_rq_insert/issue/complete. service time and queue time, p50/p99 in userspace")
+	fmt.Fprintln(w, "  memory  direct reclaim stalls and OOM kills of the VMM process")
 	fmt.Fprintln(w, "  net     tcp_v4/v6_connect (exact) and sampled retransmits. QEMU process, not the guest")
 	fmt.Fprintln(w, "  tap     TCX on each VM tap: the guest's own traffic, and isolation")
 	fmt.Fprintln(w, "  drops   skb:kfree_skb on each VM tap: what the kernel dropped, why, and whether it was Shukra")
@@ -583,7 +584,9 @@ func formatTrace(w io.Writer, kind string, m map[string]any) {
 				fmt.Fprintf(w, "\n      vCPU preempted: %sns over %s preemptions%s", num(row, "vcpuPreemptedNs"), num(row, "vcpuPreemptions"), preemptors(row))
 			}
 		case "block":
-			fmt.Fprintf(w, "  issues=%s  read_p50=%s  read_p99=%s  write_p99=%s", num(row, "issues"), num(row, "readP50Ns"), num(row, "readP99Ns"), num(row, "writeP99Ns"))
+			fmt.Fprintf(w, "  issues=%s  read_p99=%s  queue_read_p99=%s  read_errors=%s  write_errors=%s", num(row, "issues"), num(row, "readP99Ns"), num(row, "queueReadP99Ns"), num(row, "readErrors"), num(row, "writeErrors"))
+		case "memory":
+			fmt.Fprintf(w, "  reclaims=%s  reclaim_ns=%s  reclaim_p99=%s  oom=%s", num(row, "reclaimCount"), num(row, "reclaimNs"), num(row, "reclaimP99Ns"), num(row, "oomKills"))
 		case "net":
 			fmt.Fprintf(w, "  connects=%s  retransmits=%s  attribution=%s  guest_attributed=%v", num(row, "connects"), num(row, "retransmits"), str(row, "attribution"), row["guest_attributed"])
 		case "tap":

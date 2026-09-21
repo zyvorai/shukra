@@ -10,4 +10,5 @@ package bpf
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package bpfgen -output-dir ../internal/bpfgen -output-stem net -target $GOARCH -cc clang Net net.bpf.c -- -I. -O2 -g
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package bpfgen -output-dir ../internal/bpfgen -output-stem drops -target $GOARCH -cc clang Drops drops.bpf.c -- -I. -O2 -g
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package bpfgen -output-dir ../internal/bpfgen -output-stem tap -target $GOARCH -cc clang Tap tap.bpf.c -- -I. -O2 -g
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package bpfgen -output-dir ../internal/bpfgen -output-stem mem -target $GOARCH -cc clang Mem mem.bpf.c -- -I. -O2 -g
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -go-package bpfgen -output-dir ../internal/bpfgen -output-stem vmm -target $GOARCH -cc clang Vmm vmm.bpf.c -- -I. -O2 -g

@@ -1,6 +1,6 @@
 # Architecture
 
-Shukra is one privileged daemon on the hypervisor, a CLI and a console that only talk to its API, and seven eBPF programs with 31 attach points between them. This page is how the pieces fit, for someone who has to operate it, extend it, or decide whether to trust it. What each number means is in [signals](signals.md), and who an event is attributed to is in [attribution](attribution.md).
+Shukra is one privileged daemon on the hypervisor, a CLI and a console that only talk to its API, and eight eBPF programs with 35 attach points between them. This page is how the pieces fit, for someone who has to operate it, extend it, or decide whether to trust it. What each number means is in [signals](signals.md), and who an event is attributed to is in [attribution](attribution.md).
 
 ```text
 ┌───────────────────────────── hypervisor ─────────────────────────────┐
@@ -32,15 +32,16 @@ The CLI, the console and Prometheus are ordinary clients of the [API](api.md): n
 |---|---|---|---|
 | `kvm` (4 hooks) | `kvm_exit`, `kvm_entry`, `kvm_mmio`, `kvm_pio` | Per-thread exit counts by reason, entry counts, exit-handling time as a log2 histogram and time per reason | Hand-laid tracepoint records, because KVM records are not in vmlinux BTF on 6.8. `kvm_pio` does not exist on arm64 |
 | `sched` (4) | `sched_switch`, `sched_wakeup`, `sched_process_exec`, `sched_process_exit` | On-CPU time, run-queue delay and vCPU preemption (runnable but off CPU, and who took it) per thread, and a `watched` set of VMM thread groups | Exec and exit events are filtered in the kernel to a watched VMM and its direct children. Wakeups slower than 20 ms also become events, for any task on the host |
-| `block` (2) | `block_rq_issue`, `block_rq_complete` | Latency histogram, bytes and requests per direction, slowest request | Attributed to the task that dispatched the request, which is not always the QEMU thread. Requests of 10 ms or more also become events |
+| `block` (3) | `block_rq_insert`, `block_rq_issue`, `block_rq_complete` | Service-time histogram (issue to completion), queue-time histogram (insert to issue), bytes, requests and errors per direction, slowest request | Attributed to the task that dispatched the request, which is not always the QEMU thread. Requests of 10 ms or more also become events. A request issued without an insert has no queue sample |
 | `net` (3) | `tcp_v4_connect`, `tcp_v6_connect`, `tcp_retransmit_skb` | Exact connect counts; 1 in 64 retransmits become events | The VMM's own sockets. Never the guest. The attribution string is still `qemu-process`. The kprobes fire for every process on the host, and every connect is an event; what no VM owns is `_host` |
+| `mem` (3) | `mm_vmscan_direct_reclaim_begin`, `mm_vmscan_direct_reclaim_end`, `oom/mark_victim` | Direct-reclaim stall histogram and total time per thread, and OOM kills of a process | The VMM process, not the guest's own memory. A stall of 10 ms or more is a `reclaim_stall` event. An OOM kill is an `oom_kill` event naming the victim |
 | `vmm` (15) | `syscalls:sys_enter_openat`, `openat2`, `open`, `ptrace`, `process_vm_writev`, `process_vm_readv`, `mount`, `unshare`, `setns`, `init_module`, `finit_module`, `kexec_load`, `kexec_file_load`, and `sched:sched_process_fork` and `sched_process_exit` to keep the table of descendants | Nothing but a ring of events: a file opened, or a call made, by a VMM process or by something that descends from one | Fires for every process on the host, so it first finds out whether the caller is a VMM (`vmm_watched`), or descends from one (`vmm_desc`, an LRU filled at fork, so lineage survives a parent's exit), or is a process already running that a walk through up to three `real_parent`s finds; only then does it read the path. A per-VMM limit of 300 a second, and a report of how many went over. Paths are judged in the daemon. `-vmm-tripwires=false` does not load it. See [VMM tripwires](vmm-tripwires.md) |
 | `drops` (1) | `skb:kfree_skb` | Per VM tap and drop reason: a count and the kernel function that freed the packet | Filters to VM taps first (`drop_watch`). Reads the record by field name (CO-RE). Needs Linux 5.17. See [drops](drops.md) |
 | `tap` (2, per interface) | TCX ingress and egress on each VM's host interface (Linux 6.6+) | Counters, TCP handshake outcomes, isolation and egress policy, three event rings (connects and flows, DNS names, TLS names) | The only program that sees the guest's traffic. On FluxVM's default netns the interface is the host veth, not the inner tap. See [guest traffic](tap.md) |
 
-The hooks add up to 31: 4 + 4 + 2 + 3 + 15 + 1 + 2. The `tap` pair is attached once per VM interface, so the count of TCX links follows the VMs.
+The hooks add up to 35: 4 + 4 + 3 + 3 + 3 + 15 + 1 + 2. The `tap` pair is attached once per VM interface, so the count of TCX links follows the VMs.
 
-Each program loads on its own, and a hook that fails to attach does not stop the others in its program or any other program. A host without a KVM tracepoint still gets scheduler, block and network data. When some hooks of a program fail, its status is `attached` with a detail such as `14/15 hooks` and the last error; when none attach it is `detached` with the reason. `tap` is loaded once and attached per VM interface, so it comes and goes with the VMs and its status changes at runtime. `shukractl programs` and `GET /api/v1/programs` show all seven, and `shukra_program_attached` is the same in Prometheus.
+Each program loads on its own, and a hook that fails to attach does not stop the others in its program or any other program. A host without a KVM tracepoint still gets scheduler, block and network data. When some hooks of a program fail, its status is `attached` with a detail such as `14/15 hooks` and the last error; when none attach it is `detached` with the reason. `tap` is loaded once and attached per VM interface, so it comes and goes with the VMs and its status changes at runtime. `shukractl programs` and `GET /api/v1/programs` show all eight, and `shukra_program_attached` is the same in Prometheus.
 
 The `sched` program's preemption tables (`preempt_start`, `preempt_by`) are small LRUs that only watched threads ever enter; the per-thread totals in `sched_stats` are the exact ones. See [vCPU preemption](signals.md#vcpu-preemption).
 
@@ -54,13 +55,14 @@ The path is the same shape for all of them: the kernel side writes maps and ring
 |---|---|---|---|---|
 | `kvm` | `kvm_exits`, `kvm_reason_ns` (thread id and reason, LRU 16,384), `kvm_lat` (thread id and bucket, LRU 16,384), `kvm_entries`, `kvm_mmio`, `kvm_pio` and `kvm_exit_start` (thread id, LRU 8,192) | none | `observe.Sample`, every 2 s | `trace kvm`, `shukra_kvm_*`, the KVM thresholds, the `kvm_exit_handling` finding, and the advisor (halt time) |
 | `sched` | `sched_stats`, `wakeup_ts`, `sched_hist` (thread id, LRU 65,536 each), `preempt_start`, `preempt_by` (LRU 16,384), `watched` (hash, 4,096) | `events` (1 MiB): `exec`, `exit`, `sched_delay` | Sample, in batches; the ring reader | `trace sched`, `trace contention`, `shukra_sched_*`, the run-queue and preemption thresholds, findings `host_cpu_contention`, `cpu_preempted`, `noisy_neighbour`, the advisor, and the events |
-| `block` | `blk_inflight` (device and sector, LRU 16,384), `blk_hist` (LRU 65,536), `blk_io` (LRU 16,384), `blk_issues` (LRU 8,192) | `events` (1 MiB): `block_slow` | Sample; the ring reader | `trace block`, `shukra_block_*`, the block thresholds, the `storage_latency` finding |
+| `block` | `blk_inflight` (device and sector, LRU 16,384), `blk_hist` and `blk_qhist` (LRU 65,536 each), `blk_io` (LRU 16,384), `blk_issues` (LRU 8,192) | `events` (1 MiB): `block_slow` | Sample; the ring reader | `trace block`, `shukra_block_*`, the block thresholds, the `storage_latency` finding |
+| `mem` | `reclaim_start`, `reclaim_ns`, `reclaim_count` (thread id, LRU 8,192), `reclaim_hist` (LRU 65,536), `oom_kills` (LRU 1,024) | `events` (1 MiB): `reclaim_stall`, `oom_kill` | Sample; the ring reader | `trace memory`, `shukra_reclaim_*`, `shukra_oom_kills_total` |
 | `net` | `net_connects`, `net_retrans` (thread id, LRU 8,192 each) | `events` (1 MiB): `tcp_connect`, `tcp_retransmit` | Sample; the ring reader | `trace net`, `shukra_tcp_*`, the `destinations` and `ports` rules on host connects, the `tcp_retransmits` finding |
 | `vmm` | `vmm_watched` (hash, 4,096), `vmm_desc` (LRU 8,192), `vmm_rate` (LRU 1,024) | `vmm_events` (256 KiB): `vmm_file_open`, `vmm_syscall` | `SetWatched` writes `vmm_watched`; the ring reader | Events, and the detections `vmm-sensitive-open`, `vmm-syscall`, `vmm-flood`. No counters and no trace command |
 | `drops` | `drop_watch` (ifindex, hash, 1,024), `drop_stats` (ifindex and reason, per-CPU hash, 4,096) | none | `DropSample`, when state asks | `trace drops`, `shukra_tap_kernel_drops_total`, findings `guest_traffic_dropped` and `guest_not_reading_nic` |
 | `tap` | The pinned maps below, all per interface (ifindex) or per flow | `tap_events`, `tap_dns` (256 KiB each), `tap_tls` (1 MiB) | `TapSample`, when state asks (it first counts unanswered SYNs); three ring readers | `trace tap`, `shukra_tap_*` and `shukra_egress_*`, isolation, egress policy, the `guest_*` events, baselines, and the `guest_connects_failing` finding |
 
-Two consequences worth knowing. First, the `kvm`, `sched`, `block` and `net` maps are read in one pass by `observe.Sample`; the `tap` and `drops` counters are read separately, through `internal/state`, on each refresh (the guest-traffic thresholds need them), on each history snapshot and on each API request. Every read is a fresh sample, and a `tap` read first counts the SYNs nobody answered. Second, a `sched` or `kvm` number is per **host thread id** and only becomes a VM's number in userspace, through the thread table the scan builds.
+Two consequences worth knowing. First, the `kvm`, `sched`, `block`, `mem` and `net` maps are read in one pass by `observe.Sample`; the `tap` and `drops` counters are read separately, through `internal/state`, on each refresh (the guest-traffic thresholds need them), on each history snapshot and on each API request. Every read is a fresh sample, and a `tap` read first counts the SYNs nobody answered. Second, a `sched` or `kvm` number is per **host thread id** and only becomes a VM's number in userspace, through the thread table the scan builds.
 
 ## The daemon
 
@@ -69,7 +71,7 @@ Two consequences worth knowing. First, the `kvm`, `sched`, `block` and `net` map
 | Goroutine | Runs | Does |
 |---|---|---|
 | Refresh loop | every 2 s | The cycle below |
-| Ring readers | from the first refresh, one per ring | `events` of `sched`, `block` and `net`, then `tap_events`, `tap_dns`, `tap_tls`, and `vmm_events`: read a record, decode it by offset, and hand it to `Ingest`. A record that does not decode is counted lost, never guessed at |
+| Ring readers | from the first refresh, one per ring | `events` of `sched`, `block`, `mem` and `net`, then `tap_events`, `tap_dns`, `tap_tls`, and `vmm_events`: read a record, decode it by offset, and hand it to `Ingest`. A record that does not decode is counted lost, never guessed at |
 | Response engine | a 5 s tick, plus a queue of 256 detections | Turns detections into proposals or actions under the guardrails, lets proposals lapse, and releases timed isolations. See [responses](responses.md) |
 | Policy engine | every 2 s | `Reconcile`: reverts an egress policy whose timer ran out, and makes the kernel match the record on every tap of every VM. See [egress policy](egress-policy.md) |
 | Persistence | every minute, with `-data-dir` only | Rewrites `recorder.json`, prunes and saves `baselines.json` |
@@ -256,7 +258,7 @@ A build without root, clang or BTF still serves discovered VMs and reports every
 
 | Path | What |
 |---|---|
-| `bpf/*.bpf.c`, `bpf/event.h` | The seven programs and the shared event layout |
+| `bpf/*.bpf.c`, `bpf/event.h` | The eight programs and the shared event layout |
 | `internal/bpfgen` | Loads and attaches them (CO-RE via bpf2go). `tap.go` is the tap manager, `attach.go` the other six |
 | `internal/observe` | Reads the maps, decodes events, joins the loaders to the rest. Has a stub for builds without BPF |
 | `internal/identity` | Finds QEMU and FluxVM VMMs, their threads, and the host interface to trace |

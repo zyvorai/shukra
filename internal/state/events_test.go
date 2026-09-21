@@ -38,7 +38,8 @@ func TestEveryKindBelongsToAClassAndAnUnknownOneToOther(t *testing.T) {
 		event.KindGuestConnect: classGuest, event.KindGuestFlow: classGuest, event.KindGuestInbound: classGuest, event.KindGuestDNS: classGuest, event.KindGuestTLS: classGuest,
 		event.KindDetection: classNotable, event.KindVMStart: classNotable, event.KindVMStop: classNotable,
 		event.KindExec: classProcess, event.KindExit: classProcess, event.KindVMMOpen: classProcess, event.KindVMMCall: classProcess,
-		event.KindBlockSlow: classLatency, event.KindSchedDelay: classLatency,
+		event.KindBlockSlow: classLatency, event.KindSchedDelay: classLatency, event.KindReclaim: classLatency,
+		event.KindOOM:        classNotable,
 		event.KindTCPConnect: classHostNet, event.KindTCPRetransmit: classHostNet,
 		"something_new": classOther,
 	}

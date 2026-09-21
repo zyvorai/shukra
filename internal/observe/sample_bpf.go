@@ -33,6 +33,7 @@ func Sample() map[uint32]aggregate.Counters {
 		readSched(by, live.Coll.Maps)
 		readBlock(by, live.Coll.Maps)
 		readRetrans(by, live.Coll.Maps)
+		readMemory(by, live.Coll.Maps)
 	}
 	out := make(map[uint32]aggregate.Counters, len(by))
 	for pid, c := range by {
@@ -245,7 +246,7 @@ func readBlock(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {
 	readU32(maps["blk_issues"], func(pid uint32, v uint64) { slot(by, pid).BlockIssues += v })
 	if m := maps["blk_io"]; m != nil {
 		var key struct{ Pid, Write uint32 }
-		var val struct{ Ops, Bytes, MaxNs uint64 }
+		var val struct{ Ops, Bytes, MaxNs, Errors uint64 }
 		it := m.Iterate()
 		for it.Next(&key, &val) {
 			c := slot(by, key.Pid)
@@ -253,10 +254,35 @@ func readBlock(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {
 				c.BlockWriteOps += val.Ops
 				c.BlockWriteBytes += val.Bytes
 				c.BlockWriteMax = max(c.BlockWriteMax, val.MaxNs)
+				c.BlockWriteErrors += val.Errors
 			} else {
 				c.BlockReadOps += val.Ops
 				c.BlockReadBytes += val.Bytes
 				c.BlockReadMax = max(c.BlockReadMax, val.MaxNs)
+				c.BlockReadErrors += val.Errors
+			}
+		}
+	}
+	if m := maps["blk_qhist"]; m != nil {
+		var key struct {
+			Pid    uint32
+			Write  uint8
+			Bucket uint8
+			_      [2]byte
+		}
+		var val uint64
+		it := m.Iterate()
+		for it.Next(&key, &val) {
+			c := slot(by, key.Pid)
+			dst := &c.BlockQRead
+			if key.Write != 0 {
+				dst = &c.BlockQWrite
+			}
+			if *dst == nil {
+				*dst = make([]uint64, hist.Buckets)
+			}
+			if int(key.Bucket) < len(*dst) {
+				(*dst)[key.Bucket] += val
 			}
 		}
 	}
@@ -265,6 +291,13 @@ func readBlock(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {
 func readRetrans(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {
 	readU32(maps["net_retrans"], func(pid uint32, v uint64) { slot(by, pid).Retransmits += v })
 	readU32(maps["net_connects"], func(pid uint32, v uint64) { slot(by, pid).Connects += v })
+}
+
+func readMemory(by map[uint32]*aggregate.Counters, maps map[string]*ebpf.Map) {
+	readHist2(maps["reclaim_hist"], func(c *aggregate.Counters) *[]uint64 { return &c.ReclaimHist }, by, slot)
+	readU32(maps["reclaim_ns"], func(pid uint32, v uint64) { slot(by, pid).ReclaimNs += v })
+	readU32(maps["reclaim_count"], func(pid uint32, v uint64) { slot(by, pid).ReclaimCount += v })
+	readU32(maps["oom_kills"], func(pid uint32, v uint64) { slot(by, pid).OOMKills += v })
 }
 
 func readU32(m *ebpf.Map, fn func(pid uint32, v uint64)) {

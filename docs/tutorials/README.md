@@ -7,7 +7,7 @@ Short, hands-on paths through Shukra. Each one is copy-pasteable, says what you 
 For anyone building or installing Shukra. Do these in order.
 
 1. [Run it locally](01-run-locally.md) — build the binaries and open the console without attaching BPF. For a developer or anyone who wants to look before they install.
-2. [Attach traces](02-attach-traces.md) — compile CO-RE objects on a Linux host with BTF and start `shukrad` as root, and check all seven programs. For someone building on the hypervisor itself.
+2. [Attach traces](02-attach-traces.md) — compile CO-RE objects on a Linux host with BTF and start `shukrad` as root, and check all eight programs. For someone building on the hypervisor itself.
 3. [Deploy a hypervisor](03-deploy.md) — rsync, remote build (or a prebuilt package), systemd, and the checks that mean it worked. For whoever operates the host.
 
 ## Use it every day

@@ -89,13 +89,31 @@ export function Block() {
       title="Block latency"
       err={err}
       rows={data?.rows}
-      cols={['vm', 'readOps', 'writeOps', 'readBytes', 'writeBytes', 'readP50Ns', 'readP99Ns', 'readMaxNs', 'writeP99Ns', 'writeMaxNs']}
-      format={{ readBytes: bytes, writeBytes: bytes, readP50Ns: ns, readP99Ns: ns, readMaxNs: ns, writeP99Ns: ns, writeMaxNs: ns }}
+      cols={['vm', 'readOps', 'writeOps', 'readBytes', 'writeBytes', 'readP99Ns', 'queueReadP99Ns', 'writeP99Ns', 'queueWriteP99Ns', 'readErrors', 'writeErrors']}
+      format={{ readBytes: bytes, writeBytes: bytes, readP99Ns: ns, queueReadP99Ns: ns, writeP99Ns: ns, queueWriteP99Ns: ns }}
     >
       {(data?.rows || []).flatMap((r) => [
         <LatencyHist key={`${String(r.vm)}-r`} title={`${String(r.vm)} · read latency`} buckets={buckets(r, 'readHist')} unit="requests" />,
         <LatencyHist key={`${String(r.vm)}-w`} title={`${String(r.vm)} · write latency`} buckets={buckets(r, 'writeHist')} unit="requests" />,
       ])}
+    </Trace>
+  );
+}
+
+export function Memory() {
+  const { data, err } = useAPI<{ rows: Row[]; note?: string }>('/api/v1/trace/memory', { refreshMs: LIVE_MS });
+  return (
+    <Trace
+      title="Direct reclaim and OOM"
+      err={err}
+      rows={data?.rows}
+      cols={['vm', 'reclaimCount', 'reclaimNs', 'reclaimP99Ns', 'oomKills']}
+      format={{ reclaimNs: ns, reclaimP99Ns: ns }}
+      empty={data?.note || 'No direct reclaim or OOM has been seen for a VMM process.'}
+    >
+      {(data?.rows || []).map((r) => (
+        <LatencyHist key={String(r.vm)} title={`${String(r.vm)} · direct reclaim`} buckets={buckets(r, 'reclaimHist')} unit="stalls" />
+      ))}
     </Trace>
   );
 }

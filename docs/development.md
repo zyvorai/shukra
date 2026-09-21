@@ -20,7 +20,7 @@ make test-bpf                                    # the tagged build's tests
 
 The default build does not link CO-RE objects, so CI on any OS and a Mac stay green. The Linux tag is `shukrabpf`; files that need it carry `//go:build linux && shukrabpf` (or `shukrabpf && linux`), and the `!shukrabpf` stubs beside them keep the default build whole. `make generate` dumps `bpf/vmlinux.h` from the running kernel's BTF, so the objects are built for the architecture and kernel BTF of the machine that runs it. It exits 0 and says it skipped if clang, `llvm-strip`, `bpftool` or BTF is missing; a `-tags shukrabpf` build after that fails because the loaders were never written.
 
-There are **seven programs**: `kvm`, `sched`, `block`, `net`, `vmm`, `drops` and `tap`. `bpf/generate.go` has one `//go:generate` line for each.
+There are **eight programs**: `kvm`, `sched`, `block`, `mem`, `net`, `vmm`, `drops` and `tap`. `bpf/generate.go` has one `//go:generate` line for each.
 
 ## How a change goes in
 

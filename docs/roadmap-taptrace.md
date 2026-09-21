@@ -25,5 +25,4 @@ The tap program is built: guest attribution, isolate, handshake outcomes, inboun
 
 ## Beyond the tap
 
-- **Memory pressure.** Direct reclaim stalls and OOM kills of QEMU are not observed, and no program touches memory.
-- **Block I/O errors and queue time.** The block program measures latency, not failed requests.
+Guest memory inside the VM, and which process in the guest, are still not observed. Host-side direct reclaim and OOM kills of the VMM, and block queue time versus device service time, are measured. See [signals](signals.md).

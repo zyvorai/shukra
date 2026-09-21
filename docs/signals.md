@@ -1,6 +1,6 @@
 # What each program measures
 
-Shukra has seven programs, and they look at two different things. Five of them see the **VMM process** from the host: the `kvm`, `sched`, `block` and `net` programs measure QEMU, or a FluxVM backend (`cloud-hypervisor`, `firecracker`, `fluxvm-hypervisor`), meaning its vCPU and I/O threads, its block requests and its own sockets, and the `vmm` program watches what that process and anything it starts open and call ([VMM tripwires](vmm-tripwires.md)). The other two, `tap` and `drops`, see the **guest's traffic** on the host side of its tap, or on the host veth FluxVM uses when the tap is in a per-VM netns. None of it is measured inside the guest: Shukra never runs anything in the VM, so it can say which VM and which address, never which process. See [attribution](attribution.md) and [FluxVM](tap.md#fluxvm).
+Shukra has eight programs, and they look at two different things. Six of them see the **VMM process** from the host: the `kvm`, `sched`, `block`, `mem` and `net` programs measure QEMU, or a FluxVM backend (`cloud-hypervisor`, `firecracker`, `fluxvm-hypervisor`), meaning its vCPU and I/O threads, its block requests, its direct reclaim and its own sockets, and the `vmm` program watches what that process and anything it starts open and call ([VMM tripwires](vmm-tripwires.md)). The other two, `tap` and `drops`, see the **guest's traffic** on the host side of its tap, or on the host veth FluxVM uses when the tap is in a per-VM netns. None of it is measured inside the guest: Shukra never runs anything in the VM, so it can say which VM and which address, never which process. See [attribution](attribution.md) and [FluxVM](tap.md#fluxvm).
 
 ## The VMM process and the guest
 
@@ -8,7 +8,7 @@ The distinction is the one to keep in your head, because it decides what a numbe
 
 | | VMM process | Guest |
 |---|---|---|
-| Programs | `kvm`, `sched`, `block`, `net`, `vmm` | `tap`, `drops` |
+| Programs | `kvm`, `sched`, `block`, `mem`, `net`, `vmm` | `tap`, `drops` |
 | Where it is seen | On the host: the process's threads, its block requests, its sockets, its syscalls | On the VM's tap, or the host veth `vh<8hex>` that stands in for it |
 | Joined to a VM by | The process's thread group (`tgid`), or for `exec`, `exit` and the tripwires the parent's or the VMM's `tgid` | The tap's owner in the current scan |
 | `attribution` | `qemu-process` (a name kept for every backend), or `unattributed` when no VM owns the pid | `guest-tap` |
@@ -24,7 +24,8 @@ A detection keeps the attribution of the event that caused it. Detections Shukra
 |---|---|---|
 | `kvm` | Exit counts by reason. **Handling time**: `kvm_exit` to the next `kvm_entry` on the same vCPU thread, as a log2 histogram. Total time per reason | A halt blocks until an interrupt, so its time is guest idle. It is in the per-reason totals and left out of the latency histogram (reason 12 on VMX, 120 on SVM) |
 | `sched` | On-CPU time. **Run-queue delay** (wakeup to running) as a log2 histogram, per task. **vCPU preemption**: time a vCPU thread was runnable but off a host CPU, and who had it | Per VMM thread with `?threads=1`, so a slow vCPU is distinguishable from a slow iothread. Threads no VM owns are summed into the `_host` row as they are read |
-| `block` | Completed requests, bytes, slowest request, and a log2 latency histogram, per direction | It is the QEMU I/O thread, not the guest filesystem. The slowest request is updated without a lock, so two CPUs racing can miss a slightly smaller maximum |
+| `block` | Completed requests, bytes, errors, slowest request, a log2 service-time histogram and a log2 queue-time histogram, per direction | Service time is issue to completion. Queue time is insert to issue, and a request that was never inserted has no queue sample. It is the QEMU I/O thread, not the guest filesystem. The slowest request is updated without a lock, so two CPUs racing can miss a slightly smaller maximum |
+| `mem` | Direct-reclaim stalls (count, total time, log2 histogram) and OOM kills | The VMM process, not the guest's own memory. A stall of 10 ms or more is a `reclaim_stall` event. An OOM kill is an `oom_kill` event |
 | `net` | `tcp_v4_connect` and `tcp_v6_connect`, counted exactly in a kernel map. 1 in 64 retransmits become events, IPv4 and IPv6 | The VMM's sockets, never the guest's. A dual-stack socket connecting to a v4-mapped address is counted once, by the IPv4 probe |
 | `vmm` | No counters. Events only, and detections made from them | A tripwire, not a sandbox: see [what it does not see](vmm-tripwires.md#what-it-does-not-see) |
 | `tap` | Per-tap packets and bytes each way and what isolation dropped, from TCX on the VM's host interface. **What became of each TCP handshake**, both ways: accepted, refused, never answered, blocked by isolation, and retransmits, plus the time to be answered as a log2 histogram. **What the egress policy judged**: how many new connections and datagrams, what audit mode would have dropped, what enforcement dropped. Events for connects, flows, inbound connects, DNS names and TLS server names | The only program that sees the guest's traffic. Needs Linux 6.6+. On FluxVM's default netns the interface is `vh<8hex>`, and the guest address is the one before NAT. See [Guest traffic and isolation](tap.md) |
@@ -39,6 +40,8 @@ Counters are maps and never cost an event. Discrete events come from the rings, 
 | `exec`, `exit` | `sched` | `qemu-process` when joined by the parent's tgid, else `unattributed` | Emitted only for a watched VMM or a direct child of one |
 | `sched_delay` | `sched` | As above, by the task's tgid | A wakeup-to-running delay of 20 ms or more, for any task on the host |
 | `block_slow` | `block` | As above | A request of 10 ms or more, for any task on the host |
+| `reclaim_stall` | `mem` | As above | A direct-reclaim stall of 10 ms or more |
+| `oom_kill` | `mem` | As above, by the victim pid | An OOM kill. The victim is the pid the kernel marked |
 | `tcp_connect` | `net` | `qemu-process`, or `unattributed` for a process no VM owns | One per connect by any process on the host |
 | `tcp_retransmit` | `net` | As above | 1 in 64 |
 | `vmm_file_open`, `vmm_syscall` | `vmm` | `qemu-process` | At most 300 a second per VMM, then one `flood` call that says how many went unreported |
@@ -209,4 +212,4 @@ Explain never reads what the guest is doing inside, and says so under `missing`.
 
 ## What is not measured
 
-The full list, with the reasons, is in [attribution](attribution.md#what-is-not-measured), and what is still to be built is in [what is left](roadmap-taptrace.md). In short: the guest's own steal counter and which process in the guest made a connection; anything inside a connection beyond a DNS query's name and a TLS hello's server name; a VM with no tap the host can attach to (user-mode networking, or a tap in a namespace the scan cannot map); traffic that never crosses the tap; memory pressure and OOM kills; and block errors and queue time.
+The full list, with the reasons, is in [attribution](attribution.md#what-is-not-measured), and what is still to be built is in [what is left](roadmap-taptrace.md). In short: the guest's own steal counter and which process in the guest made a connection; anything inside a connection beyond a DNS query's name and a TLS hello's server name; a VM with no tap the host can attach to (user-mode networking, or a tap in a namespace the scan cannot map); traffic that never crosses the tap; and the guest's own memory. Direct reclaim and OOM kills of the VMM, and block queue time versus device service time, are measured.

@@ -7,10 +7,13 @@
 #define KIND_BLOCK_SLOW 4
 #define KIND_SCHED_DELAY 5
 #define KIND_EXIT 6
+#define KIND_RECLAIM 7
+#define KIND_OOM 8
 
 /* Sample a slow block request or a long wakeup into the ring. Counters stay in maps. */
 #define BLOCK_SLOW_NS 10000000ull
 #define SCHED_DELAY_NS 20000000ull
+#define RECLAIM_SLOW_NS 10000000ull
 
 /* Slot for a latency in ns: bits.Len64(v)-1, and 0 for v <= 1. Mirrors
    internal/hist.Bucket so userspace percentiles read the same buckets. */

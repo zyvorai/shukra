@@ -26,6 +26,7 @@ func Attach() ([]Status, error) {
 		try("sched", LoadSched),
 		try("block", LoadBlock),
 		try("net", LoadNet),
+		try("mem", LoadMem),
 		tryUnlessDisabled("vmm", LoadVmm),
 		tryDrops(),
 	}, nil

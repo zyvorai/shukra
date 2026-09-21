@@ -494,7 +494,7 @@ func TestEmptyListsAreArraysNotNull(t *testing.T) {
 	srv := New(state.New("node-07"), "k")
 	for path, key := range map[string]string{
 		"/api/v1/vms": "vms", "/api/v1/trace/kvm": "rows", "/api/v1/trace/sched": "rows",
-		"/api/v1/trace/block": "rows", "/api/v1/trace/net": "rows", "/api/v1/trace/tap": "rows", "/api/v1/trace/drops": "rows",
+		"/api/v1/trace/block": "rows", "/api/v1/trace/memory": "rows", "/api/v1/trace/net": "rows", "/api/v1/trace/tap": "rows", "/api/v1/trace/drops": "rows",
 	} {
 		var body map[string]json.RawMessage
 		if err := json.Unmarshal(get(srv, path, "k").Body.Bytes(), &body); err != nil {

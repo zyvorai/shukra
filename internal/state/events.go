@@ -43,11 +43,11 @@ func classOf(k event.Kind) eventClass {
 	switch k {
 	case event.KindGuestConnect, event.KindGuestFlow, event.KindGuestInbound, event.KindGuestDNS, event.KindGuestTLS:
 		return classGuest
-	case event.KindDetection, event.KindVMStart, event.KindVMStop:
+	case event.KindDetection, event.KindVMStart, event.KindVMStop, event.KindOOM:
 		return classNotable
 	case event.KindExec, event.KindExit, event.KindVMMOpen, event.KindVMMCall:
 		return classProcess
-	case event.KindBlockSlow, event.KindSchedDelay:
+	case event.KindBlockSlow, event.KindSchedDelay, event.KindReclaim:
 		return classLatency
 	case event.KindTCPConnect, event.KindTCPRetransmit:
 		return classHostNet

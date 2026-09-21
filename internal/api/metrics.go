@@ -206,7 +206,44 @@ func writeMetrics(w io.Writer, st *state.State) {
 				lbl(r.VM), float64(r.ReadMaxNs)/1e9, lbl(r.VM), float64(r.WriteMaxNs)/1e9)
 		}
 	}
-	writeHistograms(w, "shukra_block_latency_seconds", "Block request latency on the QEMU iothread, not the guest filesystem.", append(readH, writeH...))
+	writeHistograms(w, "shukra_block_latency_seconds", "Block request service time, from issue to completion, on the QEMU iothread.", append(readH, writeH...))
+	var qRead, qWrite []histSeries
+	counter("shukra_block_errors_total", "Block requests that completed with a non-zero status.")
+	for _, r := range block {
+		if !r.Measured {
+			continue
+		}
+		fmt.Fprintf(w, "shukra_block_errors_total{%s,op=\"read\"} %d\nshukra_block_errors_total{%s,op=\"write\"} %d\n", lbl(r.VM), r.ReadErrors, lbl(r.VM), r.WriteErrors)
+		qRead = append(qRead, histSeries{lbl(r.VM) + `,op="read"`, r.QueueReadHist})
+		qWrite = append(qWrite, histSeries{lbl(r.VM) + `,op="write"`, r.QueueWriteHist})
+	}
+	writeHistograms(w, "shukra_block_queue_seconds", "Time a request sat in the host queue before the device took it.", append(qRead, qWrite...))
+	mem := st.Memory("")
+	counter("shukra_reclaim_stalls_total", "Direct reclaim stalls in the VMM process, not inside the guest.")
+	for _, r := range mem {
+		if r.Measured {
+			fmt.Fprintf(w, "shukra_reclaim_stalls_total{%s} %d\n", lbl(r.VM), r.ReclaimCount)
+		}
+	}
+	counter("shukra_reclaim_seconds_total", "Time spent in direct reclaim by the VMM process.")
+	for _, r := range mem {
+		if r.Measured {
+			fmt.Fprintf(w, "shukra_reclaim_seconds_total{%s} %g\n", lbl(r.VM), float64(r.ReclaimNs)/1e9)
+		}
+	}
+	var reclaimH []histSeries
+	for _, r := range mem {
+		if r.Measured {
+			reclaimH = append(reclaimH, histSeries{lbl(r.VM), r.ReclaimHist})
+		}
+	}
+	writeHistograms(w, "shukra_reclaim_seconds", "Direct reclaim stall time in the VMM process.", reclaimH)
+	counter("shukra_oom_kills_total", "OOM kills of a VMM process.")
+	for _, r := range mem {
+		if r.Measured {
+			fmt.Fprintf(w, "shukra_oom_kills_total{%s} %d\n", lbl(r.VM), r.OOMKills)
+		}
+	}
 
 	var rq []histSeries
 	for _, r := range sched {

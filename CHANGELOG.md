@@ -1,6 +1,6 @@
 # Changelog
 
-Shukra has no tagged release yet. This lists what has merged to `main`, newest first, by pull request. Pushing a `v*` tag will cut the first release (see [development](docs/development.md#releasing)).
+Shukra 0.1.0-rc1 is tagged. `v0.1.0` is not. This lists what has merged to `main`, newest first. Pushing a `v*` tag publishes a release (see [development](docs/development.md#releasing)).
 
 ## Unreleased
 
@@ -16,6 +16,11 @@ Shukra has no tagged release yet. This lists what has merged to `main`, newest f
 - **An audit write that fails after an isolation is visible.** The action is `executed_audit_degraded`, `shukra_audit_persist_failures_total` counts it, and `doctor` fails. Action lines and incident bundles are fsynced, including the parent directory.
 - **Mutating calls record who asked** as a hashed key id (`admin:` or `readonly:` and six hex characters), plus an optional client label, the source address, the request id, the role and the operation. The key itself is not stored.
 - **CI** runs the race detector, `go vet`, `staticcheck`, `govulncheck` at `v1.8.0`, short fuzz targets, coverage as an artifact, `npm audit`, and an arm64 job. Release artifacts can include a CycloneDX SBOM and, when `COSIGN_PRIVATE_KEY` is set, cosign signatures. `scripts/verify-release.sh` checks a downloaded directory. No `v0.1.0` tag has been pushed.
+
+### Memory pressure and block queue time
+
+- **Direct reclaim and OOM kills are measured on the host.** The `mem` program times `mm_vmscan_direct_reclaim` in the VMM process and records `oom/mark_victim`. `shukractl trace memory` and `shukra_reclaim_*` / `shukra_oom_kills_total` are that. It is not the guest's own memory.
+- **Block queue time is separate from device time.** `block_rq_insert` to `block_rq_issue` is queue time (`queueReadP99Ns`, `shukra_block_queue_seconds`). `block_rq_issue` to `block_rq_complete` is service time (the latency histogram). A completion with a non-zero status counts in `readErrors` / `writeErrors`.
 
 ### Build and tooling
 

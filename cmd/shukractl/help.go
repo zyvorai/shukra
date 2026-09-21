@@ -23,8 +23,8 @@ func helpSections() []helpSection {
 			{"install-cli [--prefix DIR]", "Copy this binary onto PATH"},
 		}},
 		{title: "🔬  Trace", cmds: []helpCmd{
-			{"trace list", "kvm, sched, block, net, tap and drops programs"},
-			{"trace kvm|sched|block|net|tap|drops|contention [--vm NAME] [--json]", "Per-VM counters from the daemon. contention: which VM took whose CPU"},
+			{"trace list", "kvm, sched, block, memory, net, tap and drops programs"},
+			{"trace kvm|sched|block|net|tap|drops|memory|contention [--vm NAME] [--json]", "Per-VM counters from the daemon. contention: which VM took whose CPU"},
 		}},
 		{title: "🔍  Investigate", cmds: []helpCmd{
 			{"vms [--json]", "Virtual machines from the host (QEMU and FluxVM)"},

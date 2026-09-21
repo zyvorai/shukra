@@ -10,6 +10,8 @@ const (
 	KindTCPConnect    Kind = "tcp_connect"
 	KindTCPRetransmit Kind = "tcp_retransmit"
 	KindBlockSlow     Kind = "block_slow"
+	KindReclaim       Kind = "reclaim_stall"
+	KindOOM           Kind = "oom_kill"
 	KindSchedDelay    Kind = "sched_delay"
 	KindExit          Kind = "exit"
 	KindDetection     Kind = "detection"

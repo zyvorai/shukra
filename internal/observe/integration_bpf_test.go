@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -60,9 +61,10 @@ func TestKernelIntegration(t *testing.T) {
 		programs[p.Name] = p.Status + ": " + p.Detail
 	}
 	// kvm is not required: its tracepoints depend on the kvm module and the CPU.
-	for _, name := range []string{"sched", "block", "net"} {
-		if s := programs[name]; len(s) < 8 || s[:8] != "attached" {
-			t.Fatalf("%s is not attached: %s", name, s)
+	for _, name := range []string{"sched", "block", "net", "mem"} {
+		s := programs[name]
+		if len(s) < 8 || s[:8] != "attached" || strings.Contains(s, "/") {
+			t.Fatalf("%s is not fully attached: %s", name, s)
 		}
 	}
 

@@ -37,7 +37,7 @@ shukractl vms
 shukractl vms --json
 ```
 
-`status` is the one screen to trust first: product, version, mode `observe`, VM count, how many of the seven programs attached, detection count. The last line is the boundary, not a slogan: it says whether guest tap attribution is attached.
+`status` is the one screen to trust first: product, version, mode `observe`, VM count, how many of the eight programs attached, detection count. The last line is the boundary, not a slogan: it says whether guest tap attribution is attached.
 
 ```text
 SHUKRA
@@ -46,7 +46,7 @@ SHUKRA
   tagline     eBPF-powered runtime intelligence and security for KVM
   mode        observe
   vms         10
-  programs    7/7 attached
+  programs    8/8 attached
   detections  3
   observe: host traces, and guest traffic on the VM taps (10 taps via tcx, enforcement survives a daemon restart)
 ```
@@ -60,6 +60,7 @@ shukractl trace list
 shukractl trace kvm --vm osboxes-debian
 shukractl trace sched --vm osboxes-debian --json
 shukractl trace block --vm osboxes-debian
+shukractl trace memory --vm osboxes-debian  # direct reclaim and OOM of the VMM, not the guest's memory
 shukractl trace net --vm osboxes-debian
 shukractl trace tap --vm osboxes-debian      # the guest's own traffic and what became of its connections
 shukractl trace drops --vm osboxes-debian    # what the kernel dropped on its tap, and whether it was Shukra

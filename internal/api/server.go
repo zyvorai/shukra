@@ -146,6 +146,12 @@ func routes(st *state.State) *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/trace/block", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"rows": orEmpty(st.Block(r.URL.Query().Get("vm")))})
 	})
+	mux.HandleFunc("GET /api/v1/trace/memory", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"note": "Direct reclaim and OOM kills of the VMM process, not the guest's own memory.",
+			"rows": orEmpty(st.Memory(r.URL.Query().Get("vm"))),
+		})
+	})
 	mux.HandleFunc("GET /api/v1/trace/net", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"attribution":     "qemu-process",

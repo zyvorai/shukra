@@ -141,6 +141,27 @@ func TestBlockOpsBytesMaxMergeAcrossThreads(t *testing.T) {
 	}
 }
 
+func TestQueueTimeErrorsAndMemoryFoldOntoTheVM(t *testing.T) {
+	vms := []identity.VM{{Name: "db", PID: 1, Threads: []int{1}}}
+	by := map[uint32]Counters{
+		1: {
+			BlockIssues: 2, BlockQRead: hist64(18, 2), BlockReadErrors: 1,
+			ReclaimCount: 3, ReclaimNs: 40_000_000, ReclaimHist: hist64(22, 3), OOMKills: 1,
+		},
+	}
+	rows := Block(vms, by, "db")
+	if len(rows) != 1 || rows[0].QueueReadP99Ns == 0 || rows[0].ReadErrors != 1 {
+		t.Fatalf("%+v", rows)
+	}
+	mem := Memory(vms, by, "")
+	if len(mem) != 1 || mem[0].VM != "db" || mem[0].ReclaimCount != 3 || mem[0].OOMKills != 1 || !mem[0].Measured {
+		t.Fatalf("%+v", mem)
+	}
+	if Memory(vms, map[uint32]Counters{}, "") != nil {
+		t.Fatal("a VM with no reclaim and no OOM is not a row")
+	}
+}
+
 func TestKVMTopByTimeIsNotTopByCount(t *testing.T) {
 	vms := []identity.VM{{Name: "db", PID: 100, Threads: []int{100, 101}}}
 	by := map[uint32]Counters{

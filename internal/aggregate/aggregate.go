@@ -40,8 +40,13 @@ type Counters struct {
 	BlockReadOps, BlockWriteOps     uint64
 	BlockReadBytes, BlockWriteBytes uint64
 	BlockIssues                     uint64
-	Connects                        uint64
-	Retransmits                     uint64
+	// Queue time is insert to issue. Service time (BlockRead/BlockWrite) is issue to complete.
+	BlockQRead, BlockQWrite           []uint64
+	BlockReadErrors, BlockWriteErrors uint64
+	ReclaimHist                       []uint64
+	ReclaimNs, ReclaimCount, OOMKills uint64
+	Connects                          uint64
+	Retransmits                       uint64
 }
 
 type Reason struct {
@@ -145,7 +150,16 @@ type BlockRow struct {
 	WriteBytes uint64   `json:"writeBytes"`
 	ReadHist   []uint64 `json:"readHist,omitempty"`
 	WriteHist  []uint64 `json:"writeHist,omitempty"`
-	Measured   bool     `json:"measured"`
+	// Queue time is how long the request sat in the host queue before the device took it.
+	QueueReadP50Ns  uint64   `json:"queueReadP50Ns"`
+	QueueReadP99Ns  uint64   `json:"queueReadP99Ns"`
+	QueueWriteP50Ns uint64   `json:"queueWriteP50Ns"`
+	QueueWriteP99Ns uint64   `json:"queueWriteP99Ns"`
+	QueueReadHist   []uint64 `json:"queueReadHist,omitempty"`
+	QueueWriteHist  []uint64 `json:"queueWriteHist,omitempty"`
+	ReadErrors      uint64   `json:"readErrors"`
+	WriteErrors     uint64   `json:"writeErrors"`
+	Measured        bool     `json:"measured"`
 }
 
 type NetRow struct {
@@ -205,6 +219,14 @@ func add(dst, src *Counters) {
 	dst.BlockWriteOps += src.BlockWriteOps
 	dst.BlockReadBytes += src.BlockReadBytes
 	dst.BlockWriteBytes += src.BlockWriteBytes
+	dst.BlockQRead = addHist(dst.BlockQRead, src.BlockQRead)
+	dst.BlockQWrite = addHist(dst.BlockQWrite, src.BlockQWrite)
+	dst.BlockReadErrors += src.BlockReadErrors
+	dst.BlockWriteErrors += src.BlockWriteErrors
+	dst.ReclaimHist = addHist(dst.ReclaimHist, src.ReclaimHist)
+	dst.ReclaimNs += src.ReclaimNs
+	dst.ReclaimCount += src.ReclaimCount
+	dst.OOMKills += src.OOMKills
 	dst.Connects += src.Connects
 	dst.Retransmits += src.Retransmits
 }
@@ -432,7 +454,38 @@ func Block(vms []identity.VM, byPID map[uint32]Counters, vm string) []BlockRow {
 			ReadOps: b.c.BlockReadOps, WriteOps: b.c.BlockWriteOps,
 			ReadBytes: b.c.BlockReadBytes, WriteBytes: b.c.BlockWriteBytes,
 			ReadHist: b.c.BlockRead, WriteHist: b.c.BlockWrite,
+			QueueReadP50Ns: hist.Percentile(b.c.BlockQRead, 50), QueueReadP99Ns: hist.Percentile(b.c.BlockQRead, 99),
+			QueueWriteP50Ns: hist.Percentile(b.c.BlockQWrite, 50), QueueWriteP99Ns: hist.Percentile(b.c.BlockQWrite, 99),
+			QueueReadHist: b.c.BlockQRead, QueueWriteHist: b.c.BlockQWrite,
+			ReadErrors: b.c.BlockReadErrors, WriteErrors: b.c.BlockWriteErrors,
 			Measured: b.c.BlockIssues > 0,
+		})
+	}
+	return out
+}
+
+// MemoryRow is direct reclaim and OOM kills of the VMM process, not the guest's own memory.
+type MemoryRow struct {
+	VM           string   `json:"vm"`
+	ReclaimCount uint64   `json:"reclaimCount"`
+	ReclaimNs    uint64   `json:"reclaimNs"`
+	ReclaimP99Ns uint64   `json:"reclaimP99Ns"`
+	ReclaimHist  []uint64 `json:"reclaimHist,omitempty"`
+	OOMKills     uint64   `json:"oomKills"`
+	Measured     bool     `json:"measured"`
+}
+
+// Memory folds direct-reclaim stalls and OOM kills onto VMs. A row with nothing seen is not measured.
+func Memory(vms []identity.VM, byPID map[uint32]Counters, vm string) []MemoryRow {
+	var out []MemoryRow
+	for _, b := range filter(group(vms, byPID), vm) {
+		if b.c.ReclaimCount == 0 && b.c.OOMKills == 0 && vm == "" {
+			continue
+		}
+		out = append(out, MemoryRow{
+			VM: b.name, ReclaimCount: b.c.ReclaimCount, ReclaimNs: b.c.ReclaimNs,
+			ReclaimP99Ns: hist.Percentile(b.c.ReclaimHist, 99), ReclaimHist: b.c.ReclaimHist,
+			OOMKills: b.c.OOMKills, Measured: b.c.ReclaimCount > 0 || b.c.OOMKills > 0,
 		})
 	}
 	return out
@@ -465,15 +518,20 @@ func Delta(cur, base Counters) Counters {
 	d := Counters{
 		Entries: sub(cur.Entries, base.Entries), MMIO: sub(cur.MMIO, base.MMIO), PIO: sub(cur.PIO, base.PIO),
 		OnCPUNs: sub(cur.OnCPUNs, base.OnCPUNs), WakeupDelayNs: sub(cur.WakeupDelayNs, base.WakeupDelayNs),
-		WakeupCount:     sub(cur.WakeupCount, base.WakeupCount),
-		PreemptNs:       sub(cur.PreemptNs, base.PreemptNs),
-		PreemptCount:    sub(cur.PreemptCount, base.PreemptCount),
-		BlockIssues:     sub(cur.BlockIssues, base.BlockIssues),
-		BlockReadOps:    sub(cur.BlockReadOps, base.BlockReadOps),
-		BlockWriteOps:   sub(cur.BlockWriteOps, base.BlockWriteOps),
-		BlockReadBytes:  sub(cur.BlockReadBytes, base.BlockReadBytes),
-		BlockWriteBytes: sub(cur.BlockWriteBytes, base.BlockWriteBytes),
-		Connects:        sub(cur.Connects, base.Connects), Retransmits: sub(cur.Retransmits, base.Retransmits),
+		WakeupCount:      sub(cur.WakeupCount, base.WakeupCount),
+		PreemptNs:        sub(cur.PreemptNs, base.PreemptNs),
+		PreemptCount:     sub(cur.PreemptCount, base.PreemptCount),
+		BlockIssues:      sub(cur.BlockIssues, base.BlockIssues),
+		BlockReadOps:     sub(cur.BlockReadOps, base.BlockReadOps),
+		BlockWriteOps:    sub(cur.BlockWriteOps, base.BlockWriteOps),
+		BlockReadBytes:   sub(cur.BlockReadBytes, base.BlockReadBytes),
+		BlockWriteBytes:  sub(cur.BlockWriteBytes, base.BlockWriteBytes),
+		BlockReadErrors:  sub(cur.BlockReadErrors, base.BlockReadErrors),
+		BlockWriteErrors: sub(cur.BlockWriteErrors, base.BlockWriteErrors),
+		ReclaimNs:        sub(cur.ReclaimNs, base.ReclaimNs),
+		ReclaimCount:     sub(cur.ReclaimCount, base.ReclaimCount),
+		OOMKills:         sub(cur.OOMKills, base.OOMKills),
+		Connects:         sub(cur.Connects, base.Connects), Retransmits: sub(cur.Retransmits, base.Retransmits),
 		// A maximum is not a rate: it cannot be subtracted, and the window's own
 		// maximum is not known. Report the lifetime one rather than a wrong number.
 		BlockReadMax: cur.BlockReadMax, BlockWriteMax: cur.BlockWriteMax,
@@ -485,6 +543,9 @@ func Delta(cur, base Counters) Counters {
 	d.SchedHist = subHist(cur.SchedHist, base.SchedHist)
 	d.BlockRead = subHist(cur.BlockRead, base.BlockRead)
 	d.BlockWrite = subHist(cur.BlockWrite, base.BlockWrite)
+	d.BlockQRead = subHist(cur.BlockQRead, base.BlockQRead)
+	d.BlockQWrite = subHist(cur.BlockQWrite, base.BlockQWrite)
+	d.ReclaimHist = subHist(cur.ReclaimHist, base.ReclaimHist)
 	return d
 }
 
@@ -542,6 +603,9 @@ func (c Counters) Clone() Counters {
 	out.SchedHist = append([]uint64(nil), c.SchedHist...)
 	out.BlockRead = append([]uint64(nil), c.BlockRead...)
 	out.BlockWrite = append([]uint64(nil), c.BlockWrite...)
+	out.BlockQRead = append([]uint64(nil), c.BlockQRead...)
+	out.BlockQWrite = append([]uint64(nil), c.BlockQWrite...)
+	out.ReclaimHist = append([]uint64(nil), c.ReclaimHist...)
 	return out
 }
 

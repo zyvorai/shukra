@@ -41,6 +41,10 @@ func DecodeRing(b []byte) (event.Event, bool) {
 		ek = event.KindSchedDelay
 	case 6:
 		ek = event.KindExit
+	case 7:
+		ek = event.KindReclaim
+	case 8:
+		ek = event.KindOOM
 	default:
 		return event.Event{}, false
 	}
@@ -62,7 +66,7 @@ func DecodeRing(b []byte) (event.Event, bool) {
 			}
 		}
 	}
-	if ek == event.KindBlockSlow || ek == event.KindSchedDelay {
+	if ek == event.KindBlockSlow || ek == event.KindSchedDelay || ek == event.KindReclaim {
 		e.LatencyNS = binary.LittleEndian.Uint64(b[32:40])
 	}
 	return e, true

@@ -50,20 +50,21 @@ sudo ./bin/shukrad -listen 127.0.0.1:30970 -web web/dist -watchlist configs/dete
 ./bin/shukractl programs
 ```
 
-You want `attached` and a hook count, not a counter you did not ask for. Seven programs:
+You want `attached` and a hook count, not a counter you did not ask for. Eight programs:
 
 ```text
 PROGRAMS
   kvm       attached    4 hooks
   sched     attached    4 hooks
-  block     attached    2 hooks
+  block     attached    3 hooks
+  mem       attached    3 hooks
   net       attached    3 hooks
   vmm       attached    15 hooks
   drops     attached    1 hooks
   tap       attached    9 taps via tcx, enforcement survives a daemon restart   # 9 is however many VM taps are up
 ```
 
-`shukractl status` says `programs    7/7 attached` when all are.
+`shukractl status` says `programs    8/8 attached` when all are.
 
 `tap` reports `detached` with `no VM tap interfaces to attach to yet` until a VM with a tap is running, then `attached` with how many. That is a state of the host, not a fault.
 

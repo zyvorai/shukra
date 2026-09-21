@@ -1,6 +1,6 @@
 <section class="page" data-title="Rules, alerts, state, API"><div class="body">
 <h1>Rules, alerts, state and the API</h1>
-<p class="lede">Detection is one YAML file. Alerts leave through sinks you choose. State survives a restart with a data directory. Everything the console shows is a plain API call: 37 routes in all.</p>
+<p class="lede">Detection is one YAML file. Alerts leave through sinks you choose. State survives a restart with a data directory. Everything the console shows is a plain API call: 38 routes in all.</p>
 <figure class="dia" style="width:72%;margin:2px auto 0">{{dia:system}}</figure>
 <div class="row">
 <div class="col">
@@ -40,7 +40,7 @@ responses:     <span class="d"># off unless present</span>
 <tr><th>Endpoint</th><th>Auth</th><th>What</th></tr>
 <tr><td class="k"><code>/healthz</code>, <code>/readyz</code></td><td>none</td><td>process is up; <code>200</code> after the first scan, <code>503</code> before</td></tr>
 <tr><td class="k"><code>/metrics</code></td><td>bearer</td><td>Prometheus text. A VM with no measured counters has no series, not a zero</td></tr>
-<tr><td class="k">26 <code>GET</code> routes under <code>/api/v1</code></td><td>bearer (read-only is enough)</td><td>status, vms, programs, seven traces, explain, incident, advice, baseline, policy, actions and more. <code>/stream</code> is server-sent events</td></tr>
+<tr><td class="k">27 <code>GET</code> routes under <code>/api/v1</code></td><td>bearer (read-only is enough)</td><td>status, vms, programs, eight traces, explain, incident, advice, baseline, policy, actions and more. <code>/stream</code> is server-sent events</td></tr>
 <tr><td class="k">8 <code>POST</code> routes</td><td>admin key</td><td><code>isolate</code>, <code>release</code>; policy <code>apply</code>, <code>confirm</code>, <code>remove</code>; action <code>approve</code>, <code>reject</code>; <code>baseline/forget</code>. The read-only key gets <code>403</code></td></tr>
 </table>
 </div></section>

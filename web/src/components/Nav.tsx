@@ -11,6 +11,7 @@ export type Page =
   | 'contention'
   | 'advice'
   | 'block'
+  | 'memory'
   | 'programs'
   | 'connections'
   | 'drops'
@@ -39,7 +40,8 @@ const groups: NavGroup[] = [
       { page: 'sched', label: 'Scheduler', blurb: 'On-CPU time, wakeup delay and vCPU preemption for those threads.' },
       { page: 'contention', label: 'Contention', blurb: 'Which VM took whose CPU, and what it was doing meanwhile.' },
       { page: 'advice', label: 'Right-size', blurb: 'Over-provisioned or starved VMs, with the numbers behind it.' },
-      { page: 'block', label: 'Block', blurb: 'Log2 latency histogram for the QEMU I/O thread.' },
+      { page: 'block', label: 'Block', blurb: 'Service time, queue time and errors for the QEMU I/O thread.' },
+      { page: 'memory', label: 'Memory', blurb: 'Direct reclaim stalls and OOM kills of the VMM process, not the guest.' },
       { page: 'programs', label: 'Programs', blurb: 'Attached, detached, or missing. A missing KVM module does not stop the others.' },
     ],
   },

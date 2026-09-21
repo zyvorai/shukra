@@ -34,7 +34,7 @@ curl -s -H "Authorization: Bearer $SHUKRA_API_KEY" "$SHUKRA_URL/api/v1/status"
 
 - Times are RFC 3339. Durations in field names end in `Ns` (nanoseconds). A time that was never set (`expires` on an action that does not lapse, `decided` on one nobody has decided) reads `0001-01-01T00:00:00Z`, not absent.
 - **Lists are `[]`, never `null`.** Every route that carries a list of rows says `[]` when there are none, including `detections`, `isolations`, the `threads` of `trace/sched?threads=1`, the `security` board's `detections` and `allowList`, and every list in `export`. A test asks each GET route with nothing known and fails on a `null`. (A daemon older than this rule answered `null` for those; treat `null` as empty if you must talk to one.)
-- **A program that is not measuring does not invent a zero.** In `/metrics` a VM that is not measured has no series. In `trace/kvm`, `trace/sched` and `trace/block` a known VM whose counters are all zero still has a row, and `measured: false` says so. `trace/net` and `trace/tap` rows have no `measured` field, `trace/drops` says `measured` once for the whole response, and `trace/contention` has no row for a VM the sched program has not measured. A VM name that matches nothing is an empty result, not an error and not a guess.
+- **A program that is not measuring does not invent a zero.** In `/metrics` a VM that is not measured has no series. In `trace/kvm`, `trace/sched` and `trace/block` a known VM whose counters are all zero still has a row, and `measured: false` says so. `trace/memory` has a row only when that VM has reclaimed or been OOM-killed. `trace/net` and `trace/tap` rows have no `measured` field, `trace/drops` says `measured` once for the whole response, and `trace/contention` has no row for a VM the sched program has not measured. A VM name that matches nothing is an empty result, not an error and not a guess.
 - A row named `_host` is everything the program counted that belongs to no VM's threads. It has no vCPUs, so it has no preemption.
 - Latency percentiles come from log2 histograms, so each is a bucket's high edge and can read up to 2x high. A histogram array has 64 buckets: bucket *b* counts values from 2^*b* up to 2^(*b*+1) nanoseconds, and bucket 0 also holds zero.
 - A response that reads a VM's counters says whose they are: `attribution: "qemu-process"` for the host side (what the VMM process did), `"guest-tap"` for what was seen on a VM's tap, `"unattributed"` when there is no VM to name.
@@ -63,7 +63,7 @@ curl -s -H "Authorization: Bearer $SHUKRA_API_KEY" "$SHUKRA_URL/api/v1/status"
 | `GET /api/v1/programs` | read | The seven observation programs and whether each is attached |
 | `GET /api/v1/doctor` | read | The daemon's self-audit. [Doctor](doctor.md) |
 | `GET /api/v1/export` | read | One document for a bug report |
-| `GET /api/v1/trace/kvm` `sched` `block` `net` `tap` `drops` | read | Per-VM counters |
+| `GET /api/v1/trace/kvm` `sched` `block` `memory` `net` `tap` `drops` | read | Per-VM counters |
 | `GET /api/v1/trace/contention` | read | Who took whose vCPU time |
 | `GET /api/v1/explain` | read | Why a VM looks slow, now or at a past time |
 | `GET /api/v1/incident` | read | Everything about a VM around a moment, in one document |
@@ -164,7 +164,8 @@ Neither needs a key, so a load balancer or a systemd watchdog can use them. Neit
   "programs": [
     { "name": "kvm", "status": "attached", "detail": "4 hooks" },
     { "name": "sched", "status": "attached", "detail": "4 hooks" },
-    { "name": "block", "status": "attached", "detail": "2 hooks" },
+    { "name": "block", "status": "attached", "detail": "3 hooks" },
+    { "name": "mem", "status": "attached", "detail": "3 hooks" },
     { "name": "net", "status": "attached", "detail": "3 hooks" },
     { "name": "vmm", "status": "attached", "detail": "15 hooks" },
     { "name": "drops", "status": "attached", "detail": "1 hooks" },
@@ -173,7 +174,7 @@ Neither needs a key, so a load balancer or a systemd watchdog can use them. Neit
 }
 ```
 
-There are seven programs. `status` is `attached`, `detached` or `missing` (the object is not in this binary). `detail` says how many hooks, or why not: `3/4 hooks; <error>` is a program that attached part of what it wanted, and a build without BPF says `CO-RE objects are not linked in this binary` on every line. `tap` is attached per VM interface, so it is `detached` with `no VM tap interfaces to attach to yet` until a VM with a tap exists. `vmm` says `turned off with -vmm-tripwires=false` when it was switched off. What each one records: [signals](signals.md#what-each-program-measures).
+There are eight programs. `status` is `attached`, `detached` or `missing` (the object is not in this binary). `detail` says how many hooks, or why not: `3/4 hooks; <error>` is a program that attached part of what it wanted, and a build without BPF says `CO-RE objects are not linked in this binary` on every line. `tap` is attached per VM interface, so it is `detached` with `no VM tap interfaces to attach to yet` until a VM with a tap exists. `vmm` says `turned off with -vmm-tripwires=false` when it was switched off. What each one records: [signals](signals.md#what-each-program-measures).
 
 ### `GET /api/v1/doctor`
 
@@ -313,13 +314,36 @@ Every route takes `?vm=<name>` and answers `{"rows": [...]}` with one row per VM
       "readOps": 61000, "writeOps": 27000,
       "readBytes": 2500000000, "writeBytes": 1100000000,
       "readHist": [...], "writeHist": [...],
+      "queueReadP50Ns": 65536, "queueReadP99Ns": 262144,
+      "queueWriteP50Ns": 131072, "queueWriteP99Ns": 524288,
+      "readErrors": 0, "writeErrors": 2,
       "measured": true
     }
   ]
 }
 ```
 
-These are the QEMU I/O thread's requests, not the guest filesystem. `readMaxNs` and `writeMaxNs` are the slowest request since the daemon attached; they are updated without a lock, so two CPUs racing can miss a slightly smaller maximum.
+These are the QEMU I/O thread's requests, not the guest filesystem. `readP50Ns` and `readP99Ns` are service time, from issue to completion. `queueReadP50Ns` and `queueReadP99Ns` are how long the request sat in the host queue before the device took it. `readErrors` and `writeErrors` are completions with a non-zero status. `readMaxNs` and `writeMaxNs` are the slowest request since the daemon attached; they are updated without a lock, so two CPUs racing can miss a slightly smaller maximum.
+
+### `GET /api/v1/trace/memory`
+
+```json
+{
+  "note": "Direct reclaim and OOM kills of the VMM process, not the guest's own memory.",
+  "rows": [
+    {
+      "vm": "payment-prod-03",
+      "reclaimCount": 4,
+      "reclaimNs": 80000000,
+      "reclaimP99Ns": 33554432,
+      "oomKills": 0,
+      "measured": true
+    }
+  ]
+}
+```
+
+A VM that has not reclaimed and has not been OOM-killed is absent, not a zero row. `oom_kill` and `reclaim_stall` events (a stall of 10 ms or more) are on the event stream. This is the host process, not the guest's own memory.
 
 ### `GET /api/v1/trace/net`
 
@@ -892,7 +916,12 @@ A row that is not measured has no series, so an absent series means "not measure
 | `shukra_sched_vcpu_preempted_by_seconds_total` | counter | `vm`, `by` (`vm:<name>` or a command name) | measured, one series per preemptor with time |
 | `shukra_block_ops_total`, `shukra_block_bytes_total` | counter | `vm`, `op` (`read`, `write`) | the VM did block I/O |
 | `shukra_block_latency_max_seconds` | gauge | `vm`, `op` | as above. Racy across CPUs |
-| `shukra_block_latency_seconds` | histogram | `vm`, `op` | as above |
+| `shukra_block_latency_seconds` | histogram | `vm`, `op` | service time, issue to completion |
+| `shukra_block_queue_seconds` | histogram | `vm`, `op` | time in the host queue before the device took the request |
+| `shukra_block_errors_total` | counter | `vm`, `op` | completions with a non-zero status |
+| `shukra_reclaim_stalls_total`, `shukra_reclaim_seconds_total` | counter | `vm` | direct reclaim in the VMM process |
+| `shukra_reclaim_seconds` | histogram | `vm` | the same stalls |
+| `shukra_oom_kills_total` | counter | `vm` | OOM kills of a VMM process |
 | `shukra_tcp_connects_total`, `shukra_tcp_retransmits_total` | counter | `vm` | one per known VM (and `_host`), zero included. **The QEMU process's** sockets, not the guest's |
 | `shukra_tap_bytes_total`, `shukra_tap_packets_total` | counter | `vm`, `tap`, `direction` (`from_guest`, `to_guest`) | a VM tap is traced |
 | `shukra_tap_dropped_packets_total` | counter | `vm`, `tap` | as above. What Shukra dropped |

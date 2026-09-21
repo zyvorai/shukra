@@ -48,7 +48,7 @@ SHUKRA
   tagline     eBPF-powered runtime intelligence and security for KVM
   mode        observe
   vms         3
-  programs    7/7 attached
+  programs    8/8 attached
   detections  1
   observe: host traces, and guest traffic on the VM taps (2 taps via tcx, enforcement survives a daemon restart)
 ```
@@ -73,13 +73,14 @@ Audits the daemon: how the API is exposed, what is attached, which VMs it cannot
 
 #### `programs`
 
-Which of the seven observation programs (`kvm`, `sched`, `block`, `net`, `vmm`, `drops`, `tap`) are attached, how many hooks, and why one is not. Takes `--json`. Route: `GET /api/v1/programs`.
+Which of the eight observation programs (`kvm`, `sched`, `block`, `mem`, `net`, `vmm`, `drops`, `tap`) are attached, how many hooks, and why one is not. Takes `--json`. Route: `GET /api/v1/programs`.
 
 ```text
 PROGRAMS
   kvm       attached    4 hooks
   sched     attached    4 hooks
-  block     attached    2 hooks
+  block     attached    3 hooks
+  mem       attached    3 hooks
   net       attached    3 hooks
   vmm       attached    15 hooks
   drops     attached    1 hooks
@@ -100,9 +101,9 @@ shukractl install-cli --prefix "$HOME/.local"
 
 #### `trace list`
 
-`trace` alone does the same. Prints what each trace covers, then the `programs` board. It lists `kvm`, `sched`, `block`, `net`, `tap`, `drops` and `contention`; `vmm` has no trace of its own, its output is events and detections (see `watch`).
+`trace` alone does the same. Prints what each trace covers, then the `programs` board. It lists `kvm`, `sched`, `block`, `memory`, `net`, `tap`, `drops` and `contention`; `vmm` has no trace of its own, its output is events and detections (see `watch`).
 
-#### `trace kvm|sched|block|net|tap|drops|contention [--vm NAME] [--json] [--window DUR]`
+#### `trace kvm|sched|block|memory|net|tap|drops|contention [--vm NAME] [--json] [--window DUR]`
 
 Per-VM counters from the daemon, one line per VM. `--vm` narrows to one. `--window` applies to `contention` only (`10s` to `5m`, or `lifetime`; default 60 s). A VM whose program is not measuring is shown with zeros, not hidden: check `shukractl programs`, or `--json` for `measured`. Routes: `GET /api/v1/trace/<kind>`.
 
@@ -144,7 +145,7 @@ TRACE CONTENTION  window=lifetime
 - `drops`: what the kernel dropped on each tap, by reason, with Shukra's own subtracted. Says `the drops program is not measuring` when it is not.
 - `contention`: who took whose vCPU time, and what the taker did meanwhile.
 
-`trace bogus` and a missing kind print `trace kvm|sched|block|net|tap|drops|contention` and exit `1`.
+`trace bogus` and a missing kind print `trace kvm|sched|block|net|tap|drops|memory|contention` and exit `1`.
 
 ### Investigate
 

@@ -132,7 +132,7 @@ Read from `/proc/sys/kernel/osrelease`. Nothing is reported if it cannot be read
 
 #### `program-<name>` and `programs-detached`
 
-There are seven programs: `kvm`, `sched`, `block`, `net`, `vmm`, `drops` and `tap`. `shukractl programs` says why each one is in the state it is in.
+There are eight programs: `kvm`, `sched`, `block`, `mem`, `net`, `vmm`, `drops` and `tap`. `shukractl programs` says why each one is in the state it is in.
 
 | Id | Status | Fires when | Fix |
 |---|---|---|---|
