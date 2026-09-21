@@ -292,7 +292,7 @@ A host installed with the shipped unit and script has a generated admin key, a d
 
 ## What it does not check
 
-It does not probe the network, try a VM, or read a guest. It cannot tell you a rule is a good rule, only that the file loaded. It does not check that Prometheus is scraping, that a webhook endpoint is answering, that a TLS certificate is close to expiry, or that the data directory has room. It says nothing about the `-dns-events`, `-tls-events` and `-web` settings.
+It does not probe the network, try a VM, or read a guest. It cannot tell you a rule is a good rule, only that the file loaded. It does not check that Prometheus is scraping, that a webhook endpoint is answering, that a TLS certificate is close to expiry, or that the data directory has room. It says nothing about the `-dns-events`, `-tls-events`, `-netlink-events` and `-web` settings. Turning Netlink events off does not detach a program.
 
 ## Reading it from a script
 

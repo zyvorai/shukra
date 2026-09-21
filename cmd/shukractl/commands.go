@@ -341,6 +341,18 @@ func printEvent(e map[string]any, asJSON bool, out io.Writer) error {
 		if d, ok := e["detail"].(string); ok {
 			extra += "  " + d
 		}
+	case "netlink_link", "netlink_address", "netlink_route", "netlink_neighbor", "netlink_error":
+		if n, ok := e["netlink"].(map[string]any); ok {
+			extra = fmt.Sprintf("  action=%v  object=%v", n["action"], n["object"])
+			for _, key := range []string{"interface", "address", "destination", "gateway", "state", "oper_state"} {
+				if value, present := n[key]; present {
+					extra += fmt.Sprintf("  %s=%v", key, value)
+				}
+			}
+			if value, present := n["error"]; present {
+				extra += fmt.Sprintf("  error=%v", value)
+			}
+		}
 	}
 	if e["kind"] == "guest_tls" {
 		// A hello with no name (an address, or hidden by ECH) still says what it was.

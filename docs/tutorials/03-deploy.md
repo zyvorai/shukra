@@ -126,6 +126,7 @@ The ones a fresh deploy usually needs:
 | `-dns-events=false` | Do not record the names guests look up. The tap program then does not read DNS at all |
 | `-vmm-tripwires=false` | Do not load the program that watches QEMU processes for the files they open and the calls they make ([tutorial 11](11-vmm-tripwires.md)). It runs on every open on the host, about 200 ns each, plus a hook on every process creation and exit |
 | `-tls-events=false` | Do not record the server names in guests' TLS hellos. The tap program then reads no TCP payload at all |
+| `-netlink-events=false` | Do not record host link, address, route and neighbor changes. A link change still refreshes tap discovery. See [Netlink](../netlink.md) |
 | `-webhook-url`, `-syslog`, `-alert-file` | Where detections go. See [alert sinks](07-alert-sinks.md) |
 | `-listen 0.0.0.0:30970` | Bind an address other than loopback. Plain HTTP then also needs `-allow-insecure-http`, or `-tls-cert` and `-tls-key` |
 | `-allow-insecure-http` | Permit plain HTTP on a non-loopback address. The bearer key crosses the network in the clear |

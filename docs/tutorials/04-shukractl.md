@@ -140,7 +140,7 @@ shukractl watch
 shukractl watch --json --once
 ```
 
-`watch` streams discrete events. `--once` prints what is buffered and returns.
+`watch` streams discrete events. `--once` prints what is buffered and returns. Host link, address, route and neighbor changes are there too (`netlink_*`, `host-netlink`, no VM): see [Netlink](../netlink.md). They are not on a VM's recorder; they are on `_host`.
 
 ## Security and isolation
 

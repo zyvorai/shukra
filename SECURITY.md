@@ -24,9 +24,9 @@ Shukra is a privileged daemon on a hypervisor. It loads eBPF programs, reads `/p
 
 ## What it reads, and what it never does
 
-- **It never runs anything inside a guest.** There is no agent. Everything is read from the host: `/proc`, kernel tracepoints, and the host side of each VM's tap interface. Where FluxVM is installed, three more files are read: `/etc/fluxvm.toml` (read whole, but only its `state_dir` line is used: nothing else is kept, logged or served, including any token in it), the VM store `{state_dir}/vms.json`, and `/run/fluxvm/ebpf/vms/<id>/iface`. Shukra does not call FluxVM's API and does not load its programs.
+- **It never runs anything inside a guest.** There is no agent. Everything is read from the host: `/proc`, kernel tracepoints, the host side of each VM's tap interface, and the kernel's routing Netlink groups (link, address, route and neighbor changes; see [Netlink](docs/netlink.md)). Where FluxVM is installed, three more files are read: `/etc/fluxvm.toml` (read whole, but only its `state_dir` line is used: nothing else is kept, logged or served, including any token in it), the VM store `{state_dir}/vms.json`, and `/run/fluxvm/ebpf/vms/<id>/iface`. Shukra does not call FluxVM's API and does not load its programs.
 - **It does not read application payloads.** The eBPF programs count and sample metadata. The tap program reads Ethernet, IP, TCP and UDP headers to count packets, follow TCP handshakes and name a flow's addresses and ports. The drops program reads which device dropped a packet and why. The `kvm`, `sched`, `block` and `net` programs count exits, scheduling, block requests and the host's own connects. HTTP, TLS and other application data are not parsed or copied, with the exceptions below.
-- **What it can attribute is bounded.** Host TCP events are connects from a process, joined to a QEMU thread group when the PID matches: they are QEMU's own traffic, not the guest's. Traffic seen on a VM's tap is the guest's, and only that is marked `guest_attributed`. Shukra never names a guess: an unowned tap or PID stays `unattributed`.
+- **What it can attribute is bounded.** Host TCP events are connects from a process, joined to a QEMU thread group when the PID matches: they are QEMU's own traffic, not the guest's. Traffic seen on a VM's tap is the guest's, and only that is marked `guest_attributed`. A Netlink event is a host control-plane change (`host-netlink`) and names no VM. Shukra never names a guess: an unowned tap or PID stays `unattributed`.
 
 ### The exceptions to "no payloads"
 
@@ -64,7 +64,7 @@ A guest controls what it sends and a busy host controls how many processes it ru
 | Egress policy | 1,024 networks per VM, 16,384 across all VMs | A longer list for a VM is refused; a change the kernel map cannot hold is put back |
 | Confirmation timer | 30 seconds to 24 hours | A request outside that is refused |
 | **Daemon** | | |
-| Event list | 2,048 events, shared between six classes with guaranteed shares (512 guest, 512 host network, 256 each for notable, process, latency and other) | The oldest of the class furthest over its share is dropped, so one noisy class cannot push out another's evidence |
+| Event list | 2,048 events, shared between six classes with guaranteed shares (512 guest, 512 host network — connects and Netlink — 256 each for notable, process, latency and other) | The oldest of the class furthest over its share is dropped, so one noisy class cannot push out another's evidence |
 | Flight recorder | 4,096 events per VM, a ring | The oldest is overwritten |
 | Detection suppression table | 4,096 keys | Full of live keys, a detection is let through unrecorded: it fails toward alerting |
 | Learned baselines | By default 2,048 items per kind per VM, remembered 30 days, at most 20 new-item alerts per VM per day | The item unseen longest is dropped. Past the daily cap new items are learned and not reported |

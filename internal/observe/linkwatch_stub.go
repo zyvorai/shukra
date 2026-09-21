@@ -2,7 +2,13 @@
 
 package observe
 
-import "context"
+import (
+	"context"
 
-// WatchLinks does nothing off Linux. The refresh ticker is the only scan.
+	"github.com/zyvorai/shukra/internal/event"
+)
+
+func WatchNetlink(context.Context, func(event.Event), func()) error { return nil }
+
+// WatchLinks preserves the old rescan-only API off Linux.
 func WatchLinks(context.Context, func()) {}

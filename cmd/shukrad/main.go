@@ -19,6 +19,7 @@ import (
 	"github.com/zyvorai/shukra/internal/agent"
 	"github.com/zyvorai/shukra/internal/api"
 	"github.com/zyvorai/shukra/internal/baseline"
+	"github.com/zyvorai/shukra/internal/event"
 	"github.com/zyvorai/shukra/internal/observe"
 	"github.com/zyvorai/shukra/internal/persist"
 	"github.com/zyvorai/shukra/internal/policy"
@@ -44,6 +45,7 @@ func main() {
 	dnsEvents := flag.Bool("dns-events", true, "record the names a guest looks up (guest_dns events). Names identify what a VM does: with false the program does not read DNS at all")
 	tlsEvents := flag.Bool("tls-events", true, "record the server names a guest asks for in a TLS ClientHello (guest_tls events). Names identify what a VM does: with false the program does not read a TCP payload at all")
 	vmmTripwires := flag.Bool("vmm-tripwires", true, "watch QEMU processes, and what they start, for the files they open and the calls they make that a VMM never does (vmm_file_open and vmm_syscall events, and detections). The program runs on every open on the host, and costs about 200 ns of each, plus a hook on every process creation and exit; with false it is not loaded")
+	netlinkEvents := flag.Bool("netlink-events", true, "record host link, address, route and neighbor changes from the kernel")
 	noAuth := flag.Bool("no-auth", false, "serve the API without a bearer key")
 	allowInsecure := flag.Bool("allow-insecure-http", false, "allow plain HTTP on a non-loopback address. The bearer key crosses the network in the clear")
 	showVersion := flag.Bool("version", false, "print the version and exit")
@@ -255,7 +257,15 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	go observe.WatchLinks(ctx, func() { ag.Refresh() })
+	var netlinkEmit func(event.Event)
+	if *netlinkEvents {
+		netlinkEmit = ag.Ingest
+	}
+	go func() {
+		if err := observe.WatchNetlink(ctx, netlinkEmit, func() { ag.Refresh() }); err != nil {
+			log.Printf("netlink observer stopped: %v", err)
+		}
+	}()
 	go func() {
 		t := time.NewTicker(2 * time.Second)
 		defer t.Stop()

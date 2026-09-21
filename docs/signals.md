@@ -33,7 +33,7 @@ A detection keeps the attribution of the event that caused it. Detections Shukra
 
 ## Events
 
-Counters are maps and never cost an event. Discrete events come from the rings, plus two kinds the daemon makes itself. Each kind belongs to a class in the event list (the shares are in [architecture](architecture.md#state-windows-and-history)).
+Counters are maps and never cost an event. Discrete events come from the rings, from the kernel's routing Netlink groups, and from kinds the daemon makes itself. Each kind belongs to a class in the event list (the shares are in [architecture](architecture.md#state-windows-and-history)).
 
 | Kind | Produced by | Attribution | What bounds it |
 |---|---|---|---|
@@ -49,6 +49,7 @@ Counters are maps and never cost an event. Discrete events come from the rings, 
 | `guest_dns` | `tap` | `guest-tap` | 200 a second per tap, on its own budget; a name and type once a minute per tap |
 | `guest_tls` | `tap` | `guest-tap` | 100 a second per tap, on its own budget; a retransmitted hello is not another |
 | `vm_start`, `vm_stop` | The daemon, from the scan (no program) | `qemu-process` | A VM missing for two scans in a row is stopped. The first scan is silent |
+| `netlink_link`, `netlink_address`, `netlink_route`, `netlink_neighbor`, `netlink_error` | The daemon's Netlink socket (no program) | `host-netlink` | Kernel messages only. They share the host-network class with `tcp_connect`. Omitted under `-netlink-events=false`. See [Netlink](netlink.md) |
 | `detection` | The daemon | The event that caused it | Suppression, and the last 2,048 |
 
 A `guest_connect` or `guest_flow` also carries `policy` (`audit` or `enforce`) when the VM's egress policy judged it to be outside its list, and `blocked: true` when it was dropped.
@@ -57,7 +58,7 @@ A `guest_connect` or `guest_flow` also carries `policy` (`audit` or `enforce`) w
 
 Without that filter every fork and exec on the host would be an event, which would be enough to push connects and detections out of the 2048-event list within seconds on a busy hypervisor. That is why the filter exists, and why the list keeps a share for each kind of event so no one kind can take the rest. On a test host, 300 runs of `/bin/true` produced 330 exec and 328 exit events without the filter.
 
-The daemon holds the newest 2048 events, but with a **guaranteed share for each kind** (guest events 512, host connects 512, and 256 each for detections and VM start and stop, process events, latency samples and anything unknown), so a flood of one kind cannot push out a rare one. The shares only matter once the list is full, and are in [architecture](architecture.md#state-windows-and-history).
+The daemon holds the newest 2048 events, but with a **guaranteed share for each kind** (guest events 512, host network 512, and 256 each for detections and VM start and stop, process events, latency samples and anything unknown), so a flood of one kind cannot push out a rare one. Host network is `tcp_connect`, `tcp_retransmit` and the Netlink events together. The shares only matter once the list is full, and are in [architecture](architecture.md#state-windows-and-history).
 
 ## Guest traffic signals
 

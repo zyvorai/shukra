@@ -310,8 +310,9 @@ Each line is time, kind, attribution, `vm=`, `dst=` (only when the event has a d
 | `guest_tls` | `sni=` and `tls=` (`-` when there is none), then `alpn=` and `ech` when the hello has them |
 | `vmm_file_open` | `path=`, `comm=`, `pid=`, and `write` when the open asked to write |
 | `vmm_syscall` | `syscall=`, `comm=`, `pid=`, then the call's arguments in words |
+| `netlink_link`, `netlink_address`, `netlink_route`, `netlink_neighbor`, `netlink_error` | `action=` and `object=`, then whichever of `interface`, `address`, `destination`, `gateway`, `state`, `oper_state` and `error` the event has. `vm=` is empty. See [Netlink](netlink.md) |
 
-A tripwire event is about a call, not a peer, so it has no `dst=`. (An older `shukractl` printed `dst=<nil>` there.)
+A tripwire event is about a call, not a peer, so it has no `dst=`. (An older `shukractl` printed `dst=<nil>` there.) A Netlink event is about the host, so `vm=` is empty and there is no `dst=` either.
 
 #### `export`
 

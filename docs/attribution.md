@@ -1,12 +1,13 @@
 # Attribution
 
-Every event names a VM or says it cannot, and it says which of three places it was seen. They are never mixed: the label an event carries is the one that tells you what it can be used to claim.
+Every event names a VM or says it cannot, and it says which place it was seen. They are never mixed: the label an event carries is the one that tells you what it can be used to claim.
 
 | Seen | Programs | `attribution` | `guest_attributed` | Means |
 |---|---|---|---|---|
 | On the host, at the VMM process | `net`, `sched`, `block`, `kvm` | `qemu-process`, or `unattributed` | `false` | What the VMM process did |
 | On the host, at the VMM process tree | `vmm` | `qemu-process` | `false` | What the VMM, or something it started, opened or called |
 | On the host side of a VM's tap | `tap`, `drops` | `guest-tap` | `true` | What the guest sent or was sent |
+| On the host, at the routing socket | none (Netlink in the daemon) | `host-netlink` | `false` | A link, address, route or neighbor changed. No VM |
 
 `guest_attributed` is `true` only for an event seen on a VM's tap **and** naming a VM in the current scan. It is derived in one place (`event.Normalize`) from the attribution and a VM name, and derived again for everything read back from disk, so a stored `guest_attributed: true` is never trusted on its own. A tap no VM owns is `unattributed`, not a guessed name.
 
@@ -21,6 +22,10 @@ KVM exit, scheduler (including vCPU preemption, and who took the CPU), and block
 ## VMM tripwire events
 
 `vmm_file_open` and `vmm_syscall` come from the `vmm` program, which reports what a VMM process, or something a VMM started, opened or called. They are `qemu-process` and `guest_attributed: false`: they are what the VMM did, not the guest. The kernel names the VMM each process descends from, so a shell the VMM started, and the program the shell ran, belong to that VM although they are not among its threads. A VMM the scan no longer knows leaves the event `unattributed`, with no detection made from it. See [VMM tripwires](vmm-tripwires.md).
+
+## Host control-plane events
+
+`netlink_link`, `netlink_address`, `netlink_route`, `netlink_neighbor` and `netlink_error` come from the daemon's routing Netlink socket, not from a program and not from a process. They are `attribution: "host-netlink"` and `guest_attributed: false`, and they name no VM. A deleted route is a fact about the host. It is not evidence that a guest or QEMU deleted it. See [Netlink control-plane events](netlink.md).
 
 ## Guest events
 

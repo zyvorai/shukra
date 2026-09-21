@@ -62,6 +62,7 @@ Observe. Protect. Explain.
 | What is this VM connecting to, who connects to it, and what names does it look up or ask for? | `guest_connect`, `guest_flow`, `guest_inbound`, `guest_dns`, `guest_tls` events (`shukractl watch`, the Host connections page) | [Guest traffic](docs/tap.md) |
 | Did the connection get an answer? | `trace tap`: accepted, refused, never answered or blocked, with the handshake time | [Lost traffic](docs/tutorials/08-lost-traffic.md) |
 | Is something dropping this VM's traffic, or is it Shukra? | `trace drops` and `doctor` | [Where packets die](docs/drops.md) |
+| Did the host's own network change under the VM? | `netlink_link`, `netlink_address`, `netlink_route`, `netlink_neighbor` on `shukractl watch` | [Netlink](docs/netlink.md) |
 | Is a guest not reading its NIC? | `doctor` (`vm-nic-not-consumed`) and `explain` (`guest_not_reading_nic`) | [Doctor](docs/doctor.md) |
 | Where may this VM connect to? | `shukractl policy` | [Egress policy](docs/egress-policy.md) |
 | Is a VMM doing something a VMM never does? | Nothing to run: `vmm-sensitive-open` and `vmm-syscall` detections | [VMM tripwires](docs/vmm-tripwires.md) |
@@ -127,6 +128,8 @@ Identity comes from the host: the QEMU command line (`-name` / `guest=`, `-uuid`
 **Guest traffic and TLS names.** The `tap` program sees what the guest sends on its own tap: connects, new UDP flows, connections made to it, DNS query names, and the server name (SNI), protocols, version, JA3 fingerprint and Encrypted Client Hello flag of each TLS ClientHello (`guest_tls`), so a site is named even when DNS was not used. It follows every TCP handshake to accepted, refused, never answered or blocked. `tls:` rules in the rules file match names like `dns:` rules do. See [Guest traffic and isolation](docs/tap.md) and [TLS server names](docs/tap.md#tls-server-names).
 
 **Where packets die.** The `drops` program counts what the kernel dropped on each VM tap, by the kernel's own reason, and subtracts Shukra's own isolation drops, so a `tc` filter, Cilium or a guest not reading its NIC is named and Shukra is not blamed for what it did not do. See [Where packets die](docs/drops.md) and [Find out why traffic is lost](docs/tutorials/08-lost-traffic.md).
+
+**Host network changes.** The daemon records link, address, route and neighbor changes from the kernel (`netlink_link`, `netlink_address`, `netlink_route`, `netlink_neighbor`), attributed `host-netlink` and not to a VM. A bridge or route that disappeared is in `shukractl watch`. `-netlink-events=false` stops the events; a link change still refreshes tap discovery. See [Netlink control-plane events](docs/netlink.md).
 
 **Egress policy.** `shukractl policy` turns a VM's learned baseline into a list of networks it may *start* connections to. Learn a proposal, put the VM under it in **audit** mode (nothing is dropped; what would be is counted and reported), then **enforce** it with a timer that reverts it unless a person confirms. The management network can never be cut off, the kernel keeps enforcing without the daemon, and nothing changes for a VM until a policy is applied. See [Egress policy](docs/egress-policy.md).
 
@@ -304,6 +307,7 @@ The whole surface, with fields, is in the [API reference](docs/api.md). Give Pro
 | `-dns-events` | `true` | Record the names a guest looks up. `false`: the program does not read DNS at all |
 | `-tls-events` | `true` | Record the server names in a TLS ClientHello. `false`: the program does not read a TCP payload at all |
 | `-vmm-tripwires` | `true` | Load the `vmm` program. `false`: it is not loaded |
+| `-netlink-events` | `true` | Record host link, address, route and neighbor changes. `false`: those events are not recorded; a link change still refreshes tap discovery |
 | `-tls-cert`, `-tls-key` | none | Serve HTTPS (PEM). `SIGHUP` reloads the certificate. Required to listen off loopback unless `-allow-insecure-http` is set |
 | `-allow-insecure-http` | `false` | Permit plain HTTP on a non-loopback address. The bearer key crosses the network in the clear |
 | `-webhook-url`, `-syslog`, `-alert-file` | none | Alert sinks (webhook secret: `SHUKRA_WEBHOOK_SECRET`) |
@@ -359,7 +363,7 @@ The cost of the other programs is in [What each program measures](docs/signals.m
    shukractl         console
 ```
 
-Events that leave the daemon carry `product: "shukra"`. A joined host event has `attribution: "qemu-process"` (this includes what a VMM or something it started opened or called), an event seen on a VM's tap has `attribution: "guest-tap"`, and an unowned PID has `attribution: "unattributed"`. How identity, the tap program, history windows and detection fit together is in [architecture](docs/architecture.md).
+Events that leave the daemon carry `product: "shukra"`. A joined host event has `attribution: "qemu-process"` (this includes what a VMM or something it started opened or called), an event seen on a VM's tap has `attribution: "guest-tap"`, a host link, address, route or neighbor change has `attribution: "host-netlink"`, and an unowned PID has `attribution: "unattributed"`. How identity, the tap program, history windows and detection fit together is in [architecture](docs/architecture.md).
 
 ## Documentation
 
@@ -384,6 +388,7 @@ Events that leave the daemon carry `product: "shukra"`. A joined host event has 
 | [Attribution](docs/attribution.md) | Host events versus guest events, and what is not measured |
 | [Guest traffic and isolation](docs/tap.md) | The tap program, handshakes, DNS and TLS names, isolate, durability, FluxVM |
 | [Where packets die](docs/drops.md) | The drops program |
+| [Netlink](docs/netlink.md) | Host link, address, route and neighbor changes |
 | [Egress policy](docs/egress-policy.md) | Learn what a VM may connect to, audit it, then enforce it with a timer that reverts it |
 | [Responses](docs/responses.md) | Acting on a detection: proposals, approval, and the guardrails |
 | [VMM tripwires](docs/vmm-tripwires.md) | What a QEMU process should never do, and what the program that watches for it costs |

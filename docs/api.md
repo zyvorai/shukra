@@ -591,6 +591,8 @@ An event carries `seq` (assigned by the daemon, only grows), `product: "shukra"`
 | `vmm_syscall` | The same made `ptrace`, `process_vm_*`, `mount`, `unshare`, `setns`, a module load or a kexec load (`syscall`, `detail`), or more calls in a second than the tripwire reports (`syscall: "flood"`, `count` unreported) | `qemu-process` |
 | `detection` | A rule fired. `rule`, `severity`, `message`, and the attribution of the event that triggered it | as the trigger |
 | `vm_start`, `vm_stop` | A VMM process appeared or went away | `qemu-process` |
+| `netlink_link`, `netlink_address`, `netlink_route`, `netlink_neighbor` | A host link, address, route or neighbor changed. The fields are under `netlink` (`action`, `object`, and the ones that notification carries: `interface`, `address`, `destination`, `gateway`, `oper_state`, `state`, and the rest in [Netlink](netlink.md)). No VM. Omitted under `-netlink-events=false`; a link change still refreshes tap discovery | `host-netlink` |
+| `netlink_error` | The Netlink socket overran or the kernel reported an error. `netlink.error` is the signed errno (`ENOBUFS` is `-105`) | `host-netlink` |
 
 `guest_attributed` is `true` only for an event seen on a VM's tap **and** naming a VM in the current scan. A tap no VM owns gives `unattributed`, never a guessed name.
 

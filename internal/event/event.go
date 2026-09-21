@@ -34,6 +34,11 @@ const (
 	// KindVMMCall is a call a VMM has no business making: ptrace, mount, unshare, setns, a module or a kexec
 	// load. Syscall names it. A VMM that reports more than it is allowed in a second is a call named "flood".
 	KindVMMCall Kind = "vmm_syscall"
+	KindNetlinkLink     Kind = "netlink_link"
+	KindNetlinkAddress  Kind = "netlink_address"
+	KindNetlinkRoute    Kind = "netlink_route"
+	KindNetlinkNeighbor Kind = "netlink_neighbor"
+	KindNetlinkError    Kind = "netlink_error"
 )
 
 const (
@@ -42,6 +47,7 @@ const (
 	// AttributionGuestTap marks an event seen on a VM's tap interface. It is the
 	// only attribution under which an event is guest_attributed.
 	AttributionGuestTap = "guest-tap"
+	AttributionHostNetlink  = "host-netlink"
 )
 
 // VM is the identity attached to an event. Empty name means the PID was not a QEMU thread.
@@ -49,6 +55,31 @@ type VM struct {
 	Name    string `json:"name,omitempty"`
 	UUID    string `json:"uuid,omitempty"`
 	Runtime string `json:"runtime,omitempty"`
+}
+
+// Netlink describes a kernel routing-control-plane notification.
+// Only fields meaningful for the notification are populated.
+type Netlink struct {
+	Action      string `json:"action"`
+	Object      string `json:"object"`
+	Family      string `json:"family,omitempty"`
+	IfIndex     int32  `json:"ifindex,omitempty"`
+	Interface   string `json:"interface,omitempty"`
+	ParentIndex int32  `json:"parent_index,omitempty"`
+	MasterIndex int32  `json:"master_index,omitempty"`
+	MTU         uint32 `json:"mtu,omitempty"`
+	OperState   string `json:"oper_state,omitempty"`
+	Flags       uint32 `json:"flags,omitempty"`
+	Address     string `json:"address,omitempty"`
+	PrefixLen   uint8  `json:"prefix_len,omitempty"`
+	Scope       uint8  `json:"scope,omitempty"`
+	Destination string `json:"destination,omitempty"`
+	Gateway     string `json:"gateway,omitempty"`
+	Table       uint32 `json:"table,omitempty"`
+	Priority    uint32 `json:"priority,omitempty"`
+	LLAddr      string `json:"lladdr,omitempty"`
+	State       string `json:"state,omitempty"`
+	Error       int32  `json:"error,omitempty"`
 }
 
 // Event is one discrete observation. Hot counters never use this path.
@@ -110,6 +141,7 @@ type Event struct {
 	Rule      string `json:"rule,omitempty"`
 	Severity  string `json:"severity,omitempty"`
 	LatencyNS uint64 `json:"latency_ns,omitempty"`
+	Netlink *Netlink `json:"netlink,omitempty"`
 }
 
 // Normalize forces the product name and the guest-attribution boundary. An event
@@ -118,6 +150,10 @@ type Event struct {
 // or unattributed.
 func Normalize(e *Event) {
 	e.Product = "shukra"
+	if e.Attribution == AttributionHostNetlink {
+		e.GuestAttributed = false
+		return
+	}
 	if e.Attribution == AttributionGuestTap && e.VM.Name != "" {
 		e.GuestAttributed = true
 		return

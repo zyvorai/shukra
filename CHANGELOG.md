@@ -2,6 +2,14 @@
 
 Shukra 0.1.0 is tagged. This lists what has merged to `main`, newest first. Pushing a `v*` tag publishes a release (see [development](docs/development.md#releasing)).
 
+## Unreleased
+
+### Host network control-plane events
+
+- **Link, address, route and neighbor changes are events.** The daemon listens to the kernel's routing Netlink groups and records `netlink_link`, `netlink_address`, `netlink_route`, `netlink_neighbor` and `netlink_error`, each `attribution: "host-netlink"` and naming no VM. A bridge, address or route that disappeared is in the event list, and on the `_host` flight recorder, without polling `ip`. They share the host-network share of the event list with `tcp_connect`. See [Netlink control-plane events](docs/netlink.md).
+- **Link notifications still refresh tap discovery**, debounced by 50 ms, including when `-netlink-events=false` has turned the events off. The socket accepts kernel messages only (sender PID zero), uses a 1 MiB receive buffer, and reports `ENOBUFS` as `netlink_error`.
+- Checked on the reference hypervisor (Linux 6.8): the decoder tests pass, and creating and deleting a dummy interface produced all four object kinds, including its address, route and neighbor. The ten VMs and eight programs stayed attached.
+
 ## 0.1.0
 
 ### Guest traffic is TCX on Linux 6.6 and newer

@@ -49,7 +49,8 @@ func classOf(k event.Kind) eventClass {
 		return classProcess
 	case event.KindBlockSlow, event.KindSchedDelay, event.KindReclaim:
 		return classLatency
-	case event.KindTCPConnect, event.KindTCPRetransmit:
+	case event.KindTCPConnect, event.KindTCPRetransmit, event.KindNetlinkLink, event.KindNetlinkAddress,
+		event.KindNetlinkRoute, event.KindNetlinkNeighbor, event.KindNetlinkError:
 		return classHostNet
 	}
 	return classOther
