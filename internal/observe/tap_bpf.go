@@ -50,7 +50,7 @@ func TapProgram() (status, detail string) {
 	case !loaded:
 		return "detached", "not loaded"
 	case n == 0:
-		if msg := bpfgen.TapLastError(); strings.Contains(msg, "host-only") {
+		if msg := bpfgen.TapLastError(); msg != "" {
 			return "detached", msg
 		}
 		return "detached", "no VM tap interfaces to attach to yet"
@@ -59,12 +59,7 @@ func TapProgram() (status, detail string) {
 		if !bpfgen.TapPinned() {
 			durable = "not pinned: enforcement lasts only while the daemon runs"
 		}
-		hook, prio, others := bpfgen.TapAttachInfo()
-		via := "via tcx"
-		if hook == "tc" {
-			via = fmt.Sprintf("via tc priority %d, %d other filters on the device", prio, others)
-		}
-		return "attached", fmt.Sprintf("%d taps %s, %s", n, via, durable)
+		return "attached", fmt.Sprintf("%d taps via tcx, %s", n, durable)
 	}
 }
 
@@ -270,14 +265,9 @@ func (e *Enforcer) Isolated(tap string) bool { return bpfgen.TapIsolated(tap) }
 // Durable reports whether isolation survives the daemon, which needs a bpf filesystem to pin on.
 func (e *Enforcer) Durable() bool { return bpfgen.TapPinned() }
 
-// Hook is tcx when that attach worked, and tc when the clsact fallback is in use.
-func (e *Enforcer) Hook() string {
-	hook, _, _ := bpfgen.TapAttachInfo()
-	if hook == "" {
-		return "tcx"
-	}
-	return hook
-}
+// Hook is tcx. Guest traffic attaches only with TCX, which needs Linux 6.6.
+// An older kernel leaves the tap detached; host probes still run.
+func (e *Enforcer) Hook() string { return "tcx" }
 
 func (e *Enforcer) set(taps []string, on bool) ([]string, error) {
 	var done []string

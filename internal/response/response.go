@@ -299,7 +299,7 @@ func (e *Engine) Handle(d event.Event) {
 		e.announce("dry-run", "low", a, fmt.Sprintf("%s: response %q would have isolated %s for %s (dry run: nothing changed)", a.ID, a.Response, vm, d.Rule))
 		return
 	}
-	if mode, _, why := e.st.Enforcement(); mode != "tcx" && mode != "tc" {
+	if mode, _, why := e.st.Enforcement(); mode != "tcx" {
 		refuse("isolate_unavailable", "isolate is not enabled: "+why)
 		return
 	}

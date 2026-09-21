@@ -20,7 +20,7 @@ type Enforcer interface {
 	// Durable says whether enforcement outlives the daemon: true when the tap
 	// program's links and maps are pinned, false when it runs unpinned.
 	Durable() bool
-	// Hook is "tcx" or "tc", the attach that is actually carrying guest traffic.
+	// Hook is "tcx". Guest traffic has no other attach.
 	Hook() string
 	// Isolate and Release return the taps they changed, and an error naming any they could not.
 	Isolate(taps []string) ([]string, error)
@@ -128,8 +128,9 @@ func (s *State) Durable() bool {
 	return e != nil && e.Durable()
 }
 
-// Enforcement says how isolation is enforced: "tcx" or "tc" when it can be, and
-// "not_attached" otherwise with the reason.
+// Enforcement says how isolation is enforced: "tcx" when it can be, and
+// "not_attached" otherwise with the reason. Kernels older than 6.6 have no TCX,
+// so they stay not_attached. That is not a second, supported datapath.
 func (s *State) Enforcement() (mode string, allow []string, reason string) {
 	s.mu.RLock()
 	e := s.enforcer

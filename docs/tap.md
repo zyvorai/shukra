@@ -17,7 +17,7 @@ It does five things: it **counts** the guest's traffic, **records** what the gue
 
 ## What it needs
 
-- Linux 6.6 or newer for TCX. On an older kernel Shukra attaches the same programs with a clsact filter at priority 50 (`TC_ACT_PIPE` on a pass, so the next filter still runs). If neither hook can be attached the tap stays detached and `shukractl doctor` says coverage is host-only.
+- Linux 6.6 or newer, for TCX. On an older kernel the program cannot attach: the daemon logs `tap program on <interface>: TCX needs Linux 6.6 or newer` (once per interface), `shukractl programs` shows `tap` as `detached`, and `shukractl doctor` reports the kernel (`kernel`, info). Host probes still run. There is no second datapath for older kernels.
 - A VM with a tap interface. The daemon finds a VM's taps two ways and merges them: `ifname=tap0` on the QEMU command line, and the `iff:` line in `/proc/<pid>/fdinfo/<fd>` of each `/dev/net/tun` fd the process holds. The second is how libvirt VMs are found, since libvirt hands QEMU its `vnet0` as a file descriptor (`-netdev tap,fd=37`). Reading another user's fds needs the daemon to have `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH`, which the shipped unit grants. If it cannot read them, that VM has no known tap and nothing is attached or isolated for it: a name is never guessed. A VM on user-mode networking has no tap either.
 
 The daemon attaches the program to each VM's tap as the VM appears and takes it off when the VM goes. It shares the hook politely: it returns `TCX_NEXT`, never `TCX_PASS`, so any other program attached to the same tap (Cilium, FluxVM's `fluxvm_egress`, or another tool) still runs after it. `TCX_PASS` would have accepted the packet and skipped them. `shukractl programs` shows `tap  attached  2 taps, enforcement survives a daemon restart` once at least one is on, and `detached` with the reason until then (for example `no VM tap interfaces to attach to yet`, which is normal on a host with no VM that has a tap). If there is no bpf filesystem the detail says `not pinned: enforcement lasts only while the daemon runs`.
@@ -272,7 +272,7 @@ What it looks like when the tap program is not doing what you expect, and what t
 
 | What you see | What it means | What to do |
 |---|---|---|
-| `tap  detached`, the log says `host-only` (doctor `program-tap`, warn) | Neither TCX nor clsact could be attached | Host probes still run. Check `CAP_NET_ADMIN` and that the tap is in the host namespace |
+| `tap  detached`, the log says `TCX needs Linux 6.6 or newer` (doctor `kernel`, info) | The kernel has no TCX. Guest traffic is not supported on that kernel | Upgrade to 6.6 or newer. The programs that follow the VMM (`kvm`, `sched`, `block`, `net`, `vmm`) are unaffected |
 | `tap  detached  no VM tap interfaces to attach to yet` (doctor `program-tap`, info) | No VM in the scan has a tap Shukra can name | Nothing, until a VM with a tap starts. If VMs are running, see the next rows |
 | A VM shows `taps=-` (doctor `blind-vms`) | User-mode networking has no host interface. Or a libvirt VM whose tap fds the daemon could not read | Give the daemon `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH` (the shipped unit does). A name is never guessed |
 | Doctor `vm-tap-other-netns` (warn) | The tap is named but is not in the network namespace the daemon runs in, and it is not a FluxVM netns the scan could map to its host veth | Put the tap in the host namespace. Shukra does not enter another namespace |

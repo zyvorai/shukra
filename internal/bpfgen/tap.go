@@ -58,19 +58,17 @@ type lpm6Key struct {
 }
 
 type tapLinks struct {
-	ifindex   uint32
-	in, out   link.Link
-	isolated  bool
-	egress    uint8 // the egress policy's mode, as last set or read back from the kernel
-	hook      string
-	madeQdisc bool
+	ifindex  uint32
+	in, out  link.Link
+	isolated bool
+	egress   uint8 // the egress policy's mode, as last set or read back from the kernel
 	// quarantine is a temporary drop-all, used only until the saved enforcing
 	// policy is written. SetTapEgress clears it so the real policy is not also a drop.
 	quarantine bool
 }
 
 func (t *tapLinks) close() {
-	if t == nil || t.hook == "tc" {
+	if t == nil {
 		return
 	}
 	if t.in != nil {
@@ -82,13 +80,9 @@ func (t *tapLinks) close() {
 }
 
 // unpin removes the pins, which is what actually detaches a pinned link once the
-// process's own handles are closed. A clsact filter has no pin: this deletes it.
+// process's own handles are closed.
 func (t *tapLinks) unpin() {
 	if t == nil {
-		return
-	}
-	if t.hook == "tc" {
-		detachTC(t.ifindex, t.madeQdisc)
 		return
 	}
 	if t.in != nil {
@@ -109,8 +103,6 @@ var tapMgr struct {
 	coll    *ebpf.Collection
 	taps    map[string]*tapLinks
 	pinned  bool // maps and links are pinned, so they survive this process
-	hook    string
-	others  int
 	lastErr string
 }
 
@@ -209,6 +201,16 @@ func TapStatus() (loaded bool, taps int, err error) {
 		return false, 0, err
 	}
 	return true, len(tapMgr.taps), nil
+}
+
+// TapLastError is the most recent failure to attach TCX to a tap. An empty
+// string means the last attempt succeeded, or there has not been one. Guest
+// traffic has no other hook: when this is set and no tap is attached, coverage
+// is host-only because TCX did not attach, not because an older kernel is supported.
+func TapLastError() string {
+	tapMgr.mu.Lock()
+	defer tapMgr.mu.Unlock()
+	return tapMgr.lastErr
 }
 
 // TapCollection is the loaded collection, for the event ring reader. Nil if the
@@ -310,8 +312,7 @@ func adoptLocked(name string, ifindex uint32) bool {
 	}
 	var pol tapPolicyC
 	found := tapMgr.coll.Maps["tap_policy"].Lookup(ifindex, &pol) == nil
-	tapMgr.taps[name] = &tapLinks{ifindex: ifindex, in: in, out: out, isolated: found && pol.Isolated != 0, egress: pol.Egress, hook: "tcx"}
-	tapMgr.hook = "tcx"
+	tapMgr.taps[name] = &tapLinks{ifindex: ifindex, in: in, out: out, isolated: found && pol.Isolated != 0, egress: pol.Egress}
 	return true
 }
 
@@ -319,22 +320,7 @@ func attachTapLocked(name string, ifindex uint32) error {
 	if adoptLocked(name, ifindex) {
 		return nil
 	}
-	if os.Getenv("SHUKRA_FORCE_TC") != "1" {
-		err := attachTCXLocked(name, ifindex)
-		if err == nil {
-			tapMgr.hook = "tcx"
-			return nil
-		}
-		if !errors.Is(err, link.ErrNotSupported) && !strings.Contains(err.Error(), "TCX needs Linux 6.6") {
-			return err
-		}
-	}
-	if err := attachTCLocked(name, ifindex); err != nil {
-		tapMgr.hook = ""
-		return fmt.Errorf("host-only: TCX and clsact are unavailable: %w", err)
-	}
-	tapMgr.hook = "tc"
-	return nil
+	return attachTCXLocked(name, ifindex)
 }
 
 func attachTCXLocked(name string, ifindex uint32) error {
@@ -354,8 +340,7 @@ func attachTCXLocked(name string, ifindex uint32) error {
 		in.Close()
 		return err
 	}
-	t := &tapLinks{ifindex: ifindex, in: in, out: out, hook: "tcx"}
-	tapMgr.hook = "tcx"
+	t := &tapLinks{ifindex: ifindex, in: in, out: out}
 	tapMgr.lastErr = ""
 	if tapMgr.pinned && !strings.ContainsRune(name, '/') {
 		if err := in.Pin(linkPin(name, "in")); err != nil {
@@ -414,7 +399,6 @@ func dropOrphansLocked(want map[string]bool) {
 			clearEgressLocked(ifindex)
 		}
 	}
-	dropOrphanTC(want)
 }
 
 // ShutdownTaps is the daemon's graceful exit. A tap that is not isolated and has no

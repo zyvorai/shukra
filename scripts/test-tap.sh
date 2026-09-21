@@ -5,9 +5,7 @@
 # end stands in for the VM's tap. A fake QEMU process names that interface on its
 # command line, so the daemon treats it as the VM's tap. No /dev/kvm is needed.
 #
-# Needs Linux 6.6+ for the default TCX path. Section 7 forces the clsact fallback
-# (SHUKRA_FORCE_TC=1) and checks a later filter still runs after a pass.
-# Root or passwordless sudo, ip, tc, curl, python3, and a
+# Needs Linux 6.6+ (TCX), root or passwordless sudo, ip, curl, python3, and a
 # shukrad built with -tags shukrabpf (make generate first). Everything it creates
 # is removed at the end.
 #
@@ -785,30 +783,6 @@ echo "== 6. the tap program comes off when the VM goes"
 sudo pkill -f "qemu-system-x86_64 .*taptest"; sleep 6
 check "the tap program is detached again with no VM" "api $U/api/v1/programs | J \"[p['status'] for p in d['programs'] if p['name']=='tap'][0]\" | grep -q detached"
 stopd
-
-echo "== 7. classic tc passes to the next filter and a drop does not"
-sudo "$BIN" -detach-all >/dev/null 2>&1 || true
-bash -c "exec -a /usr/bin/qemu-system-x86_64 bash $D/loop.sh -name taptest -uuid 9999 -netdev tap,id=n0,ifname=vethh,script=no" >/dev/null 2>&1 &
-sudo -b env SHUKRA_API_KEY=k SHUKRA_FORCE_TC=1 "$BIN" -listen $U -web /nonexistent -data-dir $D/data -watchlist $D/rules.yaml -isolate-allow 10.99.0.1/32,fd99::1/128 > $D/daemon.log 2>&1
-sleep 4
-check "the tap program reports the clsact hook" "api $U/api/v1/programs | J \"[p['detail'] for p in d['programs'] if p['name']=='tap'][0]\" | grep -q 'via tc'"
-check "shukra's filter is priority 50" "sudo tc filter show dev vethh ingress | grep -q 'pref 50'"
-sudo tc filter add dev vethh ingress pref 60 protocol ip matchall action ok 2>$D/tc.err || sudo tc filter add dev vethh ingress pref 60 protocol ip u32 match u32 0 0 action ok
-later() { sudo tc -s filter show dev vethh ingress | awk '/pref 60/{p=1} p && /Sent/{print $4; exit}'; }
-before=$(later)
-[ -z "$before" ] && before=0
-code4 10.99.0.1 >/dev/null || true
-sleep 1
-after=$(later)
-check "a passed packet reaches the next filter" "[ \"${after:-0}\" -gt \"${before:-0}\" ]"
-api -X POST -d '{"vm":"taptest"}' $U/api/v1/isolate >/dev/null
-held=$(later)
-code4 10.99.0.3 >/dev/null || true
-sleep 1
-held2=$(later)
-check "a dropped packet does not reach the next filter" "[ \"${held2:-0}\" = \"${held:-0}\" ]"
-stopd
-sudo pkill -f "qemu-system-x86_64 .*taptest" 2>/dev/null || true
 
 echo; echo "passed $PASS, failed $FAILN"
 [ $FAILN -eq 0 ]

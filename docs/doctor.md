@@ -119,7 +119,7 @@ Read from `/proc/sys/kernel/osrelease`. Nothing is reported if it cannot be read
 | Status | Fires when | Fix |
 |---|---|---|
 | `warn` | Older than 5.8: no `CAP_BPF`, so the service runs with full root capabilities | Upgrade if you can |
-| `info` | 5.8 up to 6.6: no TCX. Guest traffic uses a clsact filter at priority 50 when that qdisc can be shared | 6.6 or newer if you want TCX. A pass still lets the next filter run |
+| `info` | 5.8 up to 6.6: no TCX, so the tap program cannot attach, and guest traffic and isolate are unavailable. Host probes still run | 6.6 or newer. Guest traffic requires TCX |
 | `ok` | 6.6 or newer | |
 
 #### `scan`

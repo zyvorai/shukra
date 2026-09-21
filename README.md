@@ -81,7 +81,7 @@ Read this before you trust it with anything.
   - process names (`comm`) of what a VMM starts and of a process that opens a file.
 
   Answers, the rest of a TLS connection, and everything else are not read. A name says what a VM is doing and a fingerprint says what software it runs, so they are treated as sensitive: see [Security](SECURITY.md). Shukra can say *which VM and which address*, not *which process inside the guest*. The guest's own CPU steal counter is not read; the host's view of the same thing, vCPU preemption and who caused it, is measured.
-- **Isolation is real, and conditional.** `shukractl isolate` really drops the VM's tap traffic, but only with an explicit management allow list (`-isolate-allow`). Linux 6.6 and newer use TCX. Older kernels use a clsact filter at priority 50 that passes with `TC_ACT_PIPE`, so the next filter still runs. `applied` is `true` only after the kernel took the change. Without an allow list it is refused. Enforcement survives a daemon crash, restart or stop when `/sys/fs/bpf` is a bpf filesystem.
+- **Isolation is real, and conditional.** `shukractl isolate` really drops the VM's tap traffic, but only with an explicit management allow list (`-isolate-allow`), and only on Linux 6.6 or newer (TCX). `applied` is `true` only after the kernel took the change. Without an allow list it is refused. On an older kernel the tap program stays detached and the host probes still run. Enforcement survives a daemon crash, restart or stop when `/sys/fs/bpf` is a bpf filesystem.
 - **Nothing acts unless you turn it on.** Responses, egress policy and baselines are off until you configure or apply them. A response can only isolate a VM, and by default it only proposes. An egress policy judges what a guest *starts*, not what it answers, and is not a firewall. A baseline says a thing is *new*, never that it is bad.
 - **The VMM tripwire is a tripwire, not a sandbox.** It reads a path when the call starts, does not follow symlinks, and does not see a VMM that does none of the things it watches for. See [what it does not see](docs/vmm-tripwires.md#what-it-does-not-see).
 - **Advice is for a person.** Idleness is halt time, a lower bound, and only named on Intel hosts. `advise` never resizes anything.
@@ -103,7 +103,7 @@ Seven programs. Hot paths stay in maps. The ring buffer is only for discrete eve
 | `sched` | wakeup, switch, exec, exit | On-CPU time, run-queue delay (histogram, per thread), **vCPU preemption** (how long a vCPU was runnable but off a host CPU, and who had it), exec and exit events for QEMU children |
 | `block` | `block_rq_issue`, `block_rq_complete` | Latency histogram, requests, bytes and the slowest request, per direction |
 | `net` | `tcp_v4_connect`, `tcp_v6_connect`, sampled `tcp_retransmit_skb` | Exact connect counts (IPv4 and IPv6) and 1-in-64 retransmit samples: **the QEMU process's** sockets |
-| `tap` | TCX on Linux 6.6+, or a clsact filter at priority 50 on older kernels | The guest's own traffic: per-tap counters; an event per TCP connect, per new UDP flow and per connection made *to* the guest; the name in each DNS query over UDP/53; the server name in each TLS ClientHello; what became of each TCP handshake (accepted, refused, never answered, blocked) and how long it took; isolation; and each VM's egress policy |
+| `tap` | TCX ingress and egress on each VM tap (Linux 6.6+) | The guest's own traffic: per-tap counters; an event per TCP connect, per new UDP flow and per connection made *to* the guest; the name in each DNS query over UDP/53; the server name in each TLS ClientHello; what became of each TCP handshake (accepted, refused, never answered, blocked) and how long it took; isolation; and each VM's egress policy |
 | `drops` | `skb:kfree_skb` on each VM tap (Linux 5.17+) | What the kernel dropped on the tap and why, by the kernel's own reason and the function that freed it, with Shukra's own isolation drops subtracted, so another program dropping a VM's traffic (Cilium, a dataplane, a `tc` filter) or a guest not reading its NIC is named |
 | `vmm` | `openat`, `openat2`, `open`, `ptrace`, `process_vm_writev`, `process_vm_readv`, `mount`, `unshare`, `setns`, `init_module`, `finit_module`, `kexec_load`, `kexec_file_load` syscall tracepoints, plus `sched_process_fork` and `sched_process_exit` to follow descendants | For a QEMU process, and anything it started at any depth: the file it opened and the sensitive call it made, as events. A steady-state VMM does none |
 
@@ -145,7 +145,7 @@ Identity comes from the host: the QEMU command line (`-name` / `guest=`, `-uuid`
 | The console | Node 22 to build it |
 | `kvm`, `sched`, `block`, `net`, `vmm` | Linux with kernel BTF (`/sys/kernel/btf/vmlinux`), and `CAP_BPF` (5.8+) |
 | `drops` | Linux 5.17+ (a drop reason on `kfree_skb`) |
-| `tap`, guest traffic, egress policy and isolation | Linux 6.6+ (TCX) or clsact on older kernels, and `CAP_NET_ADMIN` |
+| `tap`, guest traffic, egress policy and isolation | Linux 6.6+ (TCX), and `CAP_NET_ADMIN` |
 | libvirt VMs' taps | `CAP_SYS_PTRACE` and `CAP_DAC_READ_SEARCH` |
 | Building the programs | Linux with `clang` and `bpftool` |
 

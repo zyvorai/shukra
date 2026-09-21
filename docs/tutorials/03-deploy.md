@@ -199,6 +199,21 @@ curl -sf -H "Authorization: Bearer $SHUKRA_API_KEY" \
 
 `programsAttached` should match what the CLI printed. `guest` attribution is not a field you should expect to flip to true.
 
+## Container
+
+The OCI image is not a substitute for the unit. Its default command listens on `127.0.0.1:30970`, so a published port does nothing until you replace that command. The entrypoint is the binary; everything after the image name is the argument list.
+
+Terminate TLS in the container:
+
+```bash
+docker run --rm -p 30970:30970 \
+  -v /path/certs:/certs:ro shukra:local \
+  -listen 0.0.0.0:30970 -tls-cert /certs/tls.crt -tls-key /certs/tls.key \
+  -web /usr/share/shukra/web
+```
+
+Or listen in the clear and put Caddy, NGINX or HAProxy in front, as in [Encrypt the API](#encrypt-the-api). Plain HTTP on a non-loopback address also needs `-allow-insecure-http`. The image does not load eBPF unless it was built with the BPF tag and started with the capabilities in `deploy/shukra.service`. systemd on the hypervisor remains the supported install.
+
 ## After a reboot
 
 The unit is `WantedBy=multi-user.target` and `Restart=on-failure`. The kernel programs come back when `shukrad` starts. The tap program's links and maps are pinned under `/sys/fs/bpf/shukra/tap`, so an isolated VM (or one under an enforcing egress policy) stays that way while the daemon is down and the restarted daemon adopts what is there: see [guest traffic and isolation](../tap.md). A graceful stop detaches every tap that is not isolated and has no enforcing egress policy, so nothing of Shukra is left on an ordinary VM's interface.

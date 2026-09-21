@@ -382,20 +382,16 @@ func TestSeveralProgramsSwitchedOffAreOneFindingWithTheSameAdvice(t *testing.T) 
 	}
 }
 
-func TestDoctorNamesTheClassicHook(t *testing.T) {
+func TestGuestTrafficRequiresTCX(t *testing.T) {
 	st := healthy(t)
-	st.SetPrograms([]Program{{Name: "tap", Status: "attached", Detail: "10 taps via tcx, enforcement survives a daemon restart"}})
-	if byID(st.Doctor(), "program-tap") != nil {
-		t.Fatal("TCX is not a clsact filter")
-	}
-	st.SetPrograms([]Program{{Name: "tap", Status: "attached", Detail: "1 taps via tc priority 50, 1 other filters on the device, enforcement survives a daemon restart"}})
-	c := byID(st.Doctor(), "program-tap")
-	if c == nil || c.Status != "info" || !strings.Contains(c.Detail, "priority 50") || !strings.Contains(c.Fix, "next filter") {
+	st.kernelRelease = func() string { return "5.15.0-generic" }
+	c := byID(st.Doctor(), "kernel")
+	if c == nil || c.Status != "info" || strings.Contains(c.Detail, "clsact") || !strings.Contains(c.Detail, "unavailable") {
 		t.Fatalf("%+v", c)
 	}
-	st.SetPrograms([]Program{{Name: "tap", Status: "detached", Detail: "host-only: TCX and clsact are unavailable"}})
+	st.SetPrograms([]Program{{Name: "tap", Status: "detached", Detail: "TCX needs Linux 6.6 or newer"}})
 	c = byID(st.Doctor(), "program-tap")
-	if c == nil || c.Status != "warn" || !strings.Contains(c.Title, "host-only") {
+	if c == nil || strings.Contains(c.Title+c.Detail, "clsact") || !strings.Contains(c.Detail, "TCX needs Linux 6.6") {
 		t.Fatalf("%+v", c)
 	}
 }

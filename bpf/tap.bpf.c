@@ -1075,28 +1075,6 @@ account:;
 	return drop ? TCX_DROP : TCX_NEXT;
 }
 
-/* Classic tc (clsact) uses the same verdict numbers as TCX for a drop, but a pass
-   must be TC_ACT_PIPE so the next filter still runs. TC_ACT_OK would stop the
-   chain and skip Cilium or anything else on the tap. */
-#define TC_ACT_PIPE 3
-#define TC_ACT_SHOT 2
-
-static __always_inline int tc_verdict(int v) {
-	if (v == TCX_DROP)
-		return TC_ACT_SHOT;
-	return TC_ACT_PIPE;
-}
-
-SEC("tc")
-int shukra_tap_from_guest_tc(struct __sk_buff *skb) {
-	return tc_verdict(handle(skb, 1));
-}
-
-SEC("tc")
-int shukra_tap_to_guest_tc(struct __sk_buff *skb) {
-	return tc_verdict(handle(skb, 0));
-}
-
 SEC("tcx/ingress")
 int shukra_tap_from_guest(struct __sk_buff *skb) {
 	return handle(skb, 1);
