@@ -4,82 +4,83 @@
 <meta charset="utf-8">
 <title>Shukra social card</title>
 <!--
-  1600x900 (16:9) card for LinkedIn and X, in the Zyvor brochure look.
-  Every claim is already sourced in the README / docs.
-  Build:  ./docs/social/build-social-card.sh   ->  shukra-social-card.jpg
+  1600x900 (16:9) card for the README, Open Graph and X (docs/shukra-social.png, web/public/og.png).
+  Every claim on it is one the README and the product brochure (docs/sales/brochure/) already source.
+  Build:  ./docs/social/build-social-card.sh
 -->
 <style>
-  :root { --ink:#0d0d0c; --soft:#5a544c; --signal:#ff5a15; --deep:#cc420a; --line:#e7ded2; --warm:#fbf7f2; --pale:#fff1e9;
-    --blue:#2b5fd9; --green:#1f7a4d;
+  :root { --orange:#ff5a15; --ink:#f5f5f7; --soft:#a1a1a6; --dim:#8e8e93;
     --sans:'Helvetica Neue',Helvetica,Arial,sans-serif; --mono:'SF Mono',Menlo,Consolas,monospace; }
   * { box-sizing:border-box; }
   html,body { margin:0; padding:0; }
-  body { width:1600px; height:900px; overflow:hidden; background:var(--warm); color:var(--ink); font-family:var(--sans); position:relative; }
-  .bar { position:absolute; left:0; top:0; bottom:0; width:14px; background:var(--signal); }
-  .wrap { position:absolute; left:72px; right:64px; top:48px; bottom:40px; display:flex; flex-direction:column; }
-
-  .top { display:flex; align-items:center; gap:14px; font-family:var(--mono); font-size:20px; letter-spacing:.14em; text-transform:uppercase; color:var(--soft); }
-  .top img { height:40px; }
-  .top b { color:var(--deep); letter-spacing:.1em; }
-  .top .r { margin-left:auto; letter-spacing:.08em; }
-
-  h1 { margin:26px 0 0; font-size:68px; line-height:1.06; letter-spacing:-.025em; font-weight:700; max-width:1440px; }
-  h1 em { font-style:normal; color:var(--signal); }
-  .sub { margin:16px 0 0; font-size:27px; line-height:1.36; color:#26231f; max-width:1320px; }
-
-  .flow { margin-top:34px; display:grid; grid-template-columns:repeat(5,1fr); gap:34px; }
-  .step { position:relative; background:#fff; border:2.5px solid var(--c); border-radius:16px; padding:18px 20px 18px 24px; min-height:222px; }
-  .step::before { content:""; position:absolute; left:0; top:0; bottom:0; width:9px; background:var(--c); border-radius:13px 0 0 13px; }
-  .step:not(:last-child)::after { content:""; position:absolute; right:-31px; top:50%; width:0; height:0; margin-top:-11px;
-    border-left:16px solid var(--soft); border-top:11px solid transparent; border-bottom:11px solid transparent; }
-  .lane { display:inline-block; font-family:var(--mono); font-size:15px; font-weight:700; letter-spacing:.12em; color:#fff; background:var(--c); padding:3px 10px; border-radius:11px; }
-  .n { float:right; width:34px; height:34px; border-radius:50%; background:var(--c); color:#fff; font-weight:700; font-size:19px; line-height:34px; text-align:center; }
-  .step h3 { margin:14px 0 8px; font-size:27px; line-height:1.14; letter-spacing:-.01em; }
-  .step p { margin:0; font-size:20.5px; line-height:1.34; color:var(--soft); }
-  .k { --c:var(--signal); } .a { --c:var(--ink); } .c { --c:var(--blue); } .o { --c:var(--green); } .o2 { --c:var(--deep); }
-
-  .attr { margin-top:22px; display:flex; align-items:center; gap:16px; background:var(--ink); color:#f3ede4; border-radius:12px; padding:13px 22px; font-family:var(--mono); font-size:22px; white-space:nowrap; }
-  .attr .tag { color:var(--signal); font-weight:700; letter-spacing:.1em; font-size:16px; }
-  .attr .why { margin-left:auto; color:#a39a8d; font-size:15px; letter-spacing:.06em; text-transform:uppercase; }
-
-  .chips { margin-top:auto; padding-top:22px; display:flex; flex-wrap:wrap; gap:10px; }
-  .chip { font-size:20px; font-weight:700; padding:5px 14px; border-radius:20px; background:var(--signal); color:#fff; letter-spacing:.02em; border:2px solid var(--signal); }
-  .chip.g { background:#fff; color:var(--deep); border:2px solid var(--signal); }
-
-  .foot { margin-top:18px; padding-top:14px; border-top:3px solid var(--ink); display:flex; align-items:center; font-family:var(--mono); font-size:22px; color:var(--soft); }
-  .foot b { color:var(--ink); }
-  .foot .r { margin-left:auto; }
+  body { width:1600px; height:900px; overflow:hidden; background:#000; color:var(--ink); font-family:var(--sans); position:relative; }
+  .glow { position:absolute; inset:0; background:
+      radial-gradient(760px 520px at 1130px 330px, rgba(57,196,240,.10), transparent 70%),
+      radial-gradient(900px 520px at 1130px 700px, rgba(255,90,21,.10), transparent 70%); }
+  .mark { position:absolute; left:96px; top:88px; width:104px; height:104px; }
+  .mark svg { width:100%; height:100%; display:block; filter:drop-shadow(0 8px 28px rgba(255,90,21,.35)); }
+  h1 { position:absolute; left:88px; top:284px; margin:0; font-size:196px; line-height:1; font-weight:500; letter-spacing:-.045em; color:#fff; }
+  .sub { position:absolute; left:100px; top:520px; margin:0; font-size:44px; line-height:1.2; color:var(--soft); letter-spacing:-.005em; }
+  .pills { position:absolute; left:100px; top:640px; display:flex; gap:24px; }
+  .pill { font-size:36px; padding:16px 42px 17px; border:2.5px solid var(--orange); border-radius:60px; color:#fff; letter-spacing:.005em; background:rgba(255,90,21,.06); }
+  .foot { position:absolute; left:100px; right:96px; bottom:54px; display:flex; align-items:center; gap:18px; font-family:var(--mono); font-size:25px; color:var(--dim); letter-spacing:.02em; }
+  .foot i { font-style:normal; color:var(--orange); }
+  .art { position:absolute; left:0; top:0; transform:translateX(50px); }
 </style>
 </head>
 <body>
-<div class="bar"></div>
-<div class="wrap">
-  <div class="top"><img src="../../web/public/zyvor-mark.svg" alt=""><b>Zyvor</b><span>&middot;</span><span>Shukra</span><span class="r">eBPF &middot; Outside the guest</span></div>
-
-  <h1>See every VM from the <em>hypervisor</em>.</h1>
-  <p class="sub">Kernel traces joined to QEMU/KVM — slow VMs, noisy neighbours, lost traffic, VMM tripwires, and egress policy without installing anything in the guest.</p>
-
-  <div class="flow">
-    <div class="step k"><span class="lane">ATTACH</span><span class="n">1</span>
-      <h3>eBPF on host</h3><p><b>shukrad</b> loads CO-RE programs on the hypervisor — KVM, sched, block, tap, and more.</p></div>
-    <div class="step a"><span class="lane">CORRELATE</span><span class="n">2</span>
-      <h3>Per-VM context</h3><p>Events tie to vCPU threads, tap NICs, and the QEMU process — with explicit attribution limits.</p></div>
-    <div class="step c"><span class="lane">OBSERVE</span><span class="n">3</span>
-      <h3>Explain slowness</h3><p><b>shukractl explain</b> ranks host-side causes; baselines and incidents use the same evidence model.</p></div>
-    <div class="step o"><span class="lane">PROTECT</span><span class="n">4</span>
-      <h3>Policy &amp; isolate</h3><p>Egress lists, detection rules, approved responses, and tap isolation — no guest cooperation.</p></div>
-    <div class="step o2"><span class="lane">OPERATE</span><span class="n">5</span>
-      <h3>Console + CLI</h3><p>Embedded operator UI and <b>shukractl</b> — the CLI never loads BPF; the daemon does.</p></div>
-  </div>
-
-  <div class="attr"><span class="tag">EXPLAIN</span><span>noisy_neighbour &nbsp;·&nbsp; cpu_preempted &nbsp;·&nbsp; ranked host-side causes with evidence</span><span class="why">Illustrative</span></div>
-
-  <div class="chips">
-    <span class="chip">8 eBPF programs</span><span class="chip">Guest tap + DNS/TLS</span>
-    <span class="chip g">VMM tripwires</span><span class="chip g">0 guest agents</span><span class="chip g">Apache-2.0</span>
-  </div>
-
-  <div class="foot"><span><b>github.com/zyvorai/shukra</b></span><span class="r">v0.1.0 &middot; Apache-2.0 &middot; Linux hypervisor</span></div>
-</div>
+<div class="glow"></div>
+<svg class="art" width="1600" height="900" viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <linearGradient id="top" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#1b1c1f"/><stop offset="1" stop-color="#0d0d0f"/>
+  </linearGradient>
+  <filter id="glow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="2.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <filter id="cyan" x="-10%" y="-30%" width="120%" height="160%"><feGaussianBlur stdDeviation="3.4"/></filter>
+</defs>
+<polygon points="1077.2,545.0 930.0,630.0 930.0,700.0 1077.2,615.0" fill="#0c0c0d" stroke="#ff5a15" stroke-opacity="0.50" stroke-width="1.5" stroke-linejoin="round"/>
+<polygon points="782.8,545.0 930.0,630.0 930.0,700.0 782.8,615.0" fill="#111112" stroke="#ff5a15" stroke-opacity="0.50" stroke-width="1.5" stroke-linejoin="round"/>
+<polyline points="930.0,630.0 930.0,700.0" fill="none" stroke="#ff5a15" stroke-width="2.4" filter="url(#glow)"/>
+<polyline points="782.8,615.0 930.0,700.0 1077.2,615.0" fill="none" stroke="#ff5a15" stroke-width="2.2" stroke-opacity="0.90" filter="url(#glow)"/>
+<polyline points="782.8,545.0 930.0,630.0 1077.2,545.0" fill="none" stroke="#ff5a15" stroke-width="2.6" filter="url(#glow)"/>
+<polygon points="930.0,460.0 1077.2,545.0 930.0,630.0 782.8,545.0" fill="url(#top)" stroke="#ff5a15" stroke-opacity=".35" stroke-width="1.2" stroke-linejoin="round"/>
+<polygon points="1477.2,545.0 1330.0,630.0 1330.0,700.0 1477.2,615.0" fill="#0c0c0d" stroke="#ff5a15" stroke-opacity="0.50" stroke-width="1.5" stroke-linejoin="round"/>
+<polygon points="1182.8,545.0 1330.0,630.0 1330.0,700.0 1182.8,615.0" fill="#111112" stroke="#ff5a15" stroke-opacity="0.50" stroke-width="1.5" stroke-linejoin="round"/>
+<polyline points="1330.0,630.0 1330.0,700.0" fill="none" stroke="#ff5a15" stroke-width="2.4" filter="url(#glow)"/>
+<polyline points="1182.8,615.0 1330.0,700.0 1477.2,615.0" fill="none" stroke="#ff5a15" stroke-width="2.2" stroke-opacity="0.90" filter="url(#glow)"/>
+<polyline points="1182.8,545.0 1330.0,630.0 1477.2,545.0" fill="none" stroke="#ff5a15" stroke-width="2.6" filter="url(#glow)"/>
+<polygon points="1330.0,460.0 1477.2,545.0 1330.0,630.0 1182.8,545.0" fill="url(#top)" stroke="#ff5a15" stroke-opacity=".35" stroke-width="1.2" stroke-linejoin="round"/>
+<polygon points="1277.2,655.0 1130.0,740.0 1130.0,810.0 1277.2,725.0" fill="#0c0c0d" stroke="#ff5a15" stroke-opacity="0.55" stroke-width="1.5" stroke-linejoin="round"/>
+<polygon points="982.8,655.0 1130.0,740.0 1130.0,810.0 982.8,725.0" fill="#111112" stroke="#ff5a15" stroke-opacity="0.55" stroke-width="1.5" stroke-linejoin="round"/>
+<polyline points="1130.0,740.0 1130.0,810.0" fill="none" stroke="#ff5a15" stroke-width="2.4" filter="url(#glow)"/>
+<polyline points="982.8,725.0 1130.0,810.0 1277.2,725.0" fill="none" stroke="#ff5a15" stroke-width="2.2" stroke-opacity="1.00" filter="url(#glow)"/>
+<polyline points="982.8,655.0 1130.0,740.0 1277.2,655.0" fill="none" stroke="#ff5a15" stroke-width="2.6" filter="url(#glow)"/>
+<polygon points="1130.0,570.0 1277.2,655.0 1130.0,740.0 982.8,655.0" fill="url(#top)" stroke="#ff5a15" stroke-opacity=".35" stroke-width="1.2" stroke-linejoin="round"/>
+<polygon points="1476.4,300.0 1130.0,500.0 1130.0,534.0 1476.4,334.0" fill="#0c0c0d" stroke="#ff5a15" stroke-opacity="0.55" stroke-width="1.5" stroke-linejoin="round"/>
+<polygon points="783.6,300.0 1130.0,500.0 1130.0,534.0 783.6,334.0" fill="#111112" stroke="#ff5a15" stroke-opacity="0.55" stroke-width="1.5" stroke-linejoin="round"/>
+<polyline points="1130.0,500.0 1130.0,534.0" fill="none" stroke="#ff5a15" stroke-width="2.4" filter="url(#glow)"/>
+<polyline points="783.6,334.0 1130.0,534.0 1476.4,334.0" fill="none" stroke="#ff5a15" stroke-width="2.2" stroke-opacity="1.00" filter="url(#glow)"/>
+<polyline points="783.6,300.0 1130.0,500.0 1476.4,300.0" fill="none" stroke="#ff5a15" stroke-width="2.6" filter="url(#glow)"/>
+<polygon points="1130.0,100.0 1476.4,300.0 1130.0,500.0 783.6,300.0" fill="url(#top)" stroke="#ff5a15" stroke-opacity=".35" stroke-width="1.2" stroke-linejoin="round"/>
+<polyline points="1021.2,174.8 1029.5,179.4 1037.7,184.1 1046.0,188.7 1054.4,193.3 1062.8,197.8 1071.2,202.3 1079.8,206.8 1088.4,211.2 1097.2,215.5 1106.2,219.7 1115.4,223.8 1124.9,227.8 1134.6,231.5 1144.8,235.1 1155.3,238.4 1166.3,241.4 1177.8,244.2 1189.8,246.7 1202.2,248.9 1215.1,250.9 1228.2,252.7 1241.5,254.4 1254.9,256.1 1268.0,257.9 1280.9,259.9 1293.3,262.1 1305.3,264.6 1316.8,267.4 1327.8,270.4 1338.3,273.7 1348.5,277.3 1358.2,281.0 1367.7,285.0 1376.9,289.1 1385.8,293.3 1394.6,297.6 1403.3,302.0 1411.9,306.5 1420.3,311.0 1428.7,315.5" fill="none" stroke="#39c4f0" stroke-width="2.4" stroke-opacity="0.44" stroke-linecap="round" filter="url(#cyan)"/>
+<polyline points="1021.2,174.8 1029.5,179.4 1037.7,184.1 1046.0,188.7 1054.4,193.3 1062.8,197.8 1071.2,202.3 1079.8,206.8 1088.4,211.2 1097.2,215.5 1106.2,219.7 1115.4,223.8 1124.9,227.8 1134.6,231.5 1144.8,235.1 1155.3,238.4 1166.3,241.4 1177.8,244.2 1189.8,246.7 1202.2,248.9 1215.1,250.9 1228.2,252.7 1241.5,254.4 1254.9,256.1 1268.0,257.9 1280.9,259.9 1293.3,262.1 1305.3,264.6 1316.8,267.4 1327.8,270.4 1338.3,273.7 1348.5,277.3 1358.2,281.0 1367.7,285.0 1376.9,289.1 1385.8,293.3 1394.6,297.6 1403.3,302.0 1411.9,306.5 1420.3,311.0 1428.7,315.5" fill="none" stroke="#9be7ff" stroke-width="1.1" stroke-opacity="0.44" stroke-linecap="round"/>
+<polyline points="980.3,198.4 988.6,203.1 996.9,207.7 1005.2,212.3 1013.6,216.8 1022.0,221.3 1030.6,225.8 1039.2,230.2 1048.0,234.5 1056.9,238.8 1066.1,242.9 1075.5,246.8 1085.3,250.6 1095.4,254.2 1106.0,257.5 1117.0,260.5 1128.7,263.2 1140.9,265.5 1153.7,267.5 1167.2,269.1 1181.1,270.5 1195.3,271.7 1209.8,272.7 1224.2,273.8 1238.5,274.9 1252.4,276.3 1265.8,278.0 1278.7,280.0 1290.9,282.3 1302.5,285.0 1313.6,288.0 1324.2,291.3 1334.3,294.9 1344.0,298.6 1353.5,302.6 1362.6,306.7 1371.6,310.9 1380.4,315.2 1389.0,319.7 1397.6,324.1 1406.0,328.6" fill="none" stroke="#39c4f0" stroke-width="2.4" stroke-opacity="0.61" stroke-linecap="round" filter="url(#cyan)"/>
+<polyline points="980.3,198.4 988.6,203.1 996.9,207.7 1005.2,212.3 1013.6,216.8 1022.0,221.3 1030.6,225.8 1039.2,230.2 1048.0,234.5 1056.9,238.8 1066.1,242.9 1075.5,246.8 1085.3,250.6 1095.4,254.2 1106.0,257.5 1117.0,260.5 1128.7,263.2 1140.9,265.5 1153.7,267.5 1167.2,269.1 1181.1,270.5 1195.3,271.7 1209.8,272.7 1224.2,273.8 1238.5,274.9 1252.4,276.3 1265.8,278.0 1278.7,280.0 1290.9,282.3 1302.5,285.0 1313.6,288.0 1324.2,291.3 1334.3,294.9 1344.0,298.6 1353.5,302.6 1362.6,306.7 1371.6,310.9 1380.4,315.2 1389.0,319.7 1397.6,324.1 1406.0,328.6" fill="none" stroke="#9be7ff" stroke-width="1.1" stroke-opacity="0.61" stroke-linecap="round"/>
+<polyline points="939.4,222.1 947.7,226.7 956.0,231.3 964.3,235.8 972.8,240.4 981.3,244.9 989.9,249.3 998.6,253.6 1007.5,257.9 1016.6,262.0 1026.0,266.0 1035.7,269.9 1045.7,273.5 1056.2,276.8 1067.2,279.9 1078.8,282.6 1091.1,284.9 1104.0,286.8 1117.7,288.3 1132.1,289.4 1147.0,290.2 1162.4,290.7 1178.0,291.1 1193.6,291.5 1209.0,292.0 1224.0,292.7 1238.3,293.8 1252.0,295.3 1265.0,297.2 1277.3,299.6 1288.9,302.3 1299.9,305.3 1310.4,308.7 1320.4,312.3 1330.1,316.1 1339.4,320.1 1348.5,324.2 1357.4,328.5 1366.2,332.8 1374.8,337.3 1383.3,341.8" fill="none" stroke="#39c4f0" stroke-width="2.4" stroke-opacity="0.78" stroke-linecap="round" filter="url(#cyan)"/>
+<polyline points="939.4,222.1 947.7,226.7 956.0,231.3 964.3,235.8 972.8,240.4 981.3,244.9 989.9,249.3 998.6,253.6 1007.5,257.9 1016.6,262.0 1026.0,266.0 1035.7,269.9 1045.7,273.5 1056.2,276.8 1067.2,279.9 1078.8,282.6 1091.1,284.9 1104.0,286.8 1117.7,288.3 1132.1,289.4 1147.0,290.2 1162.4,290.7 1178.0,291.1 1193.6,291.5 1209.0,292.0 1224.0,292.7 1238.3,293.8 1252.0,295.3 1265.0,297.2 1277.3,299.6 1288.9,302.3 1299.9,305.3 1310.4,308.7 1320.4,312.3 1330.1,316.1 1339.4,320.1 1348.5,324.2 1357.4,328.5 1366.2,332.8 1374.8,337.3 1383.3,341.8" fill="none" stroke="#9be7ff" stroke-width="1.1" stroke-opacity="0.78" stroke-linecap="round"/>
+<polyline points="898.5,245.7 906.8,250.3 915.1,254.9 923.5,259.4 932.0,263.9 940.6,268.4 949.2,272.8 958.1,277.1 967.1,281.3 976.3,285.3 985.9,289.2 995.8,292.9 1006.1,296.3 1016.9,299.5 1028.4,302.3 1040.5,304.7 1053.4,306.6 1067.2,308.1 1081.7,309.1 1097.0,309.6 1113.0,309.8 1129.5,309.7 1146.3,309.4 1163.0,309.1 1179.5,309.0 1195.5,309.2 1210.9,309.7 1225.4,310.7 1239.1,312.2 1252.0,314.1 1264.2,316.5 1275.6,319.3 1286.5,322.5 1296.8,325.9 1306.7,329.6 1316.2,333.5 1325.5,337.5 1334.5,341.7 1343.3,346.0 1352.0,350.4 1360.6,354.9" fill="none" stroke="#39c4f0" stroke-width="2.4" stroke-opacity="0.95" stroke-linecap="round" filter="url(#cyan)"/>
+<polyline points="898.5,245.7 906.8,250.3 915.1,254.9 923.5,259.4 932.0,263.9 940.6,268.4 949.2,272.8 958.1,277.1 967.1,281.3 976.3,285.3 985.9,289.2 995.8,292.9 1006.1,296.3 1016.9,299.5 1028.4,302.3 1040.5,304.7 1053.4,306.6 1067.2,308.1 1081.7,309.1 1097.0,309.6 1113.0,309.8 1129.5,309.7 1146.3,309.4 1163.0,309.1 1179.5,309.0 1195.5,309.2 1210.9,309.7 1225.4,310.7 1239.1,312.2 1252.0,314.1 1264.2,316.5 1275.6,319.3 1286.5,322.5 1296.8,325.9 1306.7,329.6 1316.2,333.5 1325.5,337.5 1334.5,341.7 1343.3,346.0 1352.0,350.4 1360.6,354.9" fill="none" stroke="#9be7ff" stroke-width="1.1" stroke-opacity="0.95" stroke-linecap="round"/>
+<polyline points="875.9,258.7 884.2,263.3 892.5,267.9 900.8,272.5 909.3,277.0 917.8,281.5 926.4,286.0 935.1,290.3 944.0,294.6 953.1,298.7 962.5,302.7 972.2,306.5 982.2,310.1 992.7,313.5 1003.7,316.5 1015.3,319.2 1027.5,321.6 1040.5,323.5 1054.2,325.0 1068.6,326.1 1083.5,326.8 1098.9,327.3 1114.5,327.7 1130.1,328.1 1145.5,328.6 1160.5,329.4 1174.8,330.5 1188.5,332.0 1201.5,333.9 1213.8,336.2 1225.4,338.9 1236.4,342.0 1246.9,345.3 1256.9,348.9 1266.6,352.8 1275.9,356.8 1285.0,360.9 1293.9,365.2 1302.7,369.5 1311.3,373.9 1319.8,378.4" fill="none" stroke="#39c4f0" stroke-width="2.4" stroke-opacity="0.78" stroke-linecap="round" filter="url(#cyan)"/>
+<polyline points="875.9,258.7 884.2,263.3 892.5,267.9 900.8,272.5 909.3,277.0 917.8,281.5 926.4,286.0 935.1,290.3 944.0,294.6 953.1,298.7 962.5,302.7 972.2,306.5 982.2,310.1 992.7,313.5 1003.7,316.5 1015.3,319.2 1027.5,321.6 1040.5,323.5 1054.2,325.0 1068.6,326.1 1083.5,326.8 1098.9,327.3 1114.5,327.7 1130.1,328.1 1145.5,328.6 1160.5,329.4 1174.8,330.5 1188.5,332.0 1201.5,333.9 1213.8,336.2 1225.4,338.9 1236.4,342.0 1246.9,345.3 1256.9,348.9 1266.6,352.8 1275.9,356.8 1285.0,360.9 1293.9,365.2 1302.7,369.5 1311.3,373.9 1319.8,378.4" fill="none" stroke="#9be7ff" stroke-width="1.1" stroke-opacity="0.78" stroke-linecap="round"/>
+<polyline points="853.3,271.8 861.5,276.4 869.8,281.0 878.2,285.6 886.6,290.2 895.0,294.7 903.5,299.1 912.2,303.6 921.0,307.9 929.9,312.1 939.1,316.2 948.5,320.2 958.3,323.9 968.4,327.5 979.0,330.8 990.0,333.8 1001.7,336.5 1013.9,338.8 1026.7,340.8 1040.1,342.5 1054.0,343.9 1068.3,345.0 1082.8,346.1 1097.2,347.1 1111.5,348.3 1125.4,349.7 1138.8,351.3 1151.7,353.3 1163.9,355.6 1175.5,358.3 1186.6,361.3 1197.2,364.6 1207.3,368.2 1217.0,372.0 1226.4,375.9 1235.6,380.0 1244.6,384.3 1253.4,388.6 1262.0,393.0 1270.5,397.5 1279.0,402.0" fill="none" stroke="#39c4f0" stroke-width="2.4" stroke-opacity="0.61" stroke-linecap="round" filter="url(#cyan)"/>
+<polyline points="853.3,271.8 861.5,276.4 869.8,281.0 878.2,285.6 886.6,290.2 895.0,294.7 903.5,299.1 912.2,303.6 921.0,307.9 929.9,312.1 939.1,316.2 948.5,320.2 958.3,323.9 968.4,327.5 979.0,330.8 990.0,333.8 1001.7,336.5 1013.9,338.8 1026.7,340.8 1040.1,342.5 1054.0,343.9 1068.3,345.0 1082.8,346.1 1097.2,347.1 1111.5,348.3 1125.4,349.7 1138.8,351.3 1151.7,353.3 1163.9,355.6 1175.5,358.3 1186.6,361.3 1197.2,364.6 1207.3,368.2 1217.0,372.0 1226.4,375.9 1235.6,380.0 1244.6,384.3 1253.4,388.6 1262.0,393.0 1270.5,397.5 1279.0,402.0" fill="none" stroke="#9be7ff" stroke-width="1.1" stroke-opacity="0.61" stroke-linecap="round"/>
+<polyline points="830.7,284.8 838.9,289.4 847.2,294.1 855.5,298.7 863.8,303.3 872.2,307.8 880.7,312.3 889.2,316.8 897.9,321.2 906.7,325.5 915.7,329.7 924.9,333.8 934.3,337.8 944.1,341.5 954.2,345.1 964.8,348.4 975.8,351.4 987.3,354.2 999.2,356.7 1011.7,358.9 1024.6,360.9 1037.7,362.7 1051.0,364.4 1064.3,366.1 1077.5,367.9 1090.3,369.9 1102.8,372.1 1114.8,374.6 1126.3,377.4 1137.3,380.4 1147.8,383.7 1157.9,387.3 1167.7,391.0 1177.1,395.0 1186.3,399.1 1195.3,403.3 1204.1,407.6 1212.8,412.0 1221.3,416.5 1229.8,421.0 1238.2,425.5" fill="none" stroke="#39c4f0" stroke-width="2.4" stroke-opacity="0.44" stroke-linecap="round" filter="url(#cyan)"/>
+<polyline points="830.7,284.8 838.9,289.4 847.2,294.1 855.5,298.7 863.8,303.3 872.2,307.8 880.7,312.3 889.2,316.8 897.9,321.2 906.7,325.5 915.7,329.7 924.9,333.8 934.3,337.8 944.1,341.5 954.2,345.1 964.8,348.4 975.8,351.4 987.3,354.2 999.2,356.7 1011.7,358.9 1024.6,360.9 1037.7,362.7 1051.0,364.4 1064.3,366.1 1077.5,367.9 1090.3,369.9 1102.8,372.1 1114.8,374.6 1126.3,377.4 1137.3,380.4 1147.8,383.7 1157.9,387.3 1167.7,391.0 1177.1,395.0 1186.3,399.1 1195.3,403.3 1204.1,407.6 1212.8,412.0 1221.3,416.5 1229.8,421.0 1238.2,425.5" fill="none" stroke="#9be7ff" stroke-width="1.1" stroke-opacity="0.44" stroke-linecap="round"/>
+</svg>
+<div class="mark"><svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="zbg" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ff5a15"/><stop offset="1" stop-color="#cc420a"/></linearGradient></defs><rect width="64" height="64" rx="15" fill="url(#zbg)"/><path d="M18.5,20.5 45.5,20.5 18.5,43.5 45.5,43.5" fill="none" stroke="#fff" stroke-width="8.3" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+<h1>Shukra</h1>
+<p class="sub">eBPF runtime intelligence for KVM</p>
+<div class="pills"><span class="pill">Observe</span><span class="pill">Protect</span><span class="pill">Explain</span></div>
+<div class="foot"><span>7 eBPF programs</span><i>&middot;</i><span>no guest agent</span><i>&middot;</i><span>Apache-2.0</span></div>
 </body>
 </html>
