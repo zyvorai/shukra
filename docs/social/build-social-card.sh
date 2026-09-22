@@ -1,19 +1,27 @@
 #!/usr/bin/env bash
-# Render docs/social/shukra-social-card.html (1600x900) to a real PNG and write it to both places the repo uses:
-# docs/shukra-social.png (README) and web/public/og.png (Open Graph and X card). The two stay byte-identical.
-# Needs Google Chrome and macOS `sips` (both already on a Mac); nothing is installed.
+# Render Shukra social cards with Google Chrome + macOS `sips` (nothing to install).
 #   ./docs/social/build-social-card.sh
+# Outputs:
+#   shukra-social-card.jpg  — 1600x900 for LinkedIn / X
+#   shukra-share-card.png   — 1200x630 for README / Open Graph
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$HERE/../.." && pwd)"
 CHROME="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 [[ -x "$CHROME" ]] || { echo "Google Chrome not found (set CHROME=...)" >&2; exit 1; }
-RAW="$(mktemp "${TMPDIR:-/tmp}/shukra-card.XXXXXX.png")"
-trap 'rm -f "$RAW"' EXIT
+
+SOCIAL_OUT="${1:-$HERE/shukra-social-card.jpg}"
+SHARE_OUT="${2:-$HERE/shukra-share-card.png}"
+
+PNG="$(mktemp "${TMPDIR:-/tmp}/shukra-social.XXXXXX.png")"
+PNG2="$(mktemp "${TMPDIR:-/tmp}/shukra-share.XXXXXX.png")"
+trap 'rm -f "$PNG" "$PNG2"' EXIT
+
 "$CHROME" --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=1 \
-  --window-size=1600,900 --screenshot="$RAW" "file://$HERE/shukra-social-card.html" >/dev/null 2>&1
-sips -s format png "$RAW" --out "$ROOT/docs/shukra-social.png" >/dev/null
-cp "$ROOT/docs/shukra-social.png" "$ROOT/web/public/og.png"
-for f in "$ROOT/docs/shukra-social.png" "$ROOT/web/public/og.png"; do
-  echo "wrote $f ($(sips -g pixelWidth -g pixelHeight "$f" | awk '/pixel/{printf "%s ", $2}')px, $(du -k "$f" | cut -f1) KB)"
-done
+  --window-size=1600,900 --screenshot="$PNG" "file://$HERE/shukra-social-card.html" >/dev/null 2>&1
+sips -s format jpeg -s formatOptions 92 "$PNG" --out "$SOCIAL_OUT" >/dev/null
+echo "wrote $SOCIAL_OUT ($(sips -g pixelWidth -g pixelHeight "$SOCIAL_OUT" | awk '/pixel/{printf "%s ", $2}')px, $(du -k "$SOCIAL_OUT" | cut -f1) KB)"
+
+"$CHROME" --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=1 \
+  --window-size=1200,630 --screenshot="$PNG2" "file://$HERE/shukra-share-card.html" >/dev/null 2>&1
+sips -s format png "$PNG2" --out "$SHARE_OUT" >/dev/null
+echo "wrote $SHARE_OUT ($(sips -g pixelWidth -g pixelHeight "$SHARE_OUT" | awk '/pixel/{printf "%s ", $2}')px, $(du -k "$SHARE_OUT" | cut -f1) KB)"

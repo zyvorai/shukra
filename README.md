@@ -1,29 +1,18 @@
 # Shukra
 
-<p align="center">
-  <img src="docs/shukra-social.png" alt="Shukra — eBPF runtime intelligence for KVM" width="100%">
-</p>
+[![CI](https://github.com/zyvorai/shukra/actions/workflows/ci.yml/badge.svg)](https://github.com/zyvorai/shukra/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/github/v/release/zyvorai/shukra?label=version&color=informational)](CHANGELOG.md)
+![Go 1.27+](https://img.shields.io/badge/go-1.27%2B-informational)
+![Linux 6.6+ for tap](https://img.shields.io/badge/linux-6.6%2B%20(tap)-informational)
 
-<p align="center">
-  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-ff5a15"></a>
-  <img alt="Go 1.27+" src="https://img.shields.io/badge/go-1.27%2B-0d0d0c">
-  <img alt="Linux 6.6+ for guest traffic and isolation" src="https://img.shields.io/badge/linux-6.6%2B%20for%20the%20tap-0d0d0c">
-  <img alt="x86_64 and arm64" src="https://img.shields.io/badge/arch-x86__64%20%C2%B7%20arm64-0d0d0c">
-</p>
+![Shukra — eBPF runtime intelligence for KVM](docs/social/shukra-share-card.png)
 
-<p align="center">
-  <a href="docs/sales/brochure/Zyvor-Shukra-Product-Brochure.pdf"><b>Product brochure (PDF)</b></a> ·
-  <a href="docs/tutorials/README.md">Tutorials</a> ·
-  <a href="docs/api.md">API</a> ·
-  <a href="#documentation">All docs</a> ·
-  <a href="CHANGELOG.md">Changelog</a>
-</p>
+**eBPF-powered runtime intelligence and security for KVM — Observe, Protect, Explain.**
 
-**eBPF-powered runtime intelligence and security for KVM.**
+📖 **[Product brochure (PDF)](docs/sales/brochure/Zyvor-Shukra-Product-Brochure.pdf)** · [Tutorials](docs/tutorials/README.md) · [API](docs/api.md) · [All docs](#documentation) · [Changelog](CHANGELOG.md)
 
 Shukra sits on the hypervisor and watches every QEMU/KVM workload from outside the guest. There is no agent to install in the VM. The daemon attaches kernel traces, joins them to the QEMU process, and gives an operator a console and a CLI that say what they know, how they know it, and what they cannot see.
-
-Observe. Protect. Explain.
 
 **8** eBPF programs · **35** kernel attach points · **0** agents in the guest · **17** console pages · **38** HTTP routes · **21** `shukractl` commands
 
@@ -47,7 +36,22 @@ Observe. Protect. Explain.
 
 ## Contents
 
-[What it answers](#what-it-answers) · [What it does not do](#what-it-does-not-do) · [The programs](#the-programs) · [Features](#features) · [Requirements](#requirements) · [Quick start](#quick-start) · [Deploy](#deploy-a-hypervisor) · [Operator loop](#operator-loop) · [Detection rules](#detection-rules) · [Console](#console) · [API and monitoring](#monitor-the-daemon) · [Daemon flags](#daemon-flags) · [State across restarts](#keep-state-across-restarts) · [Cost](#what-it-costs) · [Architecture](#architecture) · [Documentation](#documentation) · [Development](#development)
+- [What it answers](#what-it-answers)
+- [What it does not do](#what-it-does-not-do)
+- [The programs](#the-programs)
+- [Features](#features)
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Deploy a hypervisor](#deploy-a-hypervisor)
+- [Operator loop](#operator-loop)
+- [Detection rules](#detection-rules)
+- [Console](#console)
+- [Monitor the daemon](#monitor-the-daemon)
+- [What it costs](#what-it-costs)
+- [Architecture](#architecture)
+- [Documentation](#documentation)
+- [Development](#development)
+- [License](#license)
 
 ## What it answers
 
@@ -448,7 +452,7 @@ Both are generated, so they can be regenerated when the product changes.
 ```bash
 python3 docs/sales/brochure/build.py --check   # the brochure PDF; fails if a page overflows
 docs/sales/brochure/capture.sh                 # re-shoot the console pages from fixture mode
-docs/social/build-social-card.sh               # docs/shukra-social.png and web/public/og.png, byte-identical
+docs/social/build-social-card.sh               # docs/social/shukra-share-card.png and shukra-social-card.jpg
 ```
 
 The brochure and the social card need Google Chrome (the card also needs macOS `sips`). Every number in the brochure has a source in [its claims table](docs/sales/brochure/README.md).
