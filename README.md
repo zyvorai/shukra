@@ -193,4 +193,6 @@ Every tutorial and reference page is listed in [docs/index.md](docs/index.md).
 
 ## License
 
+Commercial subscriptions and support: see [docs/SUBSCRIPTION-MODEL.md](docs/SUBSCRIPTION-MODEL.md).
+
 Apache-2.0. Copyright 2026 Zyvor. See [LICENSE](LICENSE).
